@@ -1377,6 +1377,7 @@ impl TerminalApp {
                 SaveOptions {
                     expected_revision: db.get_note_updated_at(&note_id)?,
                     force: false,
+                    reminders: None,
                 },
             )?;
         }

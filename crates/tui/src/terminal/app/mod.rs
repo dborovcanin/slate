@@ -133,12 +133,18 @@ fn history_max_entries_for_line_count(line_count: usize) -> usize {
     }
 }
 
-fn build_history_for_note(lines: &[String], cursor_line: usize, cursor_col: usize) -> LineHistory {
+fn build_history_for_note(
+    lines: &[String],
+    cursor_line: usize,
+    cursor_col: usize,
+    reminders: ReminderMarks,
+) -> LineHistory<ReminderMarks> {
     LineHistory::new(
         history_max_entries_for_line_count(lines.len()),
         lines,
         cursor_line,
         cursor_col,
+        reminders,
     )
 }
 
@@ -246,10 +252,10 @@ struct LineReminderGhost {
     display_at: String,
     line_text: String,
     reminded_at_ms: Option<i64>,
-    /// The reminder's line number in the database, which keys it until the
-    /// next reconcile moves it to where the ghost now is.
-    stored_line: i64,
 }
+
+/// The open note's reminders by line, as undo history carries them.
+type ReminderMarks = std::sync::Arc<Vec<(usize, LineReminderGhost)>>;
 
 #[derive(Debug, Clone)]
 struct ReminderUndoEntry {
@@ -510,7 +516,10 @@ impl Default for DatePickerState {
 
 /// An autosave running on a background thread.
 struct BackgroundSave {
-    rx: mpsc::Receiver<Result<app_core::storage::NoteRevision, String>>,
+    /// The new revision, and whether the text was saved (or only reminders).
+    rx: mpsc::Receiver<Result<(app_core::storage::NoteRevision, bool), String>>,
+    /// The reminder version stored with it, if any.
+    reminders_generation: Option<u64>,
     note_id: String,
     /// `last_edit` when the saved text was taken: later edits keep the note
     /// dirty once the save lands.
@@ -766,13 +775,13 @@ struct TerminalApp {
     calc: CalcCache,
     calc_runtime: CalcRuntime,
     reminder_ghosts: FxHashMap<usize, LineReminderGhost>, // 0-based line index
-    reminders_dirty: bool,
-    /// Stored line numbers of reminders whose lines edits deleted since the
-    /// last reconcile.
-    reminder_deleted_lines: Vec<i64>,
-    /// The line count the ghosts' tracked positions describe; `None` after
-    /// an edit that was not tracked line by line (undo, redo).
-    reminder_tracked_len: Option<usize>,
+    /// Coordinates of edits applied since the last history record, for
+    /// moving reminders with them (`note_line_edit`).
+    pending_line_edits: Vec<reminder_helpers::PendingLineChange>,
+    /// Bumped whenever the reminders change; equal to the persisted one when
+    /// they are stored as they are.
+    reminders_generation: u64,
+    persisted_reminders_generation: u64,
     last_reminder_check: Instant,
     // In-note search overlay
     search: SearchState,
@@ -804,7 +813,7 @@ struct TerminalApp {
     // Clipboard watch
     clipboard_watch: ClipboardWatch,
     // Undo/redo
-    history: LineHistory,
+    history: LineHistory<ReminderMarks>,
     undo_actions: Vec<UndoAction>,
     undo_action_pos: usize,
     perf_trace: PerfTraceState,
@@ -919,6 +928,7 @@ impl TerminalApp {
                 | crate::editor_core::vim::VimIntent::OpenLineBelow
                 | crate::editor_core::vim::VimIntent::OpenLineAbove
                 | crate::editor_core::vim::VimIntent::DeleteLine
+                | crate::editor_core::vim::VimIntent::ChangeLine
                 | crate::editor_core::vim::VimIntent::DeleteToLineStart
                 | crate::editor_core::vim::VimIntent::DeleteToLineEnd
                 | crate::editor_core::vim::VimIntent::DeleteChar
@@ -1036,7 +1046,7 @@ impl TerminalApp {
         let reminder_ghosts = if background_tasks_enabled {
             FxHashMap::default()
         } else {
-            load_note_reminder_ghosts(db, &active_note, &lines, &Default::default())?
+            load_note_reminder_ghosts(db, &active_note, &lines)?
         };
 
         // Keep startup memory lean: load switcher/wiki metadata lazily on
@@ -1133,7 +1143,7 @@ impl TerminalApp {
                 },
             )
         };
-        let history = build_history_for_note(&lines, 0, 0);
+        let history = build_history_for_note(&lines, 0, 0, reminder_marks_of(&reminder_ghosts));
         let initial_mode = if vim_mode {
             UiMode::Normal
         } else {
@@ -1241,9 +1251,9 @@ impl TerminalApp {
                 index_sync_pending: false,
             },
             reminder_ghosts,
-            reminders_dirty: false,
-            reminder_deleted_lines: Vec::new(),
-            reminder_tracked_len: None,
+            pending_line_edits: Vec::new(),
+            reminders_generation: 0,
+            persisted_reminders_generation: 0,
             last_reminder_check: Instant::now(),
             search: SearchState::default(),
             web_search: WebSearchState::default(),
@@ -1399,9 +1409,6 @@ impl TerminalApp {
             self.maybe_clipboard_watch();
             self.maybe_collect_search_results(db);
             self.poll_browser_search(db);
-            if let Err(error) = self.sync_reminder_ghosts_if_dirty(db) {
-                self.status = format!("error: {error}");
-            }
             self.maybe_dispatch_due_reminders(db);
         }
         Ok(())
@@ -1500,7 +1507,9 @@ impl TerminalApp {
         if !self.autosave_enabled || self.autosave_paused_at == Some(self.last_edit) {
             return Ok(());
         }
-        if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
+        if (self.dirty || self.reminders_unsaved())
+            && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS)
+        {
             self.start_background_autosave(db)?;
         }
         Ok(())
@@ -1529,17 +1538,27 @@ impl TerminalApp {
             self.render_state.dirty = true;
         }
 
+        self.hydrate_startup_reminders(db, false);
+    }
+
+    /// Loads the open note's reminders deferred at startup. Runs on an idle
+    /// tick, or before the first key (`now`) so no edit can happen before
+    /// its reminders are there to move with it.
+    pub(super) fn hydrate_startup_reminders(&mut self, db: &Db, now: bool) {
         if self.startup_reminder_hydration_pending {
             if let Some(retry_at) = self.startup_reminder_hydration_retry_at {
-                if Instant::now() < retry_at {
+                if !now && Instant::now() < retry_at {
                     return;
                 }
             }
+            // Placed against the stored text: wait for unsaved edits to land.
+            if self.dirty {
+                return;
+            }
             let started = Instant::now();
-            match self.reconcile_reminder_ghosts(db) {
-                Ok(ghosts) => {
-                    self.reminder_ghosts = ghosts;
-                    self.reminders_dirty = false;
+            match self.load_reminders(db) {
+                Ok(()) => {
+                    self.history.set_marks(self.reminder_marks());
                     self.record_perf_duration(
                         "tui.idle.dispatch",
                         "startup_reminder_hydration",

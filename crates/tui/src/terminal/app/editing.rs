@@ -310,6 +310,15 @@ impl TerminalApp {
         coalesce_undo: bool,
         history_span: Option<(usize, usize, usize)>,
     ) {
+        self.record_text_history(coalesce_undo, history_span);
+        self.move_reminders_with_recorded_edit();
+    }
+
+    fn record_text_history(
+        &mut self,
+        coalesce_undo: bool,
+        history_span: Option<(usize, usize, usize)>,
+    ) {
         let undo_depth_before = self.history.undo_depth();
         let history_changed = if let Some((start_line, old_line_span, new_line_span)) = history_span
         {
@@ -476,7 +485,6 @@ impl TerminalApp {
         old_line_span: usize,
         new_line_span: usize,
     ) {
-        self.track_reminder_splice(start_line, old_line_span, new_line_span);
         if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
             return;
         }
@@ -1444,9 +1452,6 @@ impl TerminalApp {
         if changed_from_line == 0 {
             self.switcher.needs_title_refresh = true;
         }
-        if !self.reminder_ghosts.is_empty() {
-            self.reminders_dirty = true;
-        }
         let clamped_changed_line = if self.editor.lines.is_empty() {
             0
         } else {
@@ -1565,36 +1570,15 @@ impl TerminalApp {
         line_idx: usize,
         state: Option<LineReminderGhost>,
     ) -> Result<(), String> {
-        let line_number = (line_idx + 1) as i64;
         match state {
             Some(reminder) => {
-                db.upsert_reminder(
-                    &self.active_note.id,
-                    line_number,
-                    reminder.remind_at_ms,
-                    &reminder.display_at,
-                    &reminder.line_text,
-                )?;
-                if let Some(reminded_at_ms) = reminder.reminded_at_ms {
-                    let _ = db.mark_reminder_reminded(
-                        &self.active_note.id,
-                        line_number,
-                        reminded_at_ms,
-                    );
-                }
-                self.reminder_ghosts.insert(
-                    line_idx,
-                    LineReminderGhost {
-                        stored_line: line_number,
-                        ..reminder
-                    },
-                );
+                self.reminder_ghosts.insert(line_idx, reminder);
             }
             None => {
-                db.delete_reminder(&self.active_note.id, line_number)?;
                 self.reminder_ghosts.remove(&line_idx);
             }
         }
+        self.reminders_changed_outside_text(db);
         Ok(())
     }
 
@@ -1615,11 +1599,8 @@ impl TerminalApp {
             }
             self.dirty = true;
             self.last_edit = Instant::now();
-            // History swaps whole lines: no line-by-line moves to report.
-            // Always re-place reminders: undo may bring back the line of
-            // one that is stored but not shown.
-            self.reminders_dirty = true;
-            self.reminder_tracked_len = None;
+            // The step's reminders come back with its text.
+            self.restore_reminders_from_history();
             // Full lines replacement: invalidate all caches.
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
@@ -1654,11 +1635,8 @@ impl TerminalApp {
             self.editor.cursor_col = cursor.col;
             self.dirty = true;
             self.last_edit = Instant::now();
-            // History swaps whole lines: no line-by-line moves to report.
-            // Always re-place reminders: undo may bring back the line of
-            // one that is stored but not shown.
-            self.reminders_dirty = true;
-            self.reminder_tracked_len = None;
+            // The step's reminders come back with its text.
+            self.restore_reminders_from_history();
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
             if self.calc_runtime.viewport_only {
@@ -2494,6 +2472,7 @@ impl TerminalApp {
 
         let replaced_count = edit.end - edit.start + 1;
         let inserted_count = edit.lines.len();
+        self.note_block_replace(edit.start, replaced_count, &edit.lines);
         self.editor.lines.splice(edit.start..=edit.end, edit.lines);
         self.editor.cursor_line = edit.cursor_line;
         let target_line = &self.editor.lines[edit.cursor_line];
@@ -2543,6 +2522,11 @@ impl TerminalApp {
             return;
         }
 
+        self.note_line_edit(
+            (line_idx, split_idx),
+            (line_idx, split_idx),
+            parts.len() - 1,
+        );
         self.editor.lines[line_idx] = format!("{left}{}", parts[0]);
         let mut insert_at = line_idx + 1;
         for part in &parts[1..parts.len() - 1] {
@@ -2609,6 +2593,7 @@ impl TerminalApp {
         let changed_from_line = self.editor.cursor_line;
         let col = self.editor.cursor_col;
         let idx = byte_index(self.current_line(), col);
+        self.note_line_edit((changed_from_line, idx), (changed_from_line, idx), 1);
         let right = self.editor.lines[self.editor.cursor_line][idx..].to_string();
         self.editor.lines[self.editor.cursor_line].truncate(idx);
         let insert_at = self.editor.cursor_line + 1;
@@ -3284,6 +3269,11 @@ impl TerminalApp {
 
             let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
             let new_line_span = replacement.len().max(1);
+            self.note_line_edit(
+                (from_line, from_byte),
+                (to_line, to_byte),
+                insert_parts.len() - 1,
+            );
             if from_line <= to_line && from_line < self.editor.lines.len() {
                 let end = to_line.min(self.editor.lines.len().saturating_sub(1));
                 self.editor.lines.splice(from_line..=end, replacement);
@@ -3352,6 +3342,9 @@ impl TerminalApp {
             let from = change.from.min(current_doc_len);
             let to = change.to.min(current_doc_len);
             let removed = to.saturating_sub(from);
+            let from_at = line_and_byte_for_offset(&self.editor.lines, from);
+            let to_at = line_and_byte_for_offset(&self.editor.lines, to);
+            self.note_line_edit(from_at, to_at, change.insert.matches('\n').count());
             let (from_line, old_line_span, new_line_span) =
                 apply_text_change_in_place(&mut self.editor.lines, change, current_doc_len);
             self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
@@ -3407,6 +3400,7 @@ impl TerminalApp {
         }
 
         let remove_line = self.editor.cursor_line;
+        self.note_deleted_lines(remove_line, remove_line);
         self.editor.lines.remove(remove_line);
         if self.editor.lines.is_empty() {
             self.editor.lines.push(String::new());
@@ -3481,6 +3475,12 @@ impl TerminalApp {
             return;
         }
 
+        let joined_onto = self.editor.cursor_line - 1;
+        self.note_line_edit(
+            (joined_onto, self.editor.lines[joined_onto].len()),
+            (self.editor.cursor_line, 0),
+            0,
+        );
         let removed = self.editor.lines.remove(self.editor.cursor_line);
         self.editor.cursor_line -= 1;
         let prev_len = line_char_len(&self.editor.lines[self.editor.cursor_line]);
@@ -3512,6 +3512,11 @@ impl TerminalApp {
             return;
         }
 
+        self.note_line_edit(
+            (self.editor.cursor_line, self.current_line().len()),
+            (self.editor.cursor_line + 1, 0),
+            0,
+        );
         let next = self.editor.lines.remove(self.editor.cursor_line + 1);
         self.editor.lines[self.editor.cursor_line].push_str(&next);
         self.splice_calc_line_metadata(self.editor.cursor_line, 2, 1);

@@ -286,6 +286,7 @@ impl TerminalApp {
                 }
             }
             if delete {
+                self.note_deleted_lines(start_line, end_line);
                 for _ in start_line..=end_line {
                     if start_line < self.editor.lines.len() {
                         self.editor.lines.remove(start_line);
@@ -340,6 +341,12 @@ impl TerminalApp {
                 yanked.push(ln_chars[..ln_end].iter().collect::<String>());
 
                 if delete {
+                    let bytes = |chars: &[char]| chars.iter().map(|ch| ch.len_utf8()).sum();
+                    self.note_line_edit(
+                        (start_line, bytes(&l1_chars[..l1_start])),
+                        (end_line, bytes(&ln_chars[..ln_end])),
+                        0,
+                    );
                     let mut new_l1: String = l1_chars[..l1_start].iter().collect();
                     let tail: String = ln_chars[ln_end..].iter().collect();
                     new_l1.push_str(&tail);
@@ -532,6 +539,12 @@ impl TerminalApp {
             if let Some((shared, scope_start_offset)) =
                 self.try_execute_shared_vim_action(action.intent, count, action.target_char)
             {
+                if action.intent == crate::editor_core::vim::VimIntent::DeleteLine
+                    && !shared.operations.is_empty()
+                {
+                    let start = self.editor.cursor_line;
+                    self.drop_reminders_on_deleted_lines(start, start + count.max(1) - 1);
+                }
                 let had_register = shared.register.is_some();
                 let mapped = crate::editor_core::vim_actions::VimActionExecutionResult {
                     operations: shared
@@ -740,6 +753,7 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::OpenLineAbove => {
                     self.editor.cursor_col = 0;
                     let current = self.editor.cursor_line;
+                    self.note_lines_inserted(current, 1);
                     self.editor.lines.insert(current, String::new());
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
@@ -791,6 +805,7 @@ impl TerminalApp {
                                 }
                                 if !repeated.is_empty() {
                                     let insert_at = self.editor.cursor_line + 1;
+                                    self.note_lines_inserted(insert_at, repeated.len());
                                     for (offset, line) in repeated.iter().enumerate() {
                                         self.editor.lines.insert(insert_at + offset, line.clone());
                                     }
@@ -878,6 +893,7 @@ impl TerminalApp {
                 // above, because they can fall through with an empty register and
                 // then pull from the system clipboard.
                 crate::editor_core::vim::VimIntent::DeleteLine
+                | crate::editor_core::vim::VimIntent::ChangeLine
                 | crate::editor_core::vim::VimIntent::YankLine
                 | crate::editor_core::vim::VimIntent::DeleteToLineStart
                 | crate::editor_core::vim::VimIntent::DeleteToLineEnd

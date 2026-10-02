@@ -1660,27 +1660,19 @@ impl TerminalApp {
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::RemindToggle => {
-                    let line_number = (self.editor.cursor_line + 1) as i64;
-                    let before_reminder =
-                        self.reminder_ghosts.get(&self.editor.cursor_line).cloned();
-                    match db.delete_reminder(&self.active_note.id, line_number) {
-                        Ok(true) => {
-                            self.reminder_ghosts.remove(&self.editor.cursor_line);
-                            if before_reminder.is_some() {
-                                self.push_reminder_undo_entry(
-                                    self.editor.cursor_line,
-                                    before_reminder,
-                                    None,
-                                );
-                            }
+                    match self.reminder_ghosts.remove(&self.editor.cursor_line) {
+                        Some(before_reminder) => {
+                            self.push_reminder_undo_entry(
+                                self.editor.cursor_line,
+                                Some(before_reminder),
+                                None,
+                            );
+                            self.reminders_changed_outside_text(db);
                             self.status =
                                 format!("remind removed on line {}", self.editor.cursor_line + 1);
                         }
-                        Ok(false) => {
+                        None => {
                             self.open_date_picker(DatePickerAction::SetRemind, true);
-                        }
-                        Err(error) => {
-                            self.status = format!("remind toggle failed: {error}");
                         }
                     }
                     return;
@@ -2344,24 +2336,40 @@ impl TerminalApp {
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
+        let reminders = self.reminders_for_save(self.dirty);
+        let reminders_generation = self.reminders_generation;
         if !self.dirty {
+            if let Some(reminders) = reminders {
+                // Only reminders changed: store them against the saved text.
+                let revision = db.replace_reminders_if(
+                    &self.active_note.id,
+                    (!force).then_some(self.active_note.updated_at.as_str()),
+                    &reminders,
+                )?;
+                self.active_note.updated_at = revision.updated_at;
+                self.persisted_reminders_generation = reminders_generation;
+            }
             self.record_perf_duration("tui.save", "noop", started.elapsed());
             return Ok(());
         }
-        self.sync_reminder_ghosts_if_dirty(db)?;
         let body = self
             .editor
             .joined_text_cache
             .take()
             .unwrap_or_else(|| join_lines(&self.editor.lines));
+        let stores_reminders = reminders.is_some();
         let saved = note_sources(db).save_note_revision_by_id(
             &self.active_note.id,
             &body,
             app_core::note_sources::SaveOptions {
                 expected_revision: Some(self.active_note.updated_at.clone()),
                 force,
+                reminders,
             },
         )?;
+        if stores_reminders {
+            self.persisted_reminders_generation = reminders_generation;
+        }
         // Only the revision moves on; the document itself stays in
         // `self.editor.lines` and is never round-tripped through the store.
         self.active_note.id = saved.id;
@@ -2398,35 +2406,51 @@ impl TerminalApp {
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
-        if !self.dirty {
+        let reminders = self.reminders_for_save(self.dirty);
+        if !self.dirty && reminders.is_none() {
             return Ok(());
         }
         if !self.active_note_is_editable() {
             self.set_locked_note_status();
             return Ok(());
         }
-        self.sync_reminder_ghosts_if_dirty(db)?;
-        let body = self
-            .editor
-            .joined_text_cache
-            .clone()
-            .unwrap_or_else(|| join_lines(&self.editor.lines));
+        // The text and its reminders are taken together, so what is stored
+        // always matches.
+        let body = self.dirty.then(|| {
+            self.editor
+                .joined_text_cache
+                .clone()
+                .unwrap_or_else(|| join_lines(&self.editor.lines))
+        });
+        let reminders_generation = reminders.as_ref().map(|_| self.reminders_generation);
         let note_id = self.active_note.id.clone();
         let expected_revision = self.active_note.updated_at.clone();
         let options = app_core::note_sources::SaveOptions {
             expected_revision: Some(expected_revision.clone()),
             force: false,
+            reminders,
         };
         let (tx, rx) = std::sync::mpsc::channel();
         let db = db.clone();
         let thread_note_id = note_id.clone();
         std::thread::spawn(move || {
-            let result =
-                note_sources(&db).save_note_revision_by_id(&thread_note_id, &body, options);
+            let result = match body {
+                Some(body) => note_sources(&db)
+                    .save_note_revision_by_id(&thread_note_id, &body, options)
+                    .map(|revision| (revision, true)),
+                None => db
+                    .replace_reminders_if(
+                        &thread_note_id,
+                        options.expected_revision.as_deref(),
+                        options.reminders.as_deref().unwrap_or_default(),
+                    )
+                    .map(|revision| (revision, false)),
+            };
             let _ = tx.send(result);
         });
         self.background_save = Some(super::BackgroundSave {
             rx,
+            reminders_generation,
             note_id,
             edit_mark: self.last_edit,
             expected_revision,
@@ -2475,9 +2499,18 @@ impl TerminalApp {
         if job.note_id != self.active_note.id {
             return;
         }
+        if let Some(generation) = job.reminders_generation {
+            self.persisted_reminders_generation = generation;
+        }
+        let (saved, saved_text) = saved;
         if self.active_note.updated_at == job.expected_revision {
             self.active_note.id = saved.id;
             self.active_note.updated_at = saved.updated_at;
+        }
+        if !saved_text {
+            self.status = format!("reminders saved {}", self.active_note.id);
+            self.render_state.dirty = true;
+            return;
         }
         if self.last_edit == job.edit_mark {
             self.dirty = false;
@@ -2508,7 +2541,7 @@ impl TerminalApp {
                 Ok(()) => return true,
                 Err(error) => format!("save failed: {error}"),
             }
-        } else if self.dirty {
+        } else if self.dirty || self.reminders_unsaved() {
             "no write since last change".to_string()
         } else {
             return true;
@@ -2551,16 +2584,6 @@ impl TerminalApp {
         self.switcher
             .items
             .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    }
-
-    pub(super) fn sync_reminder_ghosts_if_dirty(&mut self, db: &Db) -> Result<(), String> {
-        if !self.reminders_dirty {
-            return Ok(());
-        }
-        self.reminder_ghosts = self.reconcile_reminder_ghosts(db)?;
-        self.render_state.dirty = true;
-        self.reminders_dirty = false;
-        Ok(())
     }
 
     pub(super) fn maybe_dispatch_due_reminders(&mut self, db: &Db) {
@@ -2616,26 +2639,10 @@ impl TerminalApp {
                 continue;
             }
 
-            let line_number = i64::try_from(line_idx + 1).unwrap_or(i64::MAX);
-            match db.mark_reminder_reminded(&self.active_note.id, line_number, now_ms) {
-                Ok(updated) => {
-                    let reminded_at = updated
-                        .and_then(|entry| entry.reminded_at_ms)
-                        .unwrap_or(now_ms);
-                    if let Some(entry) = self.reminder_ghosts.get_mut(&line_idx) {
-                        entry.reminded_at_ms = Some(reminded_at);
-                        entry.line_text = self
-                            .editor
-                            .lines
-                            .get(line_idx)
-                            .cloned()
-                            .unwrap_or_else(|| entry.line_text.clone());
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Failed to persist reminder notification: {error}");
-                }
+            if let Some(entry) = self.reminder_ghosts.get_mut(&line_idx) {
+                entry.reminded_at_ms = Some(now_ms);
             }
+            self.reminders_changed_outside_text(db);
         }
     }
 
@@ -2904,11 +2911,7 @@ impl TerminalApp {
         self.invalidate_joined_text_cache();
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
-        // Another note's reminders: nothing tracked applies.
-        self.reminder_ghosts.clear();
-        self.reminder_tracked_len = None;
-        self.reminder_ghosts = self.reconcile_reminder_ghosts(db)?;
-        self.reminders_dirty = false;
+        self.load_reminders(db)?;
         self.last_reminder_check = Instant::now();
         self.editor.cursor_line = 0;
         self.editor.cursor_col = 0;
@@ -2926,6 +2929,7 @@ impl TerminalApp {
             &self.editor.lines,
             self.editor.cursor_line,
             self.editor.cursor_col,
+            self.reminder_marks(),
         );
         self.undo_actions.clear();
         self.undo_action_pos = 0;

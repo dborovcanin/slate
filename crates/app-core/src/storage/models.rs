@@ -75,6 +75,17 @@ pub struct NoteSearchResult {
     pub updated_at: String,
 }
 
+/// A reminder as the editor holds it for a note, to be stored with its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReminderLine {
+    /// 1-based line in the text it is stored with.
+    pub line_number: i64,
+    pub remind_at_ms: i64,
+    pub display_at: String,
+    pub line_text: String,
+    pub reminded_at_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Reminder {
     pub note_id: String,

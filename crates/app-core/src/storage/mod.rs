@@ -4,7 +4,7 @@ mod sqlite;
 
 pub use models::{
     Collection, CollectionCounts, Note, NoteAccessMode, NoteModules, NoteRevision,
-    NoteSearchResult, NoteSummary, NoteVersion, Reminder, Tag,
+    NoteSearchResult, NoteSummary, NoteVersion, Reminder, ReminderLine, Tag,
 };
 pub use sqlite::{
     database_before_restore_path, replace_database_file, timestamp_epoch, Db, DbOpenMetrics,

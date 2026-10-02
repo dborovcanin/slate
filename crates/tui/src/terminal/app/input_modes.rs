@@ -37,6 +37,9 @@ impl TerminalApp {
     }
 
     pub(super) fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if self.key_depth == 0 && self.startup_reminder_hydration_pending {
+            self.hydrate_startup_reminders(db, true);
+        }
         self.key_depth += 1;
         let result = self.handle_key_inner(db, key);
         self.key_depth -= 1;
@@ -806,30 +809,22 @@ impl TerminalApp {
                     self.date_picker.minute,
                     &self.date_picker.time_format,
                 );
-                let line_number = (self.editor.cursor_line + 1) as i64;
-                let line_text = self.current_line().to_string();
-                let before_reminder = self.reminder_ghosts.get(&self.editor.cursor_line).cloned();
-                db.upsert_reminder(
-                    &self.active_note.id,
-                    line_number,
-                    remind_at_ms,
-                    &display_at,
-                    &line_text,
-                )?;
-                if let Some(line_idx) = line_number
-                    .checked_sub(1)
-                    .and_then(|line| usize::try_from(line).ok())
-                {
-                    let entry = LineReminderGhost {
-                        remind_at_ms,
-                        display_at: display_at.clone(),
-                        line_text: line_text.clone(),
-                        reminded_at_ms: None,
-                        stored_line: line_number,
-                    };
-                    self.reminder_ghosts.insert(line_idx, entry.clone());
-                    self.push_reminder_undo_entry(line_idx, before_reminder, Some(entry));
+                if !self.active_note_holds_reminders() {
+                    self.close_date_picker();
+                    self.status = "reminders are not supported for file-backed notes".to_string();
+                    return Ok(());
                 }
+                let line_idx = self.editor.cursor_line;
+                let before_reminder = self.reminder_ghosts.get(&line_idx).cloned();
+                let entry = LineReminderGhost {
+                    remind_at_ms,
+                    display_at: display_at.clone(),
+                    line_text: self.current_line().to_string(),
+                    reminded_at_ms: None,
+                };
+                self.reminder_ghosts.insert(line_idx, entry.clone());
+                self.push_reminder_undo_entry(line_idx, before_reminder, Some(entry));
+                self.reminders_changed_outside_text(db);
                 self.close_date_picker();
                 self.status = format!("remind set ⏰ {display_at}");
             }

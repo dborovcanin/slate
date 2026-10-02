@@ -52,6 +52,7 @@ pub fn execute_vim_action_with_target(
     let repeats = count.max(1);
     match intent {
         VimIntent::DeleteLine => Some(execute_delete_line(text, selection, repeats)),
+        VimIntent::ChangeLine => Some(execute_change_line(text, selection, repeats)),
         VimIntent::YankLine => Some(execute_yank_line(text, selection, repeats)),
         VimIntent::DeleteToLineStart => Some(execute_delete_to_line_start(text, selection)),
         VimIntent::DeleteToLineEnd => Some(execute_delete_to_line_end(text, selection)),
@@ -201,6 +202,7 @@ pub fn supports_intent(intent: VimIntent) -> bool {
     matches!(
         intent,
         VimIntent::DeleteLine
+            | VimIntent::ChangeLine
             | VimIntent::YankLine
             | VimIntent::DeleteToLineStart
             | VimIntent::DeleteToLineEnd
@@ -281,9 +283,10 @@ pub fn scoped_line_range(
     Some(match intent {
         // Deleting the last lines also takes the line break above them; `x`
         // past a line's end joins the next line, once per repeat.
-        VimIntent::DeleteLine | VimIntent::YankLine | VimIntent::DeleteChar => {
-            (above, cursor.saturating_add(count).min(last))
-        }
+        VimIntent::DeleteLine
+        | VimIntent::ChangeLine
+        | VimIntent::YankLine
+        | VimIntent::DeleteChar => (above, cursor.saturating_add(count).min(last)),
         VimIntent::DeleteWordForward | VimIntent::DeleteWordEnd | VimIntent::YankWordForward => {
             (above, text_lines_after(cursor, true))
         }
@@ -294,6 +297,43 @@ pub fn scoped_line_range(
         // cursor line or next to it.
         _ => (above, (cursor + 1).min(last)),
     })
+}
+
+/// `cc`: the text of `count` lines from the cursor's is cut (into the
+/// register, linewise) and one empty line stays in their place, ready for
+/// insert mode. Unlike `dd`, the line itself is kept.
+fn execute_change_line(
+    text: &str,
+    selection: SelectionSnapshot,
+    count: usize,
+) -> VimActionExecutionResult {
+    let spans = line_spans(text);
+    let cursor = clamp_offset(text, selection.head);
+    let start_idx = line_index_for_offset(&spans, cursor);
+    let end_idx = (start_idx + count.saturating_sub(1)).min(spans.len().saturating_sub(1));
+    let from = spans[start_idx].0;
+    let to = spans[end_idx].1;
+    let changed = spans[start_idx..=end_idx]
+        .iter()
+        .map(|(line_from, line_to)| &text[*line_from..*line_to])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let operations = vec![replace_range(
+        from,
+        to,
+        "",
+        Some(OperationSelection {
+            anchor: from,
+            head: None,
+        }),
+    )];
+    VimActionExecutionResult {
+        operations,
+        register: Some(VimRegisterValue {
+            text: changed,
+            mode: VimRegisterMode::Linewise,
+        }),
+    }
 }
 
 fn execute_delete_line(
@@ -1548,6 +1588,20 @@ fn delimiter_run_bounds(chars: &[char], idx: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn change_line_empties_the_line_and_keeps_it() {
+        let result =
+            execute_vim_action("a\nb", sel(0), VimIntent::ChangeLine, 1, None).expect("handled");
+        let change = &result.operations[0].changes[0];
+        assert_eq!((change.from, change.to, change.insert.as_str()), (0, 1, ""));
+        assert_eq!(result.register.expect("register").text, "a");
+        // Two lines become one empty line; the next line stays.
+        let result =
+            execute_vim_action("a\nb\nc", sel(0), VimIntent::ChangeLine, 2, None).expect("handled");
+        let change = &result.operations[0].changes[0];
+        assert_eq!((change.from, change.to), (0, 3));
+    }
+
+    #[test]
     fn scoped_line_range_gives_the_same_edit_as_the_whole_text() {
         let texts: Vec<Vec<String>> = vec![(0..400).map(|i| format!("line {i} word")).collect(), {
             // Long runs of blank and whitespace-only lines between words.
@@ -1560,6 +1614,7 @@ mod tests {
         }];
         let intents = [
             VimIntent::DeleteLine,
+            VimIntent::ChangeLine,
             VimIntent::YankLine,
             VimIntent::DeleteWordForward,
             VimIntent::DeleteWordEnd,

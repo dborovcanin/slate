@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 
 use super::models::{
     Collection, CollectionCounts, Note, NoteAccessMode, NoteModules, NoteRevision,
-    NoteSearchResult, NoteSummary, NoteVersion, Reminder,
+    NoteSearchResult, NoteSummary, NoteVersion, Reminder, ReminderLine,
 };
 use super::note_access::{NoteAccessGrant, NoteAccessService};
 
@@ -397,18 +397,22 @@ impl Db {
     /// concurrency, so this skips the read-back that `save_note` performs to
     /// assemble a full `Note`.
     pub fn save_note_revision(&self, id: &str, body: &str) -> Result<NoteRevision, String> {
-        self.save_note_revision_if(id, body, None)
+        self.save_note_revision_if(id, body, None, None)
     }
 
     /// [`Self::save_note_revision`] that only writes while the stored
     /// revision is still `expected_revision` (`None` writes unconditionally).
     /// The check and the write share one write transaction, so two writers
     /// holding the same revision cannot both succeed.
+    ///
+    /// With `reminders`, the note's reminders are replaced by them in the same
+    /// transaction, so the stored lines and reminders always match.
     pub fn save_note_revision_if(
         &self,
         id: &str,
         body: &str,
         expected_revision: Option<&str>,
+        reminders: Option<&[ReminderLine]>,
     ) -> Result<NoteRevision, String> {
         let mut conn = self.conn.lock()?;
         let tx = begin_write(&mut conn)?;
@@ -416,36 +420,61 @@ impl Db {
         let now = now_iso();
         let note_title = derive_note_title_from_body(body);
 
+        let mut encrypted = false;
         if let Some(security) = self.load_note_security(&tx, id)? {
-            match security.access_mode {
-                NoteAccessMode::None => {}
-                NoteAccessMode::Encrypted => {
-                    let encryption = self
-                        .unlocked_encryption_for(id)
-                        .ok_or_else(|| NOTE_LOCKED.to_string())?;
-                    self.record_history(&tx, id, &security, body)?;
-                    self.write_encrypted_body(&tx, id, &encryption, body, &now)?;
-                    tx.commit().map_err(|e| e.to_string())?;
-                    return Ok(NoteRevision {
-                        id: id.to_string(),
-                        updated_at: now,
-                    });
-                }
-            }
             self.record_history(&tx, id, &security, body)?;
+            if security.access_mode == NoteAccessMode::Encrypted {
+                let encryption = self
+                    .unlocked_encryption_for(id)
+                    .ok_or_else(|| NOTE_LOCKED.to_string())?;
+                self.write_encrypted_body(&tx, id, &encryption, body, &now)?;
+                encrypted = true;
+            }
         }
+        if !encrypted {
+            tx.execute(
+                "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                     body = excluded.body,
+                     note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE excluded.note_title END,
+                     updated_at = excluded.updated_at",
+                rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(reminders) = reminders {
+            write_note_reminders(&tx, id, reminders, &now)?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
 
+        Ok(NoteRevision {
+            id: id.to_string(),
+            updated_at: now,
+        })
+    }
+
+    /// Replaces the note's reminders while its stored revision is still
+    /// `expected_revision` (`None` accepts any): for reminder changes made
+    /// while the text itself is saved. Reminders are part of what the
+    /// revision guards, so it moves on: another session holding the old
+    /// revision cannot write over them.
+    pub fn replace_reminders_if(
+        &self,
+        id: &str,
+        expected_revision: Option<&str>,
+        reminders: &[ReminderLine],
+    ) -> Result<NoteRevision, String> {
+        let mut conn = self.conn.lock()?;
+        let tx = begin_write(&mut conn)?;
+        ensure_note_revision(&tx, id, expected_revision)?;
+        let now = now_iso();
+        write_note_reminders(&tx, id, reminders, &now)?;
         tx.execute(
-            "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(id) DO UPDATE SET
-                 body = excluded.body,
-                 note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE excluded.note_title END,
-                 updated_at = excluded.updated_at",
-            rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
+            "UPDATE notes SET updated_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, now],
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
-
         Ok(NoteRevision {
             id: id.to_string(),
             updated_at: now,
@@ -1750,7 +1779,7 @@ impl Db {
     }
 
     /// Moves the note's reminders to where [`crate::reminders::place_reminders`]
-    /// puts them in `lines` (with the editor's `hints`), in one transaction, and returns the placed ones
+    /// puts them in `lines` (text changed outside the editor), in one transaction, and returns the placed ones
     /// as stored now. A reminder whose line is gone stays stored as it was,
     /// so undoing the deletion brings it back, until a placed reminder needs
     /// its line number. Writes nothing when no reminder moved.
@@ -1758,14 +1787,13 @@ impl Db {
         &self,
         note_id: &str,
         lines: &[String],
-        hints: &crate::reminders::ReminderHints,
     ) -> Result<Vec<Reminder>, String> {
         let mut conn = self.conn.lock()?;
         let reminders = query_reminders(&conn, note_id)?;
         if reminders.is_empty() {
             return Ok(Vec::new());
         }
-        let placed = crate::reminders::place_reminders(&reminders, lines, hints);
+        let placed = crate::reminders::place_reminders(&reminders, lines);
         let moves: Vec<(usize, usize)> = placed
             .iter()
             .enumerate()
@@ -2992,6 +3020,38 @@ fn is_note_protected(mode: NoteAccessMode) -> bool {
     !matches!(mode, NoteAccessMode::None)
 }
 
+/// Replaces every reminder of `note_id` with `reminders`.
+fn write_note_reminders(
+    conn: &Connection,
+    note_id: &str,
+    reminders: &[ReminderLine],
+    now: &str,
+) -> Result<(), String> {
+    conn.execute("DELETE FROM reminders WHERE note_id = ?1", [note_id])
+        .map_err(|e| e.to_string())?;
+    let mut insert = conn
+        .prepare(
+            "INSERT INTO reminders (
+                note_id, line_number, remind_at_ms, display_at, line_text, reminded_at_ms, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        )
+        .map_err(|e| e.to_string())?;
+    for reminder in reminders {
+        insert
+            .execute(rusqlite::params![
+                note_id,
+                reminder.line_number,
+                reminder.remind_at_ms,
+                reminder.display_at,
+                reminder.line_text,
+                reminder.reminded_at_ms,
+                now
+            ])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn query_reminders(conn: &Connection, note_id: &str) -> Result<Vec<Reminder>, String> {
     let mut stmt = conn
         .prepare(
@@ -3282,7 +3342,7 @@ mod tests {
         db.upsert_reminder("n1", 2, 2, "d", "b").expect("b");
 
         let placed = db
-            .reconcile_reminders("n1", &owned(&["b", "a"]), &Default::default())
+            .reconcile_reminders("n1", &owned(&["b", "a"]))
             .expect("reconcile");
         assert_eq!(placed.len(), 2);
         assert_eq!(
@@ -3311,7 +3371,7 @@ mod tests {
         // "buy milk" replaced by another line: its reminder stays stored,
         // unplaced, so an undo can bring it back.
         let placed = db
-            .reconcile_reminders("n1", &owned(&["call Ana", "pay rent"]), &Default::default())
+            .reconcile_reminders("n1", &owned(&["call Ana", "pay rent"]))
             .expect("reconcile");
         assert_eq!(placed.len(), 1);
         assert_eq!(placed[0].line_text, "pay rent");
@@ -3322,7 +3382,7 @@ mod tests {
 
         // Once "pay rent" moves onto line 1, the unplaced reminder gives way.
         let placed = db
-            .reconcile_reminders("n1", &owned(&["pay rent"]), &Default::default())
+            .reconcile_reminders("n1", &owned(&["pay rent"]))
             .expect("reconcile");
         assert_eq!(placed.len(), 1);
         assert_eq!(reminder_lines(&db, "n1"), vec![(1, "pay rent".to_string())]);

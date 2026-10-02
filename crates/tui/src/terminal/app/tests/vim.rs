@@ -1299,7 +1299,8 @@ fn app_with_reminder(body: &str, line: usize) -> (Db, TerminalApp, std::path::Pa
         &text,
     )
     .expect("reminder");
-    app.reminder_ghosts = app.reconcile_reminder_ghosts(&db).expect("ghosts");
+    app.load_reminders(&db).expect("reminders");
+    app.history.set_marks(app.reminder_marks());
     app.mode = UiMode::Normal;
     (db, app, path)
 }
@@ -1315,13 +1316,11 @@ fn deleting_a_reminded_task_does_not_pass_the_reminder_to_the_next() {
     let (db, mut app, path) = app_with_reminder("- [ ] buy milk\n- [ ] buy eggs", 0);
     app.editor.cursor_line = 0;
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
-    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
     assert_eq!(app.editor.lines, vec!["- [ ] buy eggs".to_string()]);
     assert!(app.reminder_ghosts.is_empty(), "buy eggs gets no reminder");
 
     // Undo brings the line and its reminder back.
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
     assert_eq!(reminder_lines(&app), vec![0]);
 
     drop(app);
@@ -1334,14 +1333,15 @@ fn reminders_follow_lines_opened_above_and_edits_in_place() {
     let (db, mut app, path) = app_with_reminder("intro\n- [ ] buy milk\nend", 1);
     app.editor.cursor_line = 1;
     run_keys(&mut app, &db, &[Key::Char('O'), Key::Char('x'), Key::Esc]);
-    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
     assert_eq!(reminder_lines(&app), vec![2]);
 
     // Editing the reminded line keeps its reminder there.
     app.editor.cursor_line = 2;
     run_keys(&mut app, &db, &[Key::Char('A'), Key::Char('!'), Key::Esc]);
-    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
     assert_eq!(reminder_lines(&app), vec![2]);
+    // Stored only with the text.
+    assert_eq!(db.list_reminders("n1").expect("list")[0].line_number, 2);
+    app.save(&db).expect("save");
     let stored = db.list_reminders("n1").expect("list");
     assert_eq!(stored[0].line_number, 3);
     assert_eq!(stored[0].line_text, "- [ ] buy milk!");

@@ -47,6 +47,9 @@ struct ValidatedImageMetadata {
 pub struct SaveOptions {
     pub expected_revision: Option<String>,
     pub force: bool,
+    /// For a database note, the reminders to store with the text in the same
+    /// transaction (`None` leaves them as they are). File notes have none.
+    pub reminders: Option<Vec<crate::storage::ReminderLine>>,
 }
 
 #[derive(Clone)]
@@ -123,10 +126,12 @@ impl NoteSourceService {
         options: SaveOptions,
     ) -> Result<NoteRevision, String> {
         match identity {
-            NoteIdentity::DbNote(id) => {
-                self.db
-                    .save_note_revision_if(id, body, db_expected_revision(&options))
-            }
+            NoteIdentity::DbNote(id) => self.db.save_note_revision_if(
+                id,
+                body,
+                db_expected_revision(&options),
+                options.reminders.as_deref(),
+            ),
             NoteIdentity::FileNote(path) => {
                 save_markdown_file(path, body, &options)?;
                 Ok(NoteRevision {
@@ -1254,6 +1259,7 @@ mod tests {
                 SaveOptions {
                     expected_revision: Some(rev),
                     force: false,
+                    reminders: None,
                 },
             )
             .expect("save succeeds");
@@ -1306,6 +1312,7 @@ mod tests {
                 SaveOptions {
                     expected_revision: Some(rev),
                     force: false,
+                    reminders: None,
                 },
             )
             .expect("save file succeeds");
@@ -1441,6 +1448,7 @@ mod tests {
                             SaveOptions {
                                 expected_revision: Some(expected),
                                 force: false,
+                                reminders: None,
                             },
                         )
                     })
@@ -1494,6 +1502,7 @@ mod tests {
                 SaveOptions {
                     expected_revision: Some(db_rev),
                     force: false,
+                    reminders: None,
                 },
             )
             .expect_err("db save should conflict");
@@ -1505,6 +1514,7 @@ mod tests {
                 SaveOptions {
                     expected_revision: None,
                     force: true,
+                    reminders: None,
                 },
             )
             .expect("forced db save should pass");
@@ -1525,6 +1535,7 @@ mod tests {
                 SaveOptions {
                     expected_revision: Some(file_rev),
                     force: false,
+                    reminders: None,
                 },
             )
             .expect_err("file save should conflict");
@@ -1536,6 +1547,7 @@ mod tests {
                 SaveOptions {
                     expected_revision: None,
                     force: true,
+                    reminders: None,
                 },
             )
             .expect("forced file save should pass");

@@ -97,6 +97,8 @@ pub enum VimIntent {
     EnterVisualLine,
     ExitVisual,
     DeleteLine,
+    /// `cc`: empties the lines into one empty line that stays, unlike `dd`.
+    ChangeLine,
     YankLine,
     DeleteToLineStart,
     DeleteToLineEnd,
@@ -691,7 +693,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             (VimPending::Change, VimKey::Char('c')) => {
                 let count = consume_pending_effective_count(&mut next);
                 next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteLine, count));
+                actions.push(make_action(VimIntent::ChangeLine, count));
                 actions.push(make_action(VimIntent::EnterInsert, 1));
                 handled = true;
                 return VimStep {
@@ -1616,7 +1618,7 @@ mod tests {
         assert!(three.handled);
         assert_eq!(three.state.mode, VimMode::Insert);
         assert_eq!(three.actions.len(), 2);
-        assert_eq!(three.actions[0].intent, VimIntent::DeleteLine);
+        assert_eq!(three.actions[0].intent, VimIntent::ChangeLine);
         assert_eq!(three.actions[0].count, 2);
         assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
 
