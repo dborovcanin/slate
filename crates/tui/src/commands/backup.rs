@@ -119,7 +119,9 @@ fn resolve_backup_path(path: &str) -> Result<PathBuf, String> {
         } else {
             home.join(&raw[2..])
         }
-    } else if raw.len() >= "file://".len() && raw[.."file://".len()].eq_ignore_ascii_case("file://")
+    } else if raw
+        .get(.."file://".len())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
     {
         let uri =
             Url::parse(raw).map_err(|e| format!("invalid file URL backup path '{raw}': {e}"))?;
@@ -566,6 +568,13 @@ mod tests {
             .join(format!("nonexistent-slate-{}", Ulid::new()))
             .join("backup.zip");
         assert!(resolve_backup_path(path.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn resolve_backup_path_accepts_non_ascii_names() {
+        let path = std::env::temp_dir().join("éééé.zip");
+        assert_eq!(resolve_backup_path(path.to_str().unwrap()), Ok(path));
+        assert!(resolve_backup_path("éééé.zip").is_ok());
     }
 
     #[test]

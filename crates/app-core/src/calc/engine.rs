@@ -193,7 +193,7 @@ struct FormulaCallSpan {
     spec: FormulaSpec,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct TableBlockInfo {
     data_rows: Vec<Vec<usize>>,
     row_lookup: FxHashMap<usize, usize>,
@@ -202,7 +202,8 @@ struct TableBlockInfo {
 #[derive(Default)]
 struct TableEvalCache {
     split_cells: FxHashMap<usize, Arc<Vec<String>>>,
-    block_by_line: FxHashMap<usize, Option<TableBlockInfo>>,
+    /// One shared index per table block, referenced by each of its lines.
+    block_by_line: FxHashMap<usize, Option<Arc<TableBlockInfo>>>,
 }
 
 impl TableEvalCache {
@@ -219,7 +220,7 @@ impl TableEvalCache {
         self.split_cells.get(&line_idx)
     }
 
-    fn block_for_line(&mut self, lines: &[String], line_idx: usize) -> Option<TableBlockInfo> {
+    fn block_for_line(&mut self, lines: &[String], line_idx: usize) -> Option<Arc<TableBlockInfo>> {
         if let Some(cached) = self.block_by_line.get(&line_idx) {
             return cached.clone();
         }
@@ -260,12 +261,12 @@ impl TableEvalCache {
             }
         }
 
-        let info = TableBlockInfo {
+        let info = Arc::new(TableBlockInfo {
             data_rows,
             row_lookup,
-        };
+        });
         for row_idx in start..=end {
-            self.block_by_line.insert(row_idx, Some(info.clone()));
+            self.block_by_line.insert(row_idx, Some(Arc::clone(&info)));
         }
         Some(info)
     }
@@ -2747,6 +2748,19 @@ fn split_applied_result(s: &str) -> (&str, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_rows_share_one_block_index() {
+        let lines: Vec<String> = ["| a | b |", "| - | - |", "| 1 | 2 |", "| 3 | 4 |"]
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        let mut cache = TableEvalCache::default();
+        let first = cache.block_for_line(&lines, 2).expect("table block");
+        let second = cache.block_for_line(&lines, 3).expect("table block");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.data_rows, vec![vec![2], vec![3]]);
+    }
 
     #[test]
     fn evaluates_leading_expression_before_a_text_label() {

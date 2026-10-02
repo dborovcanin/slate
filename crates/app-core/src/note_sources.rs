@@ -1001,6 +1001,16 @@ fn read_markdown_file(path: &Path) -> Result<String, String> {
 }
 
 fn write_markdown_file_atomically(path: &Path, body: &str) -> Result<(), String> {
+    // Replace a symlink's target rather than the link itself.
+    let resolved;
+    let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        resolved.as_path()
+    } else {
+        path
+    };
+    // The replacement keeps the original's mode (private notes, executable scripts).
+    let permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
     let parent = path.parent().ok_or_else(|| {
         format!(
             "Failed to determine parent directory for markdown file '{}'",
@@ -1030,6 +1040,14 @@ fn write_markdown_file_atomically(path: &Path, body: &str) -> Result<(), String>
                     tmp_path.display()
                 )
             })?;
+        if let Some(permissions) = permissions {
+            tmp.set_permissions(permissions).map_err(|e| {
+                format!(
+                    "Failed to set permissions on temporary markdown file '{}': {e}",
+                    tmp_path.display()
+                )
+            })?;
+        }
         tmp.write_all(body.as_bytes()).map_err(|e| {
             format!(
                 "Failed writing temporary markdown file '{}': {e}",
@@ -1331,6 +1349,37 @@ mod tests {
         let _ = fs::remove_file(markdown_path);
         drop(db);
         cleanup_db_files(&db_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_file_write_keeps_mode_and_symlink() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = std::env::temp_dir().join(format!("note-source-mode-{}", Ulid::new()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        for mode in [0o600, 0o755] {
+            let path = dir.join(format!("note-{mode:o}.md"));
+            fs::write(&path, "old").expect("seed file");
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod");
+            write_markdown_file_atomically(&path, "new").expect("write");
+            let meta = fs::metadata(&path).expect("metadata");
+            assert_eq!(meta.permissions().mode() & 0o777, mode);
+            assert_eq!(fs::read_to_string(&path).expect("read"), "new");
+        }
+
+        let target = dir.join("target.md");
+        let link = dir.join("link.md");
+        fs::write(&target, "old").expect("seed target");
+        symlink(&target, &link).expect("symlink");
+        write_markdown_file_atomically(&link, "through link").expect("write");
+        assert!(fs::symlink_metadata(&link)
+            .expect("link metadata")
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_to_string(&target).expect("read"), "through link");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
