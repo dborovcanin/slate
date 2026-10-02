@@ -328,18 +328,42 @@ impl Db {
         let swapped = swap_in_database_file(&pool.db_path, staged_file);
         // Reopen whichever database is now live: the restored one, or the
         // original after a failed swap.
-        let reopened = SqlitePool::open_configured_connection(&pool.db_path).and_then(|conn| {
-            initialize_schema(&conn)?;
-            state.connections.push(conn);
-            state.created = 1;
-            Ok(())
-        });
+        let reopen = || {
+            SqlitePool::open_configured_connection(&pool.db_path).and_then(|conn| {
+                initialize_schema(&conn)?;
+                ensure_current_schema(&conn)?;
+                Ok(conn)
+            })
+        };
+        let reopened = match reopen() {
+            Ok(conn) => {
+                state.connections.push(conn);
+                state.created = 1;
+                Ok(())
+            }
+            Err(error) if swapped.is_ok() => {
+                // The restored database does not open: put the previous one back.
+                let previous = database_before_restore_path(&pool.db_path);
+                if move_database_file(&previous, &pool.db_path).is_ok() {
+                    if let Ok(conn) = reopen() {
+                        state.connections.push(conn);
+                        state.created = 1;
+                    }
+                    Err(format!(
+                        "the restored database could not be opened ({error}); the previous one was put back"
+                    ))
+                } else {
+                    Err(format!("failed to reopen db after restore: {error}"))
+                }
+            }
+            Err(error) => Err(format!("failed to reopen db after restore: {error}")),
+        };
         state.restoring = false;
         pool.available.notify_all();
         drop(state);
 
         swapped?;
-        reopened.map_err(|e| format!("failed to reopen db after restore: {e}"))?;
+        reopened?;
         if let Ok(mut checked) = self.search_index_checked.lock() {
             *checked = false;
         }
@@ -2867,7 +2891,43 @@ fn prepare_restore_file(path: &Path) -> Result<(), String> {
         return Err("backup was made by a newer Slate version".to_string());
     }
     initialize_schema(&conn).map_err(invalid)?;
+    ensure_current_schema(&conn).map_err(invalid)?;
     conn.close().map_err(|(_, e)| invalid(e.to_string()))
+}
+
+/// Fails unless `conn` has every table and column of a freshly created
+/// database: the version number alone does not prove what a file holds.
+fn ensure_current_schema(conn: &Connection) -> Result<(), String> {
+    let reference = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    initialize_schema(&reference)?;
+    let tables: Vec<String> = reference
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let columns = |conn: &Connection, table: &str| -> Result<Vec<String>, String> {
+        conn.prepare("SELECT name FROM pragma_table_info(?1)")
+            .map_err(|e| e.to_string())?
+            .query_map([table], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())
+    };
+    for table in tables {
+        let present = columns(conn, &table)?;
+        if present.is_empty() {
+            return Err(format!("it has no {table} table"));
+        }
+        if let Some(missing) = columns(&reference, &table)?
+            .into_iter()
+            .find(|column| !present.contains(column))
+        {
+            return Err(format!("its {table} table has no {missing} column"));
+        }
+    }
+    Ok(())
 }
 
 /// Renames the database at `from`, with its WAL, to `to`, replacing what
@@ -3319,6 +3379,33 @@ mod tests {
             .expect("bump version");
         let error = db.restore_from_sqlite_file(&staged).expect_err("rejected");
         assert!(error.contains("newer Slate"), "{error}");
+        assert_eq!(
+            db.get_note("n1").expect("read").expect("note").body,
+            "keep me"
+        );
+
+        drop(db);
+        remove_db_files(&path);
+        remove_db_files(&staged);
+    }
+
+    #[test]
+    fn restore_rejects_a_backup_missing_columns() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "keep me").expect("seed");
+
+        let staged = temp_db_path();
+        let source = Db::open(staged.clone()).expect("source");
+        source.save_note("old", "from backup").expect("seed backup");
+        drop(source);
+        Connection::open(&staged)
+            .expect("raw")
+            .execute_batch("ALTER TABLE notes DROP COLUMN encryption_nonce;")
+            .expect("drop column");
+
+        let error = db.restore_from_sqlite_file(&staged).expect_err("rejected");
+        assert!(error.contains("no encryption_nonce column"), "{error}");
         assert_eq!(
             db.get_note("n1").expect("read").expect("note").body,
             "keep me"
