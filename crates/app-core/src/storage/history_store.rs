@@ -169,71 +169,58 @@ fn prune(
     now: i64,
     key: Option<&[u8; 32]>,
 ) -> Result<(), String> {
-    let times = {
-        let mut stmt = conn
-            .prepare("SELECT saved_at FROM note_history WHERE note_id = ?1 ORDER BY id DESC")
-            .map_err(|e| e.to_string())?;
-        let times = stmt
-            .query_map([note_id], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        times
-    };
-    let saved: Vec<i64> = times
-        .iter()
-        .map(|time| timestamp_epoch(time).unwrap_or(now))
-        .collect();
-    let keep = history::versions_to_keep(&saved, now, MAX_VERSIONS_PER_NOTE);
-    if keep.iter().all(|keep| *keep) {
-        return Ok(());
-    }
-
     let rows = {
         let mut stmt = conn
-            .prepare(
-                "SELECT id, payload, payload_nonce FROM note_history
-                 WHERE note_id = ?1 ORDER BY id DESC",
-            )
+            .prepare("SELECT id, saved_at FROM note_history WHERE note_id = ?1 ORDER BY id DESC")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([note_id], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Option<Vec<u8>>>(2)?,
-                ))
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
         rows
     };
-    // Every version's text, newest first, rebuilt along the chain.
-    let mut payloads = Vec::with_capacity(rows.len());
-    let mut texts = Vec::with_capacity(rows.len());
+    let saved: Vec<i64> = rows
+        .iter()
+        .map(|(_, time)| timestamp_epoch(time).unwrap_or(now))
+        .collect();
+    let keep = history::versions_to_keep(&saved, now, MAX_VERSIONS_PER_NOTE);
+    if keep.iter().all(|keep| *keep) {
+        return Ok(());
+    }
+    let ids: Vec<i64> = rows.into_iter().map(|(id, _)| id).collect();
+    let mut load_row = conn
+        .prepare("SELECT payload, payload_nonce FROM note_history WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+
+    // Walk the chain newest first, holding only the version just rebuilt and
+    // the newest kept one: a note's history can be far larger than memory
+    // allows to keep at once. Rows are read one at a time; only rows already
+    // passed are rewritten.
     let mut newer = current_body.to_string();
-    for (_, bytes, nonce) in rows.iter().cloned() {
+    let mut newer_kept = current_body.to_string();
+    let mut neighbor_kept = true;
+    for (index, id) in ids.iter().enumerate() {
+        let (bytes, nonce) = load_row
+            .query_row([id], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Option<Vec<u8>>>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
         let payload = load_payload(bytes, nonce, key)?;
         let text = payload.resolve(&newer)?;
-        newer = text.clone();
-        payloads.push(payload);
-        texts.push(text);
-    }
-
-    let mut newer_kept = current_body;
-    let mut neighbor_kept = true;
-    for (index, (id, _, _)) in rows.iter().enumerate() {
         if !keep[index] {
             conn.execute("DELETE FROM note_history WHERE id = ?1", [id])
                 .map_err(|e| e.to_string())?;
             neighbor_kept = false;
+            newer = text;
             continue;
         }
         if !neighbor_kept {
-            let back = history::diff(newer_kept, &texts[index]);
+            let back = history::diff(&newer_kept, &text);
             let (lines_added, lines_removed) = session_line_counts(&back);
-            if payloads[index].is_full() {
+            if payload.is_full() {
                 conn.execute(
                     "UPDATE note_history SET lines_added = ?2, lines_removed = ?3 WHERE id = ?1",
                     rusqlite::params![id, lines_added as i64, lines_removed as i64],
@@ -250,7 +237,8 @@ fn prune(
                 .map_err(|e| e.to_string())?;
             }
         }
-        newer_kept = &texts[index];
+        newer_kept.clone_from(&text);
+        newer = text;
         neighbor_kept = true;
     }
     Ok(())

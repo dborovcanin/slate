@@ -4290,6 +4290,80 @@ mod tests {
     }
 
     #[test]
+    fn thinning_old_history_keeps_the_remaining_versions_rebuildable() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let mut lines: Vec<String> = (0..30).map(|i| format!("line {i}")).collect();
+        db.save_note_revision("t", &lines.join("\n")).expect("save");
+        let mut versions: Vec<String> = Vec::new();
+        for step in 0..40 {
+            end_history_session(&db, "t");
+            versions.push(lines.join("\n"));
+            let at = (step * 7) % lines.len();
+            if step % 3 == 0 {
+                lines.insert(at, format!("new {step}"));
+            } else {
+                lines[at].push_str(" edited");
+            }
+            db.save_note_revision("t", &lines.join("\n")).expect("save");
+        }
+        versions.reverse(); // newest first, as listed
+
+        // Spread the versions over past days, three a day, so pruning thins
+        // them to one a day.
+        let now = OffsetDateTime::now_utc();
+        {
+            let conn = db.conn.lock().expect("conn");
+            let ids: Vec<i64> = conn
+                .prepare("SELECT id FROM note_history WHERE note_id = 't' ORDER BY id DESC")
+                .expect("prepare")
+                .query_map([], |row| row.get(0))
+                .expect("ids")
+                .collect::<Result<_, _>>()
+                .expect("ids");
+            assert_eq!(ids.len(), versions.len());
+            for (age, id) in ids.iter().enumerate() {
+                let saved = now - time::Duration::days(2) - time::Duration::hours(8 * age as i64);
+                conn.execute(
+                    "UPDATE note_history SET saved_at = ?2 WHERE id = ?1",
+                    rusqlite::params![
+                        id,
+                        saved
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .unwrap()
+                    ],
+                )
+                .expect("backdate");
+            }
+        }
+        let saved: Vec<i64> = (0..versions.len())
+            .map(|age| {
+                (now - time::Duration::days(2) - time::Duration::hours(8 * age as i64))
+                    .unix_timestamp()
+            })
+            .collect();
+        let keep = crate::history::versions_to_keep(&saved, now.unix_timestamp(), 500);
+        assert!(keep.iter().any(|keep| !keep), "some versions are thinned");
+
+        // A new session's save prunes.
+        end_history_session(&db, "t");
+        let previous = lines.join("\n");
+        db.save_note_revision("t", "final").expect("save");
+
+        let mut expected = vec![previous];
+        expected.extend(
+            versions
+                .into_iter()
+                .zip(keep)
+                .filter_map(|(text, keep)| keep.then_some(text)),
+        );
+        assert_eq!(history_texts(&db, "t"), expected);
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn history_rebuilds_random_sessions_across_checkpoints() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
