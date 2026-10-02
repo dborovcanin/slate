@@ -879,3 +879,25 @@ fn title_bar_shows_title_first_and_dirty_marker() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn typing_a_fence_into_place_rebuilds_the_fold_ranges() {
+    let (db, mut app, path) = app_with_note("~~\ninside\n~~~\nafter");
+    app.recompute_folding();
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = 0;
+    run_keys(&mut app, &db, &[Key::Char('i'), Key::Char('~'), Key::Esc]);
+    assert_eq!(app.editor.lines[0], "~~~");
+    if app.folds.rescan_pending {
+        app.recompute_folding();
+    }
+    assert_eq!(
+        app.folds.ranges,
+        crate::editor_core::folding::build_fold_ranges(&app.editor.lines)
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

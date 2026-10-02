@@ -49,7 +49,14 @@ fn is_list_fold_line(line: &str) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FoldStructuralSignature {
     Empty,
-    Fence,
+    /// A line shaped like a fence: its character and length, and whether it
+    /// is bare (only a bare fence can close a block). Changing any of these
+    /// can change which lines every later fence encloses.
+    Fence {
+        ch: char,
+        len: usize,
+        bare: bool,
+    },
     Table,
     List,
     Heading(usize),
@@ -79,8 +86,12 @@ fn fold_structural_signature(line_text: &str) -> FoldStructuralSignature {
     if trimmed.is_empty() {
         return FoldStructuralSignature::Empty;
     }
-    if trimmed.starts_with("```") {
-        return FoldStructuralSignature::Fence;
+    if let Some(fence) = table_syntax::code_fence_opening(trimmed) {
+        return FoldStructuralSignature::Fence {
+            ch: fence.ch,
+            len: fence.len,
+            bare: table_syntax::closes_code_fence(trimmed, fence),
+        };
     }
     if trimmed.starts_with('|') && trimmed.ends_with('|') {
         return FoldStructuralSignature::Table;
@@ -481,6 +492,24 @@ mod tests {
             new_line_text: "line".to_string(),
         };
         assert!(edits_require_rebuild(&[multiline]));
+    }
+
+    #[test]
+    fn fence_edits_that_change_block_boundaries_require_rebuild() {
+        let edit = |old: &str, new: &str| FoldLineEdit {
+            old_start_line: 0,
+            old_line_span: 1,
+            new_line_span: 1,
+            old_line_text: old.to_string(),
+            new_line_text: new.to_string(),
+        };
+        // A third tilde makes a fence; a fourth backtick needs a longer closer.
+        assert!(edits_require_rebuild(&[edit("~~", "~~~")]));
+        assert!(edits_require_rebuild(&[edit("```", "````")]));
+        // An info string stops a fence from closing.
+        assert!(edits_require_rebuild(&[edit("```", "```rust")]));
+        // Within one info string nothing changes for other lines.
+        assert!(!edits_require_rebuild(&[edit("```rust", "```rusty")]));
     }
 
     #[test]
