@@ -296,6 +296,8 @@ struct PreparedNoteContext {
     options_key: u64,
     /// Hash of each line it was prepared from, to find what an edit changed.
     line_hashes: Vec<u64>,
+    /// Fenced code blocks, which neither define variables nor evaluate.
+    fences: FenceMap,
     /// The note with cross-note references replaced by their values; `None`
     /// when nothing was substituted and the original lines apply.
     eval_lines: Option<Vec<String>>,
@@ -311,6 +313,57 @@ struct PreparedNoteContext {
     /// Scratch copy of the evaluated lines that table formulas write their
     /// values into; rows written by an evaluation are restored after it.
     working_lines: Option<Vec<String>>,
+}
+
+/// Which lines are fenced code, kept per line so an edit away from fences
+/// updates it without rescanning the note.
+#[derive(Default)]
+struct FenceMap {
+    /// The line is a fence (```` ``` ````).
+    fence: Vec<bool>,
+    /// A code block is open after the line.
+    open_after: Vec<bool>,
+}
+
+impl FenceMap {
+    fn build(lines: &[String]) -> Self {
+        let mut open = false;
+        let mut map = Self::default();
+        for line in lines {
+            let fence = table_syntax::is_code_fence(line);
+            open ^= fence;
+            map.fence.push(fence);
+            map.open_after.push(open);
+        }
+        map
+    }
+
+    /// The line is a fence or inside a code block.
+    fn is_code(&self, idx: usize) -> bool {
+        self.fence.get(idx).copied().unwrap_or(false)
+            || idx
+                .checked_sub(1)
+                .and_then(|prev| self.open_after.get(prev))
+                .copied()
+                .unwrap_or(false)
+    }
+
+    fn has_fence_in(&self, from: usize, to: usize) -> bool {
+        self.fence[from..to].iter().any(|fence| *fence)
+    }
+
+    /// Replaces lines `[from, old_to)`, none of them fences, by `new_len`
+    /// lines without fences: they all share the state before `from`.
+    fn splice_without_fences(&mut self, from: usize, old_to: usize, new_len: usize) {
+        let open = from
+            .checked_sub(1)
+            .map(|prev| self.open_after[prev])
+            .unwrap_or(false);
+        self.fence
+            .splice(from..old_to, std::iter::repeat_n(false, new_len));
+        self.open_after
+            .splice(from..old_to, std::iter::repeat_n(open, new_len));
+    }
 }
 
 /// Reusable state for `CalcEngine::evaluate_note_context_cached`.
@@ -885,13 +938,20 @@ fn prepare_note_context(
         }
     }
 
+    let fences = FenceMap::build(lines);
     let line_defs: Vec<Option<VariableDefinition>> = if options.variables_enabled {
         eval_lines
             .as_deref()
             .unwrap_or(lines)
             .iter()
             .enumerate()
-            .map(|(idx, line)| line_variable_definition(line, idx, options.table_enabled))
+            .map(|(idx, line)| {
+                if fences.is_code(idx) {
+                    None
+                } else {
+                    line_variable_definition(line, idx, options.table_enabled)
+                }
+            })
             .collect()
     } else {
         Vec::new()
@@ -904,6 +964,7 @@ fn prepare_note_context(
     PreparedNoteContext {
         options_key,
         line_hashes,
+        fences,
         eval_lines,
         lines_with_unresolved,
         cross_note_refs,
@@ -930,6 +991,18 @@ fn update_prepared_note_context(
         prepared.line_hashes = line_hashes;
         return;
     };
+    // Opening or closing a code block changes every line after it.
+    if prepared.fences.has_fence_in(from, old_to)
+        || lines[from..new_to]
+            .iter()
+            .any(|line| table_syntax::is_code_fence(line))
+    {
+        *prepared = prepare_note_context(lines, options, prepared.options_key, line_hashes);
+        return;
+    }
+    prepared
+        .fences
+        .splice_without_fences(from, old_to, new_to - from);
     let delta = new_to as isize - old_to as isize;
     let shift = |idx: usize| idx.saturating_add_signed(delta);
 
@@ -997,7 +1070,13 @@ fn update_prepared_note_context(
     if options.variables_enabled {
         let eval_lines = prepared.eval_lines.as_deref().unwrap_or(lines);
         let span_defs: Vec<Option<VariableDefinition>> = (from..new_to)
-            .map(|idx| line_variable_definition(&eval_lines[idx], idx, options.table_enabled))
+            .map(|idx| {
+                if prepared.fences.is_code(idx) {
+                    None
+                } else {
+                    line_variable_definition(&eval_lines[idx], idx, options.table_enabled)
+                }
+            })
             .collect();
         let definitions_changed = prepared.line_defs[from..old_to]
             .iter()
@@ -1070,6 +1149,7 @@ fn evaluate_prepared(
     let mut ctx = new_context();
     let PreparedNoteContext {
         eval_lines: prepared_lines,
+        fences,
         lines_with_unresolved,
         cross_note_refs,
         defs,
@@ -1140,7 +1220,7 @@ fn evaluate_prepared(
         None => Box::new(eval_from..eval_to),
     };
     for idx in targets {
-        if lines_with_unresolved.contains(&idx) {
+        if lines_with_unresolved.contains(&idx) || fences.is_code(idx) {
             continue;
         }
         // Borrow the current line text per probe; each `read_line!` borrow
@@ -2519,7 +2599,11 @@ fn cross_note_ref_regex() -> &'static Regex {
 /// only names are needed, not values.
 pub fn scan_variable_assignments(lines: &[String]) -> Vec<VariableIndexEntry> {
     let mut seen: FxHashMap<String, VariableIndexEntry> = FxHashMap::default();
+    let fences = FenceMap::build(lines);
     for (line_idx, line) in lines.iter().enumerate() {
+        if fences.is_code(line_idx) {
+            continue;
+        }
         if let Some((name, normalized, _rhs)) = parse_variable_assignment(line.trim()) {
             seen.insert(
                 normalized.clone(),
@@ -2878,6 +2962,65 @@ mod tests {
         assert_eq!(results[0].as_deref(), Some(TABLE_REF_ERROR_TOO_DEEP));
         // Rows close enough to the end still evaluate.
         assert_eq!(results[rows - 2].as_deref(), Some("2"));
+    }
+
+    fn note(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|line| line.to_string()).collect()
+    }
+
+    fn variables_on() -> NoteEvaluationOptions {
+        NoteEvaluationOptions {
+            variables_enabled: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fenced_code_neither_defines_nor_evaluates() {
+        let lines = note(&["x := 1", "```go", "x := 100", "y := 2 + 3", "```", "x + 1"]);
+        let result = CalcEngine::new().evaluate_note_context(&lines, variables_on());
+        assert_eq!(result.line_results[5].as_deref(), Some("2"));
+        assert_eq!(result.line_results[2], None);
+        assert_eq!(result.line_results[3], None);
+        assert!(result.variables.iter().all(|entry| entry.normalized != "y"));
+
+        let names: Vec<String> = scan_variable_assignments(&lines)
+            .into_iter()
+            .map(|entry| entry.normalized)
+            .collect();
+        assert_eq!(names, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn cached_evaluation_follows_fences_added_and_removed() {
+        let engine = CalcEngine::new();
+        let mut cache = NoteContextCache::default();
+        let mut lines = note(&["x := 1", "", "x := 100", "", "x + 1"]);
+        let result = engine.evaluate_note_context_cached(&lines, variables_on(), &mut cache);
+        assert_eq!(result.line_results[4].as_deref(), Some("101"));
+
+        // Fence the second assignment.
+        lines[1] = "```".to_string();
+        lines[3] = "```".to_string();
+        let result = engine.evaluate_note_context_cached(&lines, variables_on(), &mut cache);
+        assert_eq!(result.line_results[4].as_deref(), Some("2"));
+
+        // An edit inside the block stays inside it.
+        lines[2] = "x := 7".to_string();
+        let result = engine.evaluate_note_context_cached(&lines, variables_on(), &mut cache);
+        assert_eq!(result.line_results[4].as_deref(), Some("2"));
+
+        // Lines inserted after the block are notebook text again.
+        lines.insert(4, "x := 5".to_string());
+        let result = engine.evaluate_note_context_cached(&lines, variables_on(), &mut cache);
+        assert_eq!(result.line_results[5].as_deref(), Some("6"));
+
+        // Without the opening fence the former closing one opens a block;
+        // the cache agrees with a fresh evaluation.
+        lines.remove(1);
+        let result = engine.evaluate_note_context_cached(&lines, variables_on(), &mut cache);
+        let fresh = engine.evaluate_note_context(&lines, variables_on());
+        assert_eq!(result.line_results, fresh.line_results);
     }
 
     #[test]

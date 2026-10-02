@@ -412,7 +412,7 @@ pub fn is_horizontal_rule(text: &str) -> bool {
 }
 
 pub fn is_code_fence(text: &str) -> bool {
-    text.trim_start().starts_with("```")
+    table_syntax::is_code_fence(text)
 }
 
 pub fn normalize_fence_lang(raw: &str) -> Option<String> {

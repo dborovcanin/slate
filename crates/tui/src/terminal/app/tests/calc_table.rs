@@ -2256,3 +2256,14 @@ fn large_viewport_note_prepares_calc_off_the_input_thread() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn fenced_code_does_not_change_notebook_variables() {
+    let (db, app, path) = app_with_note("x := 1\n```go\nx := 100\n```\nx + 1");
+    assert_eq!(app.calc.results[4].as_deref(), Some("2"));
+    assert_eq!(app.calc.results[2], None);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

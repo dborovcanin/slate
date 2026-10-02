@@ -36,8 +36,30 @@ fn normalize_list_line(line: &str) -> String {
     line.to_string()
 }
 
+/// Normalizes tables, headings, block quotes and list markers. Fenced code
+/// blocks, fences included, are left exactly as written.
 pub fn format_markdown(text: &str) -> String {
-    let mut lines: Vec<String> = text.lines().map(|s| s.trim_end().to_string()).collect();
+    let lines: Vec<&str> = text.lines().collect();
+    let in_code = table_syntax::code_block_lines(&lines);
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut start = 0;
+    while start < lines.len() {
+        let code = in_code[start];
+        let end = (start..lines.len())
+            .find(|&idx| in_code[idx] != code)
+            .unwrap_or(lines.len());
+        if code {
+            out.extend(lines[start..end].iter().map(|line| line.to_string()));
+        } else {
+            out.extend(format_prose_lines(&lines[start..end]));
+        }
+        start = end;
+    }
+    out.join("\n")
+}
+
+fn format_prose_lines(lines: &[&str]) -> Vec<String> {
+    let mut lines: Vec<String> = lines.iter().map(|s| s.trim_end().to_string()).collect();
 
     // Process table blocks
     let mut i = 0;
@@ -86,5 +108,24 @@ pub fn format_markdown(text: &str) -> String {
         }
     }
 
-    lines.join("\n")
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fenced_code_is_left_as_written() {
+        let text = "#Title\n```sh\n#!/bin/sh\n* not a list  \n> not a quote\n| a |b|\n```\n* item";
+        assert_eq!(
+            format_markdown(text),
+            "# Title\n```sh\n#!/bin/sh\n* not a list  \n> not a quote\n| a |b|\n```\n- item"
+        );
+    }
+
+    #[test]
+    fn unclosed_fence_protects_the_rest() {
+        assert_eq!(format_markdown("*  a\n```\n#x"), "- a\n```\n#x");
+    }
 }

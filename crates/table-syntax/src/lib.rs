@@ -1,6 +1,31 @@
 //! Markdown table structure shared by the editor and the calc engine: row
-//! and cell parsing, continuation rows, delimiter rows, and table blocks.
+//! and cell parsing, continuation rows, delimiter rows, and table blocks,
+//! plus the code-fence rule both need to leave code examples alone.
 //! Pure functions over line text; no editing or formatting policy.
+
+/// Whether `text` opens or closes a fenced code block (```` ``` ````). The
+/// editor and the calc engine both read fences this way, so neither treats
+/// a code example as notebook text.
+pub fn is_code_fence(text: &str) -> bool {
+    text.trim_start().starts_with("```")
+}
+
+/// For each line, whether it is a fence line or inside a fenced code block.
+/// An unclosed fence runs to the end.
+pub fn code_block_lines<S: AsRef<str>>(lines: &[S]) -> Vec<bool> {
+    let mut open = false;
+    lines
+        .iter()
+        .map(|line| {
+            if is_code_fence(line.as_ref()) {
+                open = !open;
+                true
+            } else {
+                open
+            }
+        })
+        .collect()
+}
 
 pub fn is_table_line(text: &str) -> bool {
     let trimmed = text.trim();
