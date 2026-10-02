@@ -2875,6 +2875,34 @@ fn failed_autosave_keeps_edits_and_waits_for_the_next_edit() {
 }
 
 #[test]
+fn e_reloads_only_after_asking_about_unsaved_changes() {
+    let (db, mut app, path) = app_with_note("one");
+    app.autosave_enabled = false;
+    app.editor.lines = vec!["unsaved".to_string()];
+    app.dirty = true;
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.command_input = "e".to_string();
+    let menu = app.build_command_completion_menu().expect("menu");
+    assert_eq!(menu.options[0].token, "e");
+
+    app.execute_terminal_command(&db, "e");
+    assert_eq!(app.editor.lines, vec!["unsaved".to_string()]);
+    assert!(
+        app.status.starts_with("no write since last change"),
+        "{}",
+        app.status
+    );
+    app.execute_terminal_command(&db, "e");
+    assert_eq!(app.editor.lines, vec!["one".to_string()]);
+    assert!(!app.dirty);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn reload_discards_unsaved_changes() {
     let (db, mut app, path) = app_with_conflicting_edit();
     app.mode = UiMode::Normal;

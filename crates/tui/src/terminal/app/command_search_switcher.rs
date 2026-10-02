@@ -1570,7 +1570,11 @@ impl TerminalApp {
                     self.quit = true;
                     return;
                 }
-                crate::editor_core::engine::HostCommandPlan::Reload => {
+                crate::editor_core::engine::HostCommandPlan::Reload { force } => {
+                    // Like vim's :e, unsaved changes need `!` or a second ask.
+                    if !force && !self.can_leave_note(db) {
+                        return;
+                    }
                     self.status = match self.reload_active_note(db) {
                         Ok(()) => format!("reloaded {}", self.active_note.id),
                         Err(error) => format!("reload failed: {error}"),

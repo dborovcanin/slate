@@ -484,7 +484,7 @@ mod tests {
                 "backup export",
                 "backup load",
                 "web",
-                "reload",
+                "e",
             ]
         );
 
@@ -495,7 +495,7 @@ mod tests {
         assert!(vim_values.contains(&"q".to_string()));
         assert!(vim_values.contains(&"w".to_string()));
         assert!(vim_values.contains(&"wq".to_string()));
-        assert!(vim_values.contains(&"reload".to_string()));
+        assert!(vim_values.contains(&"e".to_string()));
     }
 
     #[test]

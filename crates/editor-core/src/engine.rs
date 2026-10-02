@@ -152,8 +152,11 @@ pub enum HostCommandPlan {
     Quit {
         force: bool,
     },
-    /// Replace the buffer with the stored note, dropping unsaved changes.
-    Reload,
+    /// Replace the buffer with the stored note; `force` drops unsaved
+    /// changes without asking.
+    Reload {
+        force: bool,
+    },
 }
 
 impl EditorEngine {
@@ -268,7 +271,9 @@ impl EditorEngine {
             CommandId::Quit => Some(HostCommandPlan::Quit {
                 force: normalized == "q!",
             }),
-            CommandId::Reload => Some(HostCommandPlan::Reload),
+            CommandId::Reload => Some(HostCommandPlan::Reload {
+                force: normalized.ends_with('!'),
+            }),
             _ => None,
         }
     }
@@ -489,17 +494,25 @@ mod tests {
             EditorEngine::plan_host_command(CommandMode::Vim, "q").expect("quit normal");
         assert_eq!(quit_normal, HostCommandPlan::Quit { force: false });
 
-        for input in ["e!", "edit!", "reload"] {
+        for (input, force) in [
+            ("e", false),
+            ("edit", false),
+            ("reload", false),
+            ("e!", true),
+            ("edit!", true),
+        ] {
             assert_eq!(
                 EditorEngine::plan_host_command(CommandMode::Vim, input),
-                Some(HostCommandPlan::Reload),
+                Some(HostCommandPlan::Reload { force }),
                 "{input}"
             );
         }
         assert_eq!(
-            EditorEngine::plan_host_command(CommandMode::Editor, "reload"),
-            Some(HostCommandPlan::Reload)
+            EditorEngine::plan_host_command(CommandMode::Editor, "e"),
+            Some(HostCommandPlan::Reload { force: false })
         );
+        let suggestions = EditorEngine::list_command_suggestions(CommandMode::Vim, "e");
+        assert_eq!(suggestions.first().map(|s| s.value.as_str()), Some("e"));
 
         let write = EditorEngine::plan_host_command(CommandMode::Vim, "w").expect("write");
         assert_eq!(

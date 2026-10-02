@@ -881,9 +881,9 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 67] = [
     },
     CommandDefinition {
         id: CommandId::Reload,
-        value: "reload",
-        aliases: &["e!", "edit!"],
-        description: "reload the note, discarding unsaved changes",
+        value: "e",
+        aliases: &["e!", "edit", "edit!", "reload"],
+        description: "reload the note (e! discards unsaved changes)",
         modes: &MODES_BOTH,
     },
 ];
