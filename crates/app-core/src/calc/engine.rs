@@ -360,6 +360,16 @@ const TABLE_REF_ERROR_OUT_OF_BOUNDS: &str = "!ERROR#out_of_bounds";
 const TABLE_REF_ERROR_NON_NUMERIC: &str = "!ERROR#non_numeric";
 const TABLE_REF_ERROR_SELF_REFERENCE: &str = "!ERROR#self_reference";
 const TABLE_REF_ERROR_CYCLE: &str = "!ERROR#cycle";
+const TABLE_REF_ERROR_TOO_DEEP: &str = "!ERROR#too_deep";
+
+/// Nesting at which a reference into another formula row first evaluates
+/// the table's earlier rows in order, so a chain running down the table (a
+/// running total) reads cached rows instead of recursing through all of them.
+const TABLE_FORMULA_PREWARM_DEPTH: usize = 32;
+/// Hard bound on nested table formula evaluation. A chain that still needs
+/// more, such as rows each reading the row below, reports `too_deep` instead
+/// of exhausting the stack.
+const TABLE_FORMULA_MAX_DEPTH: usize = 128;
 
 fn table_cell_error_kind(value: &str) -> Option<TableCellErrorKind> {
     match value {
@@ -1715,6 +1725,25 @@ fn resolve_table_coordinate_value(
         return Ok(format_number(value));
     }
 
+    // Only rows above can be evaluated first; a chain reading downwards is
+    // left to the depth limit.
+    let reads_upwards = current_logical_row.is_some_and(|current| target_logical_idx < current);
+    if reads_upwards
+        && table_formula_stack.len() >= TABLE_FORMULA_PREWARM_DEPTH
+        && !table_formula_cache.contains_key(&(target_line, target_col))
+    {
+        prewarm_table_rows(
+            lines,
+            &table_block.data_rows[..target_logical_idx],
+            variables_enabled,
+            resolver.as_deref_mut(),
+            table_eval_cache,
+            table_formula_cache,
+            table_formula_stack,
+            ctx,
+        );
+    }
+
     // If the target is itself a table formula cell, evaluate it recursively
     // so references can chain across formulas.
     if let Some(value) = evaluate_table_formula(
@@ -1729,20 +1758,17 @@ fn resolve_table_coordinate_value(
         table_formula_stack,
         ctx,
     ) {
-        if value == TABLE_REF_ERROR_OUT_OF_BOUNDS
-            || value == TABLE_REF_ERROR_NON_NUMERIC
-            || value == TABLE_REF_ERROR_SELF_REFERENCE
-            || value == TABLE_REF_ERROR_CYCLE
+        if let Some(error) = [
+            TABLE_REF_ERROR_OUT_OF_BOUNDS,
+            TABLE_REF_ERROR_NON_NUMERIC,
+            TABLE_REF_ERROR_SELF_REFERENCE,
+            TABLE_REF_ERROR_CYCLE,
+            TABLE_REF_ERROR_TOO_DEEP,
+        ]
+        .into_iter()
+        .find(|error| value == *error)
         {
-            return Err(if value == TABLE_REF_ERROR_OUT_OF_BOUNDS {
-                TABLE_REF_ERROR_OUT_OF_BOUNDS
-            } else if value == TABLE_REF_ERROR_NON_NUMERIC {
-                TABLE_REF_ERROR_NON_NUMERIC
-            } else if value == TABLE_REF_ERROR_CYCLE {
-                TABLE_REF_ERROR_CYCLE
-            } else {
-                TABLE_REF_ERROR_SELF_REFERENCE
-            });
+            return Err(error);
         }
         let numeric = extract_first_number(&value).ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
         return Ok(format_number(numeric));
@@ -1758,6 +1784,45 @@ fn resolve_table_coordinate_value(
 
     let numeric = extract_first_number(&evaluated).ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
     Ok(format_number(numeric))
+}
+
+/// Evaluates the formula cells of `rows`, top to bottom, that are neither
+/// cached nor being evaluated. Each row then finds the rows above it cached,
+/// so this stays shallow however long the table is.
+#[allow(clippy::too_many_arguments)]
+fn prewarm_table_rows(
+    lines: &[String],
+    rows: &[Vec<usize>],
+    variables_enabled: bool,
+    mut resolver: Option<&mut VariableResolver<'_>>,
+    table_eval_cache: &mut TableEvalCache,
+    table_formula_cache: &mut FxHashMap<(usize, usize), String>,
+    table_formula_stack: &mut Vec<(usize, usize)>,
+    ctx: &mut fend_core::Context,
+) {
+    for &line_idx in rows.iter().flatten() {
+        let Some(line) = lines.get(line_idx) else {
+            continue;
+        };
+        for (expression, cell_idx) in table_expression_segments(line, true) {
+            let key = (line_idx, cell_idx);
+            if table_formula_cache.contains_key(&key) || table_formula_stack.contains(&key) {
+                continue;
+            }
+            let _ = evaluate_table_formula(
+                lines,
+                line_idx,
+                &expression,
+                Some(cell_idx),
+                variables_enabled,
+                resolver.as_deref_mut(),
+                table_eval_cache,
+                table_formula_cache,
+                table_formula_stack,
+                ctx,
+            );
+        }
+    }
 }
 
 fn substitute_table_coordinate_references(
@@ -2139,6 +2204,10 @@ fn evaluate_table_formula(
     }
     if table_formula_stack.contains(&key) {
         return Some(TABLE_REF_ERROR_CYCLE.to_string());
+    }
+    // Not cached: from a shallower start the same cell may well evaluate.
+    if table_formula_stack.len() >= TABLE_FORMULA_MAX_DEPTH {
+        return Some(TABLE_REF_ERROR_TOO_DEEP.to_string());
     }
     table_formula_stack.push(key);
 
@@ -2746,6 +2815,70 @@ fn split_applied_result(s: &str) -> (&str, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Evaluates `lines` on a thread with a 2 MiB stack, the default for
+    /// spawned threads, and returns the results of `range`.
+    fn evaluate_on_small_stack(lines: Vec<String>, range: (usize, usize)) -> Vec<Option<String>> {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                CalcEngine::new()
+                    .evaluate_note_context(
+                        &lines,
+                        NoteEvaluationOptions {
+                            table_enabled: true,
+                            eval_range: Some(range),
+                            ..Default::default()
+                        },
+                    )
+                    .line_results[range.0..range.1]
+                    .to_vec()
+            })
+            .expect("spawn")
+            .join()
+            .expect("evaluation finishes without overflowing the stack")
+    }
+
+    fn table_with_rows(rows: impl Iterator<Item = String>) -> Vec<String> {
+        ["| a | b |", "| - | - |"]
+            .iter()
+            .map(|line| line.to_string())
+            .chain(rows)
+            .collect()
+    }
+
+    #[test]
+    fn long_running_total_evaluates_from_its_last_row() {
+        let rows = 5000;
+        let lines = table_with_rows((1..=rows).map(|row| {
+            if row == 1 {
+                "| 1 | 1 |".to_string()
+            } else {
+                format!("| 1 | :=({},2)+1 |", row - 1)
+            }
+        }));
+        let last = lines.len() - 1;
+        // Only the last row is in view, as in viewport evaluation.
+        let results = evaluate_on_small_stack(lines, (last, last + 1));
+        assert_eq!(results[0].as_deref(), Some("5000"));
+    }
+
+    #[test]
+    fn chain_reading_downwards_reports_too_deep_instead_of_overflowing() {
+        let rows = 2000;
+        let lines = table_with_rows((1..=rows).map(|row| {
+            if row == rows {
+                "| 1 | 1 |".to_string()
+            } else {
+                format!("| 1 | :=({},2)+1 |", row + 1)
+            }
+        }));
+        let count = lines.len();
+        let results = evaluate_on_small_stack(lines, (2, count));
+        assert_eq!(results[0].as_deref(), Some(TABLE_REF_ERROR_TOO_DEEP));
+        // Rows close enough to the end still evaluate.
+        assert_eq!(results[rows - 2].as_deref(), Some("2"));
+    }
 
     #[test]
     fn table_rows_share_one_block_index() {
