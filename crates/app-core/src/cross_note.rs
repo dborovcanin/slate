@@ -1,5 +1,14 @@
-use crate::calc::{CrossNoteRef, ExternVar, VariableIndexEntry};
+use crate::calc::{
+    scan_cross_note_refs, CalcEngine, CrossNoteRef, ExternVar, NoteEvaluationOptions,
+    VariableIndexEntry,
+};
+use crate::storage::Db;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Mutex;
+
+/// How many notes deep [`load_note_exports`] follows references; a longer
+/// chain leaves its far end unresolved.
+const MAX_DEPENDENCY_DEPTH: usize = 16;
 
 /// Tracks variable exports and cross-note dependencies across all open notes.
 /// Every key is a full note id, as written in `[[id]].var`.
@@ -17,9 +26,10 @@ pub struct CrossNoteVarIndex {
     /// Notes for which a fast name-scan has been done this session.
     /// Prevents re-hitting the DB for autocomplete on notes with zero variables.
     name_scan_attempted_ids: FxHashSet<String>,
-    /// Notes for which a full CalcEngine eval has been done this session.
-    /// Prevents re-evaluating a dep note when building extern_vars for ghost eval.
-    full_eval_attempted_ids: FxHashSet<String>,
+    /// Notes evaluated for their exports, with the stored revision they were
+    /// read at (`None` when the note was missing). Cleared for a note when
+    /// a note it depends on exports new values.
+    evaluated: FxHashMap<String, Option<String>>,
     /// Notes currently being evaluated on a background thread.
     /// Guards against concurrent duplicate evals when multiple notes share a dep.
     eval_in_flight_ids: FxHashSet<String>,
@@ -28,6 +38,8 @@ pub struct CrossNoteVarIndex {
 impl CrossNoteVarIndex {
     /// Update exported variable values for a note after evaluation.
     /// Returns `true` if any exported value changed (used to gate dependent re-eval).
+    /// Notes depending on `note_id`, directly or not, are evaluated again
+    /// the next time they are needed when this changes a value.
     pub fn update_exports(
         &mut self,
         note_id: &str,
@@ -50,7 +62,40 @@ impl CrossNoteVarIndex {
         self.exports.insert(note_id.to_string(), new_exports);
         self.export_entries
             .insert(note_id.to_string(), entries.to_vec());
+        if changed {
+            self.invalidate_dependents(note_id);
+        }
         changed
+    }
+
+    /// Forgets the evaluation of every note that reads `note_id`'s values,
+    /// directly or through other notes.
+    pub fn invalidate_dependents(&mut self, note_id: &str) {
+        let mut pending = vec![note_id.to_string()];
+        let mut seen: FxHashSet<String> = FxHashSet::default();
+        while let Some(changed) = pending.pop() {
+            for (dependent, deps) in &self.deps {
+                if deps.contains(&changed) && seen.insert(dependent.clone()) {
+                    pending.push(dependent.clone());
+                }
+            }
+        }
+        for dependent in seen {
+            self.evaluated.remove(&dependent);
+        }
+    }
+
+    /// Forgets the evaluation of `note_id`, and of the notes reading its
+    /// values, when its stored revision is no longer `revision`.
+    pub fn invalidate_if_stale(&mut self, note_id: &str, revision: Option<&str>) {
+        let stale = self
+            .evaluated
+            .get(note_id)
+            .is_some_and(|evaluated| evaluated.as_deref() != revision);
+        if stale {
+            self.evaluated.remove(note_id);
+            self.invalidate_dependents(note_id);
+        }
     }
 
     /// Update the dependency set for a note (which notes it references).
@@ -110,20 +155,22 @@ impl CrossNoteVarIndex {
 
     // --- Full-eval tracking (fast path for ghost-eval preload) ---
 
-    pub fn mark_full_eval_attempted(&mut self, note_id: &str) {
+    /// Records that `note_id` was evaluated from its stored text at
+    /// `revision` (`None` when it does not exist).
+    pub fn mark_evaluated(&mut self, note_id: &str, revision: Option<String>) {
         self.eval_in_flight_ids.remove(note_id);
-        self.full_eval_attempted_ids.insert(note_id.to_string());
+        self.evaluated.insert(note_id.to_string(), revision);
     }
 
     pub fn was_full_eval_attempted(&self, note_id: &str) -> bool {
-        self.full_eval_attempted_ids.contains(note_id)
+        self.evaluated.contains_key(note_id)
     }
 
     /// Returns true if the full eval is already done OR currently in progress on
     /// another thread. Used by the sync preload path to avoid duplicating work
     /// that the autocomplete background thread is already handling.
     pub fn is_eval_done_or_in_flight(&self, note_id: &str) -> bool {
-        self.full_eval_attempted_ids.contains(note_id) || self.eval_in_flight_ids.contains(note_id)
+        self.evaluated.contains_key(note_id) || self.eval_in_flight_ids.contains(note_id)
     }
 
     /// Atomically checks whether a full eval is already done or in progress,
@@ -136,5 +183,199 @@ impl CrossNoteVarIndex {
         }
         self.eval_in_flight_ids.insert(note_id.to_string());
         true
+    }
+}
+
+/// Makes sure the index holds `note_id`'s exported values: evaluates its
+/// stored text, after the notes it references (up to
+/// `MAX_DEPENDENCY_DEPTH` deep, skipping cycles) so its own cross-note
+/// values resolve. A note already evaluated is not read again.
+pub fn load_note_exports(
+    db: &Db,
+    engine: &CalcEngine,
+    index: &Mutex<CrossNoteVarIndex>,
+    note_id: &str,
+) {
+    let mut visiting = Vec::new();
+    load_with_dependencies(db, engine, index, note_id, &mut visiting);
+}
+
+fn load_with_dependencies(
+    db: &Db,
+    engine: &CalcEngine,
+    index: &Mutex<CrossNoteVarIndex>,
+    note_id: &str,
+    visiting: &mut Vec<String>,
+) {
+    let evaluated = index
+        .lock()
+        .map(|index| index.was_full_eval_attempted(note_id))
+        .unwrap_or(true);
+    if evaluated
+        || visiting.len() >= MAX_DEPENDENCY_DEPTH
+        || visiting.iter().any(|id| id == note_id)
+    {
+        return;
+    }
+    let note = match db.get_note(note_id) {
+        Ok(Some(note)) => note,
+        _ => {
+            if let Ok(mut index) = index.lock() {
+                index.mark_evaluated(note_id, None);
+            }
+            return;
+        }
+    };
+    let lines: Vec<String> = note.body.split('\n').map(str::to_string).collect();
+    let refs = scan_cross_note_refs(&lines);
+    visiting.push(note_id.to_string());
+    let mut dep_ids: Vec<&str> = refs.iter().map(|r| r.note_id.as_str()).collect();
+    dep_ids.sort_unstable();
+    dep_ids.dedup();
+    for dep_id in dep_ids {
+        load_with_dependencies(db, engine, index, dep_id, visiting);
+    }
+    visiting.pop();
+
+    let extern_vars = match index.lock() {
+        Ok(mut index) => {
+            index.update_deps(note_id, &refs);
+            index.extern_vars_for(note_id)
+        }
+        Err(_) => return,
+    };
+    let result = engine.evaluate_note_context(
+        &lines,
+        NoteEvaluationOptions {
+            variables_enabled: true,
+            cross_note_enabled: true,
+            extern_vars,
+            precomputed_refs: Some(refs),
+            ..Default::default()
+        },
+    );
+    if let Ok(mut index) = index.lock() {
+        index.update_exports(note_id, &result.variables, &result.variable_values);
+        index.mark_name_scan_attempted(note_id);
+        index.mark_evaluated(note_id, Some(note.updated_at));
+    }
+}
+
+/// Re-checks the stored revision of each note `lines` reference, and of
+/// the notes those read from, so values from notes changed elsewhere since
+/// they were evaluated are read again. One revision lookup per note.
+pub fn refresh_referenced_notes(db: &Db, index: &Mutex<CrossNoteVarIndex>, lines: &[String]) {
+    let mut pending: Vec<String> = scan_cross_note_refs(lines)
+        .into_iter()
+        .map(|r| r.note_id)
+        .collect();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    while let Some(note_id) = pending.pop() {
+        if !seen.insert(note_id.clone()) {
+            continue;
+        }
+        let revision = db.get_note_updated_at(&note_id).ok().flatten();
+        let Ok(mut index) = index.lock() else {
+            return;
+        };
+        index.invalidate_if_stale(&note_id, revision.as_deref());
+        if let Some(deps) = index.deps.get(&note_id) {
+            pending.extend(deps.iter().cloned());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db() -> (Db, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!("cross-note-{}.db", ulid::Ulid::new()));
+        (Db::open(path.clone()).expect("db opens"), path)
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_owned();
+            file.push(suffix);
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
+    fn export(index: &Mutex<CrossNoteVarIndex>, note_id: &str, var: &str) -> Option<f64> {
+        let index = index.lock().expect("index");
+        index
+            .exports
+            .get(note_id)
+            .and_then(|values| values.get(var))
+            .copied()
+    }
+
+    #[test]
+    fn a_referenced_note_is_evaluated_with_its_own_references() {
+        let (db, path) = temp_db();
+        db.save_note("note-a", "x := 5").expect("a");
+        db.save_note("note-b", "y := [[note-a]].x + 1").expect("b");
+        let index = Mutex::new(CrossNoteVarIndex::default());
+        let engine = CalcEngine::new();
+
+        // Note C reads B; B is loaded with A's value.
+        load_note_exports(&db, &engine, &index, "note-b");
+        assert_eq!(export(&index, "note-b", "y"), Some(6.0));
+        assert_eq!(export(&index, "note-a", "x"), Some(5.0));
+
+        drop(db);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn new_values_upstream_are_picked_up_downstream() {
+        let (db, path) = temp_db();
+        db.save_note("note-a", "x := 5").expect("a");
+        db.save_note("note-b", "y := [[note-a]].x + 1").expect("b");
+        let index = Mutex::new(CrossNoteVarIndex::default());
+        let engine = CalcEngine::new();
+        load_note_exports(&db, &engine, &index, "note-b");
+
+        // Editing A in this session updates its exports...
+        let edited = vec!["x := 10".to_string()];
+        let result = engine.evaluate_note_context(
+            &edited,
+            NoteEvaluationOptions {
+                variables_enabled: true,
+                ..Default::default()
+            },
+        );
+        index.lock().expect("index").update_exports(
+            "note-a",
+            &result.variables,
+            &result.variable_values,
+        );
+        // ...so B is evaluated again when next needed.
+        load_note_exports(&db, &engine, &index, "note-b");
+        assert_eq!(export(&index, "note-b", "y"), Some(11.0));
+
+        // A changed elsewhere: opening a note that reads B notices it.
+        db.save_note("note-a", "x := 20").expect("external edit");
+        refresh_referenced_notes(&db, &index, &["[[note-b]].y".to_string()]);
+        load_note_exports(&db, &engine, &index, "note-b");
+        assert_eq!(export(&index, "note-b", "y"), Some(21.0));
+
+        drop(db);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn cyclic_references_terminate() {
+        let (db, path) = temp_db();
+        db.save_note("note-a", "x := [[note-b]].y + 1").expect("a");
+        db.save_note("note-b", "y := [[note-a]].x + 1\nz := 3")
+            .expect("b");
+        let index = Mutex::new(CrossNoteVarIndex::default());
+        load_note_exports(&db, &CalcEngine::new(), &index, "note-a");
+        assert_eq!(export(&index, "note-b", "z"), Some(3.0));
+
+        drop(db);
+        cleanup(&path);
     }
 }

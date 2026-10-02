@@ -365,44 +365,17 @@ pub(super) fn cross_note_exports_for_autocomplete(
     entries
 }
 
-/// Ensures the f64 export values for `note_id` are in the index by running a
-/// full CalcEngine eval if not already done this session. Called from
-/// `preload_cross_note_deps` before each recompute so ghost eval has values.
+/// Ensures `note_id`'s exported values are in the index, evaluating it
+/// after the notes it references (`app_core::cross_note::load_note_exports`).
+/// Called from `preload_cross_note_deps` before each recompute; a note already
+/// evaluated costs one lookup.
 pub(super) fn preload_cross_note_dep_value(
     note_id: &str,
     cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
     engine: &CalcEngine,
     db: &Db,
 ) {
-    if let Ok(index) = cross_note_var_index.lock() {
-        if index.was_full_eval_attempted(note_id) {
-            return;
-        }
-    }
-
-    let note = match db.get_note(note_id) {
-        Ok(Some(n)) => n,
-        _ => {
-            if let Ok(mut index) = cross_note_var_index.lock() {
-                index.mark_full_eval_attempted(note_id);
-            }
-            return;
-        }
-    };
-    let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
-    let result = engine.evaluate_note_context(
-        &lines,
-        NoteEvaluationOptions {
-            variables_enabled: true,
-            table_enabled: false,
-            ..Default::default()
-        },
-    );
-    if let Ok(mut index) = cross_note_var_index.lock() {
-        index.update_exports(note_id, &result.variables, &result.variable_values);
-        index.mark_name_scan_attempted(note_id); // name scan implied by full eval
-        index.mark_full_eval_attempted(note_id);
-    }
+    app_core::cross_note::load_note_exports(db, engine, cross_note_var_index, note_id);
 }
 
 /// Values for the `[[ID]].var` references in `lines`, loading each
@@ -419,6 +392,7 @@ pub(super) fn startup_cross_note_extern_vars(
     if refs.is_empty() {
         return Vec::new();
     }
+    app_core::cross_note::refresh_referenced_notes(db, cross_note_var_index, lines);
     let dep_ids: rustc_hash::FxHashSet<&str> = refs.iter().map(|r| r.note_id.as_str()).collect();
     for dep_id in dep_ids {
         preload_cross_note_dep_value(dep_id, cross_note_var_index, engine, db);

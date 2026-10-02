@@ -2931,6 +2931,14 @@ impl TerminalApp {
         self.undo_action_pos = 0;
         self.render_state.fence_checkpoints.truncate(1);
         self.render_state.fence_checkpoints_valid_through = 0;
+        if self.calc_cross_note_enabled() && self.editor.lines.iter().any(|l| l.contains("[[")) {
+            // Values read from other notes may have changed since.
+            app_core::cross_note::refresh_referenced_notes(
+                &self.cross_note_db,
+                &self.cross_note_var_index,
+                &self.editor.lines,
+            );
+        }
         self.rescan_calc_flags();
         self.calc_runtime.viewport_only = self.editor.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
             && self.active_has_variable_assignments()
