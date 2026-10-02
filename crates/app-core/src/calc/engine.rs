@@ -43,7 +43,7 @@ pub struct NoteEvaluationOptions {
     /// Optional half-open range `[from, to)` of line indices (0-based) to evaluate.
     /// When `None`, evaluates every line. Variable resolution always considers the
     /// full document so that a restricted evaluation still sees vars defined elsewhere.
-    /// Positions outside the range are returned as `None` in `line_results`.
+    /// The result then holds only the range's lines, from `first_line`.
     pub eval_range: Option<(usize, usize)>,
     /// Values from other notes to substitute for `[[ID]].var_name` references.
     /// Only used when `cross_note_enabled` is true.
@@ -59,6 +59,14 @@ pub struct NoteEvaluationOptions {
     /// an empty value means the cell evaluated to nothing. Seeds on lines
     /// being evaluated are ignored.
     pub table_cell_seeds: FxHashMap<(usize, usize), String>,
+    /// Leave the result's note-wide parts (`variables`, `variable_values`,
+    /// `cross_note_refs`) empty, for repeated range evaluations whose caller
+    /// already has them: building them walks every variable and reference.
+    pub omit_note_wide_results: bool,
+    /// Identifies the text of `lines` for `evaluate_note_context_cached`:
+    /// the same value promises the same lines, so the note is not rehashed
+    /// to find what changed. `None` always rehashes.
+    pub text_generation: Option<u64>,
 }
 
 impl Default for NoteEvaluationOptions {
@@ -72,6 +80,8 @@ impl Default for NoteEvaluationOptions {
             precomputed_refs: None,
             eval_lines: None,
             table_cell_seeds: FxHashMap::default(),
+            omit_note_wide_results: false,
+            text_generation: None,
         }
     }
 }
@@ -92,6 +102,9 @@ pub struct NoteEvaluationDiagnostic {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteEvaluationResult {
+    /// The line `line_results[0]` and `table_cell_results[0]` belong to:
+    /// the start of `eval_range`, else 0 (every line).
+    pub first_line: usize,
     pub line_results: Vec<Option<String>>,
     pub variables: Vec<VariableIndexEntry>,
     pub diagnostics: Option<Vec<NoteEvaluationDiagnostic>>,
@@ -106,6 +119,22 @@ pub struct NoteEvaluationResult {
     /// Cross-note variable references found in this note's lines.
     /// Used by the caller to maintain the dependency graph.
     pub cross_note_refs: Vec<CrossNoteRef>,
+}
+
+impl NoteEvaluationResult {
+    /// The result of line `line`; `None` outside the evaluated lines.
+    pub fn line_result(&self, line: usize) -> Option<&String> {
+        line.checked_sub(self.first_line)
+            .and_then(|idx| self.line_results.get(idx))
+            .and_then(Option::as_ref)
+    }
+
+    /// The table formula cells evaluated on line `line`.
+    pub fn cell_results(&self, line: usize) -> &[TableCellEvaluation] {
+        line.checked_sub(self.first_line)
+            .and_then(|idx| self.table_cell_results.get(idx))
+            .map_or(&[], Vec::as_slice)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -298,6 +327,9 @@ struct PreparedNoteContext {
     line_hashes: Vec<u64>,
     /// Fenced code blocks, which neither define variables nor evaluate.
     fences: FenceMap,
+    /// The caller's `text_generation` for the lines it was last brought up
+    /// to date with.
+    text_generation: Option<u64>,
     /// The note with cross-note references replaced by their values; `None`
     /// when nothing was substituted and the original lines apply.
     eval_lines: Option<Vec<String>>,
@@ -800,16 +832,35 @@ impl CalcEngine {
         let generation = current_eval_generation();
         with_eval_generation(generation, || {
             let options_key = note_options_key(&options);
-            let line_hashes: Vec<u64> = lines.iter().map(|line| hash_line(line)).collect();
             let mut prepared = match cache.0.take() {
+                Some(prepared)
+                    if prepared.options_key == options_key
+                        && options.text_generation.is_some()
+                        && prepared.text_generation == options.text_generation =>
+                {
+                    debug_assert!(
+                        prepared.line_hashes.len() == lines.len()
+                            && lines
+                                .iter()
+                                .zip(&prepared.line_hashes)
+                                .all(|(line, hash)| hash_line(line) == *hash),
+                        "text_generation unchanged but the lines changed"
+                    );
+                    prepared
+                }
                 Some(mut prepared) if prepared.options_key == options_key => {
+                    let line_hashes: Vec<u64> = lines.iter().map(|line| hash_line(line)).collect();
                     if prepared.line_hashes != line_hashes {
                         update_prepared_note_context(&mut prepared, lines, &options, line_hashes);
                     }
                     prepared
                 }
-                _ => prepare_note_context(lines, &options, options_key, line_hashes),
+                _ => {
+                    let line_hashes = lines.iter().map(|line| hash_line(line)).collect();
+                    prepare_note_context(lines, &options, options_key, line_hashes)
+                }
             };
+            prepared.text_generation = options.text_generation;
             let result = evaluate_prepared(lines, &mut prepared, options);
             // An interrupted evaluation may have recorded failures that are
             // not real; only keep state from a completed one.
@@ -964,6 +1015,7 @@ fn prepare_note_context(
     PreparedNoteContext {
         options_key,
         line_hashes,
+        text_generation: None,
         fences,
         eval_lines,
         lines_with_unresolved,
@@ -1179,8 +1231,13 @@ fn evaluate_prepared(
         }
     }
 
-    let mut line_results: Vec<Option<String>> = vec![None; line_count];
-    let mut table_cell_results: Vec<Vec<TableCellEvaluation>> = vec![Vec::new(); line_count];
+    // A range evaluation returns only its own lines.
+    let (first_line, result_len) = match (&listed_lines, options.eval_range) {
+        (None, Some(_)) => (eval_from, eval_to - eval_from),
+        _ => (0, line_count),
+    };
+    let mut line_results: Vec<Option<String>> = vec![None; result_len];
+    let mut table_cell_results: Vec<Vec<TableCellEvaluation>> = vec![Vec::new(); result_len];
 
     // Working copy of the document for formula substitution, allocated only
     // when a table formula writes a value back and kept between evaluations
@@ -1273,7 +1330,7 @@ fn evaluate_prepared(
                 if first_value.is_none() {
                     first_value = Some(value.clone());
                 }
-                table_cell_results[idx].push(TableCellEvaluation {
+                table_cell_results[idx - first_line].push(TableCellEvaluation {
                     cell_index: cell_idx,
                     value: value.clone(),
                     error_kind: table_cell_error_kind(&value),
@@ -1286,7 +1343,7 @@ fn evaluate_prepared(
                     table_eval_cache.split_cells.remove(&idx);
                 }
             }
-            line_results[idx] = first_value;
+            line_results[idx - first_line] = first_value;
             continue;
         }
 
@@ -1354,7 +1411,7 @@ fn evaluate_prepared(
             }
         };
 
-        line_results[idx] = result;
+        line_results[idx - first_line] = result;
     }
 
     if let Some(working) = working_lines.as_mut() {
@@ -1374,7 +1431,7 @@ fn evaluate_prepared(
         }
     }
 
-    let variable_values = if options.variables_enabled {
+    let variable_values = if options.variables_enabled && !options.omit_note_wide_results {
         resolver.numeric_values()
     } else {
         FxHashMap::default()
@@ -1382,8 +1439,13 @@ fn evaluate_prepared(
     *resolved = resolver.into_resolved();
 
     NoteEvaluationResult {
+        first_line,
         line_results,
-        variables: variables.clone(),
+        variables: if options.omit_note_wide_results {
+            Vec::new()
+        } else {
+            variables.clone()
+        },
         diagnostics: if diagnostics.is_empty() {
             None
         } else {
@@ -1391,7 +1453,11 @@ fn evaluate_prepared(
         },
         table_cell_results,
         variable_values,
-        cross_note_refs: cross_note_refs.clone(),
+        cross_note_refs: if options.omit_note_wide_results {
+            Vec::new()
+        } else {
+            cross_note_refs.clone()
+        },
     }
 }
 
@@ -2915,8 +2981,7 @@ mod tests {
                             ..Default::default()
                         },
                     )
-                    .line_results[range.0..range.1]
-                    .to_vec()
+                    .line_results
             })
             .expect("spawn")
             .join()
@@ -3021,6 +3086,30 @@ mod tests {
         let result = engine.evaluate_note_context_cached(&lines, variables_on(), &mut cache);
         let fresh = engine.evaluate_note_context(&lines, variables_on());
         assert_eq!(result.line_results, fresh.line_results);
+    }
+
+    #[test]
+    fn cached_evaluation_trusts_an_unchanged_text_generation() {
+        let engine = CalcEngine::new();
+        let mut cache = NoteContextCache::default();
+        let mut lines = note(&["x := 2", "x * 3", "x * 4"]);
+        let options = |generation: u64, from: usize| NoteEvaluationOptions {
+            variables_enabled: true,
+            eval_range: Some((from, from + 1)),
+            omit_note_wide_results: true,
+            text_generation: Some(generation),
+            ..Default::default()
+        };
+        let first = engine.evaluate_note_context_cached(&lines, options(1, 1), &mut cache);
+        assert_eq!(first.line_result(1).map(String::as_str), Some("6"));
+        assert!(first.variables.is_empty(), "omitted on request");
+        // Scrolling: same generation, another range.
+        let next = engine.evaluate_note_context_cached(&lines, options(1, 2), &mut cache);
+        assert_eq!(next.line_result(2).map(String::as_str), Some("8"));
+        // An edit comes with a new generation and is picked up.
+        lines[0] = "x := 5".to_string();
+        let edited = engine.evaluate_note_context_cached(&lines, options(2, 2), &mut cache);
+        assert_eq!(edited.line_result(2).map(String::as_str), Some("20"));
     }
 
     #[test]
@@ -3323,11 +3412,13 @@ mod tests {
         let values = |cells: &[TableCellEvaluation]| {
             cells.iter().map(|c| c.value.clone()).collect::<Vec<_>>()
         };
-        assert_eq!(values(&full.table_cell_results[4]), vec!["10", "20"]);
+        assert_eq!(values(full.cell_results(4)), vec!["10", "20"]);
         assert_eq!(
-            values(&partial.table_cell_results[4]),
-            values(&full.table_cell_results[4])
+            values(partial.cell_results(4)),
+            values(full.cell_results(4))
         );
+        assert_eq!(partial.first_line, 4);
+        assert_eq!(partial.table_cell_results.len(), 1);
     }
 
     #[test]
@@ -3993,9 +4084,10 @@ mod tests {
             },
         );
 
+        assert_eq!(result.first_line, 1);
         assert_eq!(
             result.line_results,
-            vec![None, Some("2".to_string()), Some("9".to_string()), None]
+            vec![Some("2".to_string()), Some("9".to_string())]
         );
     }
 
@@ -4020,10 +4112,8 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            result.line_results,
-            vec![None, None, Some("12".to_string()), None]
-        );
+        assert_eq!(result.first_line, 2);
+        assert_eq!(result.line_results, vec![Some("12".to_string())]);
         assert_eq!(result.variables.len(), 1);
     }
 
@@ -4081,8 +4171,8 @@ mod tests {
         assert_eq!(
             engine
                 .evaluate_note_context_cached(&lines, options(Some((8, 9)), 2.0), &mut cache)
-                .line_results[8]
-                .as_deref(),
+                .line_result(8)
+                .map(String::as_str),
             Some("44")
         );
     }
@@ -4230,7 +4320,7 @@ mod tests {
         });
         assert_send(&cache);
         let cached = engine.evaluate_note_context_cached(&lines, options(Some((2, 3))), &mut cache);
-        assert_eq!(cached.line_results[2].as_deref(), Some("7"));
+        assert_eq!(cached.line_result(2).map(String::as_str), Some("7"));
     }
 
     #[test]

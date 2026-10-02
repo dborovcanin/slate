@@ -174,7 +174,8 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 ## Performance Backlog
 
 - [ ] Adaptive large-note mode (follow-up to the 30,000-line full-feature cutoff): ~~viewport-first calc~~, ~~lazy fold/indexing~~, bounded caches, memory-bounded undo spans. Viewport calc, deferred fold rescans and background index builds are done; bounded caches and undo memory remain.
-- [ ] Large-note regression gates: ~~30k and 100k latency gates~~ (`large_note_perf`, limits in `perf/baselines/large_note.json`, run by the `perf-check` binary). Remaining: 200k/400k sizes and memory budgets.
+- [ ] Large-note regression gates: ~~30k and 100k latency gates~~ (`large_note_perf`, limits in `perf/baselines/large_note.json`, run by the `perf-check` binary); 400k is measured and reported without limits. Remaining: limits for 400k and memory budgets.
+- [ ] Structural edits on very large notes still hash every line to find what changed (`delete_line` ~116 ms, `undo` ~65 ms p50 at 400k). Passing the edited span from the terminal to the calc cache would remove that pass.
 
 Done 2026-09-29 (30k / 100k lines, p50 before -> after, from `large_note_perf`):
 
@@ -184,6 +185,7 @@ Done 2026-09-29 (30k / 100k lines, p50 before -> after, from `large_note_perf`):
 - [x] ~~Viewport evaluation redid whole-note work on every scroll step~~ -> dependency sync skips unchanged lines; the whole-note preparation, cross-note ref scan and variable names are cached and updated by span (`j`: 55 -> 1.9 ms at 30k).
 - [x] ~~Structural edits rebuilt the dependency index, table formula index and line metadata~~ -> span splices; results shift instead of re-evaluating when the changed lines take no part in calc (`dd`: 118 -> 6 ms at 30k, 25-60 s -> 17 ms at 100k).
 - [x] ~~Undo/redo ran a full calc recompute and fold rescan~~ -> viewport refresh and deferred fold rescan (64 -> 5 ms at 30k, 212 -> 13 ms at 100k).
+- [x] ~~Scrolling a viewport note rehashed every line, allocated per-line results and copied the note's variables, values and cross-note refs on each step~~ -> an editor text generation skips the rehash, range evaluations return only their lines and omit note-wide data (`scroll_line` p50: 9.1 -> 3.2 ms at 100k, ~18 -> 2.7 ms at 400k). Done 2026-10-03.
 - [x] ~~Vim edits forced a synchronous fold rescan~~ -> deferred to idle while nothing is folded; folds are no longer scanned above the 30k-line cutoff.
 - [x] ~~Autosave blocked input~~ -> saves on a background thread with the same revision check (60-90 ms at 100k).
 - [x] ~~Idle ticks blocked for up to ~200 ms at 100k~~ -> first index/metadata build on a thread, one heavy calc task per tick (p95 161 -> 21 ms).

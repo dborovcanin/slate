@@ -1,6 +1,6 @@
 {
   "description": "Large-note latency guardrails: p95 per action (key handling plus the repaint after it), measured by the large_note_perf test. Limits sit ~2-3x above current measurements (5 ms floor) to catch regressions on slower machines; tighten them as large-note work lands. Sizes without limits are reported only.",
-  "sizes": [30000, 100000],
+  "sizes": [30000, 100000, 400000],
   "limits_p95_ms": {
     "30000": {
       "open": 30,

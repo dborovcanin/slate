@@ -34,9 +34,28 @@ pub(super) fn rendered_line_display_cols(text: &str, calc_ghost: Option<&str>) -
 }
 
 pub(super) struct CalcData {
+    /// The line `line_results[0]` and `cell_results[0]` belong to; nonzero
+    /// for a range evaluation, which returns only its own lines.
+    pub(super) first_line: usize,
     pub(super) line_results: Vec<Option<String>>,
     pub(super) cell_results: Vec<Vec<TableCellEvaluation>>,
     pub(super) variable_names: Vec<String>,
+}
+
+impl CalcData {
+    pub(super) fn line_result(&self, line: usize) -> Option<String> {
+        line.checked_sub(self.first_line)
+            .and_then(|idx| self.line_results.get(idx))
+            .cloned()
+            .flatten()
+    }
+
+    pub(super) fn cell_result(&self, line: usize) -> Vec<TableCellEvaluation> {
+        line.checked_sub(self.first_line)
+            .and_then(|idx| self.cell_results.get(idx))
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 pub(super) fn compute_calc_data(
@@ -94,6 +113,8 @@ pub(super) fn compute_calc_data_cached(
     eval_range: Option<(usize, usize)>,
     extern_vars: Vec<ExternVar>,
     cache: &mut NoteContextCache,
+    text_generation: u64,
+    omit_note_wide_results: bool,
 ) -> CalcData {
     let result = engine.evaluate_note_context_cached(
         lines,
@@ -103,6 +124,8 @@ pub(super) fn compute_calc_data_cached(
             table_enabled,
             eval_range,
             extern_vars,
+            text_generation: Some(text_generation),
+            omit_note_wide_results,
             ..Default::default()
         },
         cache,
@@ -122,6 +145,7 @@ fn calc_data_from_result(result: NoteEvaluationResult) -> CalcData {
     let cell_results = result.table_cell_results;
 
     CalcData {
+        first_line: result.first_line,
         line_results: result.line_results,
         cell_results,
         variable_names,
@@ -190,6 +214,7 @@ pub(super) fn compute_calc_data_for_note(
     variable_names.dedup();
 
     CalcData {
+        first_line: result.first_line,
         line_results: result.line_results,
         cell_results: result.table_cell_results,
         variable_names,

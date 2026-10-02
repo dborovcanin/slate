@@ -35,6 +35,9 @@ pub struct CalcCache {
     /// Cross-note refs from the last scan and the hashes of the lines they
     /// were scanned from, so later scans only read changed lines.
     pub cross_note_refs_scan: Option<(Vec<u64>, Vec<app_core::calc::CrossNoteRef>)>,
+    /// The editor's `text_generation` that `cross_note_refs_scan` matches,
+    /// if known; then it is reused without rehashing the note.
+    pub cross_note_refs_generation: Option<u64>,
     /// Viewport calc preparation running off the input thread; viewport
     /// evaluation waits for it instead of preparing on the keystroke.
     pub range_context_build: Option<std::sync::mpsc::Receiver<RangeContextBuild>>,

@@ -1983,6 +1983,7 @@ impl TerminalApp {
 
     pub(super) fn invalidate_joined_text_cache(&mut self) {
         self.editor.joined_text_cache = None;
+        self.editor.text_generation = self.editor.text_generation.wrapping_add(1);
     }
 
     fn joined_text_cached_ref(&mut self) -> &str {
@@ -2903,7 +2904,7 @@ impl TerminalApp {
         self.render_state.plain_text_file = render_plain_text_file;
         self.render_state.file_language = render_file_language;
         self.editor.lines = split_lines(&self.active_note.body);
-        self.editor.joined_text_cache = None;
+        self.invalidate_joined_text_cache();
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
         self.reminder_ghosts =

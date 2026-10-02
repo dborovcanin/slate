@@ -1949,10 +1949,10 @@ impl TerminalApp {
             );
             for idx in set.lines {
                 if let Some(slot) = merged_results.get_mut(idx) {
-                    *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
+                    *slot = calc_data.line_result(idx);
                 }
                 if let Some(slot) = merged_cells.get_mut(idx) {
-                    *slot = calc_data.cell_results.get(idx).cloned().unwrap_or_default();
+                    *slot = calc_data.cell_result(idx);
                 }
             }
             (merged_results, merged_cells)
@@ -1971,10 +1971,10 @@ impl TerminalApp {
                 );
                 for idx in eval_from..eval_to {
                     if let Some(slot) = merged_results.get_mut(idx) {
-                        *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
+                        *slot = calc_data.line_result(idx);
                     }
                     if let Some(slot) = merged_cells.get_mut(idx) {
-                        *slot = calc_data.cell_results.get(idx).cloned().unwrap_or_default();
+                        *slot = calc_data.cell_result(idx);
                     }
                 }
             }
@@ -2021,10 +2021,10 @@ impl TerminalApp {
                 );
                 for idx in eval_from..eval_to {
                     if let Some(slot) = merged_results.get_mut(idx) {
-                        *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
+                        *slot = calc_data.line_result(idx);
                     }
                     if let Some(slot) = merged_cells.get_mut(idx) {
-                        *slot = calc_data.cell_results.get(idx).cloned().unwrap_or_default();
+                        *slot = calc_data.cell_result(idx);
                     }
                 }
             }
@@ -4042,15 +4042,25 @@ impl TerminalApp {
             let note_id = self.active_note.id.clone();
             // Viewport evaluations repeat on every scroll step and edit;
             // rescan only the lines that changed since the last scan.
-            let line_hashes = crate::editor_core::calc_plan::hash_lines(&self.editor.lines);
-            let refs = match self.calc.cross_note_refs_scan.take() {
+            let generation = self.editor.text_generation;
+            let (line_hashes, refs) = match self.calc.cross_note_refs_scan.take() {
+                // Unchanged text: the last scan still holds.
+                Some(scan) if self.calc.cross_note_refs_generation == Some(generation) => scan,
                 Some((scanned, refs)) => {
-                    match crate::editor_core::calc_plan::changed_line_span(&scanned, &line_hashes) {
+                    let line_hashes = crate::editor_core::calc_plan::hash_lines(&self.editor.lines);
+                    let refs = match crate::editor_core::calc_plan::changed_line_span(
+                        &scanned,
+                        &line_hashes,
+                    ) {
                         None => refs,
                         Some(span) => splice_cross_note_refs(refs, &self.editor.lines, span),
-                    }
+                    };
+                    (line_hashes, refs)
                 }
-                None => app_core::calc::scan_cross_note_refs(&self.editor.lines),
+                None => (
+                    crate::editor_core::calc_plan::hash_lines(&self.editor.lines),
+                    app_core::calc::scan_cross_note_refs(&self.editor.lines),
+                ),
             };
             self.preload_cross_note_deps_for_refs(&refs);
             let extern_vars = if let Ok(mut index) = self.cross_note_var_index.lock() {
@@ -4060,6 +4070,7 @@ impl TerminalApp {
                 Vec::new()
             };
             self.calc.cross_note_refs_scan = Some((line_hashes, refs));
+            self.calc.cross_note_refs_generation = Some(generation);
             extern_vars
         } else {
             Vec::new()
@@ -4073,6 +4084,10 @@ impl TerminalApp {
             Some((eval_from, eval_to)),
             extern_vars,
             &mut self.calc.range_context,
+            self.editor.text_generation,
+            // Names come from the dependency index once it exists; before
+            // that, the first evaluation's names do until the idle tick.
+            self.calc.calc_dependency_index.is_some() || !self.calc.variable_names.is_empty(),
         );
         if self.calc.results.len() != self.editor.lines.len() {
             self.calc.results = vec![None; self.editor.lines.len()];
@@ -4082,21 +4097,13 @@ impl TerminalApp {
         }
         for line_idx in eval_from..eval_to {
             if let Some(slot) = self.calc.results.get_mut(line_idx) {
-                *slot = calc_data
-                    .line_results
-                    .get(line_idx)
-                    .cloned()
-                    .unwrap_or(None);
+                *slot = calc_data.line_result(line_idx);
             }
             if let Some(slot) = self.calc.cell_results.get_mut(line_idx) {
-                *slot = calc_data
-                    .cell_results
-                    .get(line_idx)
-                    .cloned()
-                    .unwrap_or_default();
+                *slot = calc_data.cell_result(line_idx);
             }
         }
-        if self.calc.calc_dependency_index.is_none() {
+        if self.calc.calc_dependency_index.is_none() && self.calc.variable_names.is_empty() {
             // Until the idle tick builds the index, take names from the eval.
             self.calc.variable_names.set(calc_data.variable_names);
         }
@@ -4179,6 +4186,8 @@ impl TerminalApp {
             self.calc.range_context = build.context;
             if build.refs_scan.is_some() {
                 self.calc.cross_note_refs_scan = build.refs_scan;
+                // Built from a snapshot; check it against the text once.
+                self.calc.cross_note_refs_generation = None;
             }
         }
         self.calc_runtime.last_view_eval_range = None;

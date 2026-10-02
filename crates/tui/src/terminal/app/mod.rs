@@ -583,6 +583,10 @@ struct RenderState {
 struct EditorModel {
     lines: Vec<String>,
     joined_text_cache: Option<String>,
+    /// Changes whenever `lines` does (bumped with `joined_text_cache`'s
+    /// invalidation), so calc caches can tell an unchanged note without
+    /// rehashing it.
+    text_generation: u64,
     cursor_line: usize,
     cursor_col: usize, // char index
     scroll_line: usize,
@@ -1067,6 +1071,7 @@ impl TerminalApp {
         let calc_begin = Instant::now();
         let calc_data = if skip_initial_calc || defer_initial_full_calc {
             CalcData {
+                first_line: 0,
                 line_results: vec![None; lines.len()],
                 cell_results: vec![Vec::new(); lines.len()],
                 variable_names: Default::default(),
@@ -1204,6 +1209,7 @@ impl TerminalApp {
                 range_context: Default::default(),
                 pending_result_splices: Vec::new(),
                 cross_note_refs_scan: None,
+                cross_note_refs_generation: None,
                 index_build: None,
                 range_context_build: None,
                 calc_dependency_index,
