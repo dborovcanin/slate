@@ -570,18 +570,18 @@ impl Db {
             .ok_or_else(|| "Note not found after create".to_string())
     }
 
+    /// Stores which calc modules a note uses. Like a title, this is not
+    /// the note's text, so its revision stays the same: an open editor's
+    /// revision check still guards the text against changes made elsewhere.
     pub fn set_note_modules(&self, id: &str, modules: NoteModules) -> Result<Note, String> {
         let conn = self.conn.lock()?;
-        let now = now_iso();
         let modules_json = serde_json::to_string(&modules)
             .map_err(|e| format!("Failed to encode note modules: {e}"))?;
 
         let changed = conn
             .execute(
-                "UPDATE notes
-                 SET modules_json = ?2, updated_at = ?3
-                 WHERE id = ?1",
-                rusqlite::params![id, modules_json, now],
+                "UPDATE notes SET modules_json = ?2 WHERE id = ?1",
+                rusqlite::params![id, modules_json],
             )
             .map_err(|e| e.to_string())?;
         if changed == 0 {
@@ -5104,7 +5104,7 @@ mod tests {
             1
         );
 
-        // Writes only modules_json/updated_at, so the update trigger is scoped
+        // Writes only modules_json, so the update trigger is scoped
         // out. The indexed row must survive untouched rather than go stale.
         db.set_note_modules(
             "n1",

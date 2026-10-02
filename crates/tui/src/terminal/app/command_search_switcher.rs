@@ -1321,14 +1321,12 @@ impl TerminalApp {
             return true;
         }
 
-        // The module write moves the note's revision; land any in-flight
-        // autosave first so the two don't race on it.
-        self.poll_background_save(db, true);
         let previous_modules = self.active_note.modules;
         match db.set_note_modules(&self.active_note.id, next_modules) {
             Ok(saved_note) => {
+                // Only the modules: the text's revision is still the one the
+                // buffer was loaded or saved at.
                 self.active_note.modules = saved_note.modules;
-                self.active_note.updated_at = saved_note.updated_at;
                 let calc_module_changed = previous_modules.math != self.active_note.modules.math
                     || previous_modules.variables != self.active_note.modules.variables
                     || previous_modules.cross_note != self.active_note.modules.cross_note;

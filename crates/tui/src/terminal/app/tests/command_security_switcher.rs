@@ -2773,11 +2773,9 @@ fn finished_autosave_does_not_roll_back_a_newer_revision() {
     std::thread::sleep(Duration::from_millis(2));
 
     // A revision-moving write lands before the autosave is polled.
-    let modules = app_core::storage::NoteModules {
-        variables: false,
-        ..app.active_note.modules
-    };
-    let saved = db.set_note_modules("n1", modules).expect("module write");
+    let saved = db
+        .save_note("n1", "written elsewhere")
+        .expect("other write");
     app.active_note.updated_at = saved.updated_at.clone();
     app.poll_background_save(&db, false);
     assert_eq!(app.active_note.updated_at, saved.updated_at);
@@ -2963,6 +2961,39 @@ fn leaving_after_a_failed_save_needs_a_second_request() {
     assert!(app.status.starts_with("save failed"), "{}", app.status);
     assert!(app.dirty);
     assert!(app.can_leave_note(&db));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn module_command_keeps_a_save_conflict_with_changes_made_elsewhere() {
+    let (db, mut app, path) = app_with_note("original");
+    app.autosave_enabled = true;
+    app.editor.lines = vec!["my unsaved changes".to_string()];
+    app.editor.joined_text_cache = None;
+    app.dirty = true;
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "external changes")
+        .expect("external edit");
+
+    // The autosave conflicts; the module command then runs.
+    app.last_edit = past_autosave_debounce();
+    app.maybe_autosave(&db).expect("autosave starts");
+    app.poll_background_save(&db, true);
+    assert!(app.status.starts_with("autosave failed"), "{}", app.status);
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.execute_terminal_command(&db, "module math off");
+    assert!(!app.active_note.modules.math);
+
+    // An ordinary save still refuses to overwrite the external change.
+    let error = app.save(&db).expect_err("still a conflict");
+    assert!(error.contains("changed since last load"), "{error}");
+    let stored = db.get_note("n1").expect("lookup").expect("note");
+    assert_eq!(stored.body, "external changes");
+    assert!(!stored.modules.math, "the module change itself is stored");
 
     drop(app);
     drop(db);
