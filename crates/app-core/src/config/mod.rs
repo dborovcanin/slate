@@ -43,6 +43,7 @@ const DEFAULT_IMAP_MAX_BODY_BYTES: usize = 512 * 1024;
 const DEFAULT_PERF_ENABLED: bool = false;
 const DEFAULT_PERF_LOG_PATH: &str = "";
 const DEFAULT_BACKGROUND_TASKS_ENABLED: bool = true;
+const DEFAULT_MCP_ENABLED: bool = false;
 const MIN_IMAP_MAX_BYTES: usize = 1024;
 const MAX_IMAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const MIN_IMAP_POLL_SECONDS: u64 = 10;
@@ -199,6 +200,12 @@ images = "auto"
 # Maximum terminal row height for an inline image. Range: 1..100
 image_max_rows = 15
 
+[mcp]
+# Let `slate mcp` serve notes to MCP clients (AI assistants and bots) over
+# stdio. Clients can list, search, read, create and edit notes; they cannot
+# delete notes or open encrypted ones. Off by default.
+enabled = false
+
 [startup]
 # Enable non-critical startup work asynchronously after first paint/edit
 # (prewarm/hydration/background sync loops).
@@ -340,6 +347,20 @@ impl Default for PerfConfig {
         Self {
             enabled: DEFAULT_PERF_ENABLED,
             log_path: DEFAULT_PERF_LOG_PATH.to_string(),
+        }
+    }
+}
+
+/// `[mcp]`: the `slate mcp` server for MCP clients.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConfig {
+    pub enabled: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_MCP_ENABLED,
         }
     }
 }
@@ -498,6 +519,8 @@ struct FileConfig {
     terminal: TerminalSection,
     #[serde(default)]
     startup: StartupSection,
+    #[serde(default)]
+    mcp: McpSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -589,6 +612,11 @@ struct PerfSection {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct StartupSection {
     background_tasks_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct McpSection {
+    enabled: Option<bool>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -769,6 +797,18 @@ pub fn load_web_search_config() -> WebSearchConfig {
     }
 }
 
+/// Reads `[mcp]`. Unlike the other loaders, a config that cannot be read or
+/// parsed is an error rather than the defaults, so the server never starts
+/// from a config the user did not mean.
+pub fn load_mcp_config() -> Result<(McpConfig, PathBuf), String> {
+    let path = ensure_config_file()?;
+    let text = fs::read_to_string(&path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let config = parse_mcp_config(&text)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+    Ok((config, path))
+}
+
 pub fn load_terminal_images_config() -> TerminalImagesConfig {
     let path = match ensure_config_file() {
         Ok(path) => path,
@@ -921,6 +961,13 @@ fn parse_perf_config(text: &str) -> Result<PerfConfig, String> {
     Ok(PerfConfig {
         enabled: raw.perf.enabled.unwrap_or(DEFAULT_PERF_ENABLED),
         log_path: normalize_optional_path(raw.perf.log_path),
+    })
+}
+
+fn parse_mcp_config(text: &str) -> Result<McpConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(McpConfig {
+        enabled: raw.mcp.enabled.unwrap_or(DEFAULT_MCP_ENABLED),
     })
 }
 
@@ -1418,6 +1465,15 @@ mod tests {
         let offset = UtcOffset::from_hms(2, 0, 0).expect("offset");
         let note_id = resolve_email_note_id(&special, now, offset);
         assert_eq!(note_id, "inbox-email-2024-05-01");
+    }
+
+    #[test]
+    fn mcp_is_off_unless_enabled() {
+        assert_eq!(parse_mcp_config("").expect("parsed"), McpConfig::default());
+        assert!(!McpConfig::default().enabled);
+        assert!(!parse_mcp_config(DEFAULT_CONFIG).expect("parsed").enabled);
+        let parsed = parse_mcp_config("[mcp]\nenabled = true\n").expect("parsed");
+        assert!(parsed.enabled);
     }
 
     #[test]
