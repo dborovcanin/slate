@@ -496,3 +496,23 @@ fn deleting_one_of_two_identical_lines_keeps_the_others_reminder() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn reminders_follow_text_reloaded_after_an_outside_change() {
+    let (db, mut app, path) = app_with_reminders("a\nb\nc", &[1]);
+    app.active_note.updated_at = db
+        .get_note_updated_at("n1")
+        .expect("revision")
+        .expect("note");
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    db.save_note("n1", "new\na\nb\nc").expect("outside edit");
+
+    app.outside_change_checked_at = Instant::now() - std::time::Duration::from_secs(2);
+    app.maybe_take_outside_change(&db);
+    assert_eq!(app.editor.lines, ["new", "a", "b", "c"]);
+    assert_eq!(shown(&app), vec![moved(1, 2)]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

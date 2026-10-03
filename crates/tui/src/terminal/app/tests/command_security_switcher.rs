@@ -2999,3 +2999,87 @@ fn module_command_keeps_a_save_conflict_with_changes_made_elsewhere() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+/// Runs the idle check for outside changes now, as if a second had passed.
+fn take_outside_change(app: &mut TerminalApp, db: &Db) {
+    app.outside_change_checked_at = Instant::now() - Duration::from_secs(2);
+    app.maybe_take_outside_change(db);
+}
+
+#[test]
+fn outside_change_reloads_a_clean_buffer_as_one_undoable_edit() {
+    let (db, mut app, path) = app_with_note("# Log\n- a");
+    app.autosave_enabled = false;
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 2;
+
+    // Nothing changed: nothing happens.
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.history.undo_depth(), 0);
+
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "intro\n# Log\n- a\n- b")
+        .expect("outside edit");
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["intro", "# Log", "- a", "- b"]);
+    assert!(!app.dirty);
+    assert_eq!(
+        Some(app.active_note.updated_at.clone()),
+        db.get_note_updated_at("n1").expect("revision")
+    );
+    // The cursor stays on the text it was on.
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (2, 2));
+    assert!(app.status.contains("reloaded"), "{}", app.status);
+
+    app.undo(&db);
+    assert_eq!(app.editor.lines, ["# Log", "- a"]);
+    assert!(app.dirty, "undoing the reload is an unsaved edit");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_change_keeps_unsaved_edits_and_warns_once() {
+    let (db, mut app, path) = app_with_conflicting_edit();
+    app.autosave_enabled = false;
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["mine"]);
+    assert!(app.dirty);
+    assert!(
+        app.status.contains("changed outside Slate"),
+        "{}",
+        app.status
+    );
+
+    app.status.clear();
+    take_outside_change(&mut app, &db);
+    assert!(app.status.is_empty(), "warned once per change");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_change_waits_while_an_overlay_is_open() {
+    let (db, mut app, path) = app_with_note("one");
+    app.autosave_enabled = false;
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "two").expect("outside edit");
+
+    app.mode = UiMode::CommandBar;
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["one"]);
+
+    app.mode = UiMode::Editor;
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["two"]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

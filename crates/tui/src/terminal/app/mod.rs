@@ -783,6 +783,12 @@ struct TerminalApp {
     reminders_generation: u64,
     persisted_reminders_generation: u64,
     last_reminder_check: Instant,
+    /// When the stored note was last checked for changes made outside this
+    /// session (`maybe_take_outside_change`).
+    outside_change_checked_at: Instant,
+    /// Outside revision the unsaved buffer was warned about, so the warning
+    /// is shown once per change.
+    outside_change_reported: Option<String>,
     // In-note search overlay
     search: SearchState,
     // Web search overlay
@@ -1255,6 +1261,8 @@ impl TerminalApp {
             reminders_generation: 0,
             persisted_reminders_generation: 0,
             last_reminder_check: Instant::now(),
+            outside_change_checked_at: Instant::now(),
+            outside_change_reported: None,
             search: SearchState::default(),
             web_search: WebSearchState::default(),
             autosave_enabled,
@@ -1368,6 +1376,7 @@ impl TerminalApp {
                     if let Err(error) = self.maybe_autosave(db) {
                         self.status = format!("error: {error}");
                     }
+                    self.maybe_take_outside_change(db);
                     self.record_perf_duration(
                         "tui.idle.dispatch",
                         "autosave_tick",
