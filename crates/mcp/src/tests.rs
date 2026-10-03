@@ -17,7 +17,11 @@ impl TestDb {
     }
 
     fn server(&self) -> Server {
-        Server::new(self.open(), NoteDefaults::default())
+        Server::new(self.open(), NoteDefaults::default(), false)
+    }
+
+    fn server_allowing_delete(&self) -> Server {
+        Server::new(self.open(), NoteDefaults::default(), true)
     }
 }
 
@@ -131,7 +135,12 @@ fn lists_every_tool_with_an_input_schema() {
             "create_note",
             "append_to_note",
             "replace_in_note",
-            "update_note"
+            "update_note",
+            "rename_note",
+            "create_collection",
+            "add_to_collection",
+            "remove_from_collection",
+            "archive_note"
         ]
     );
 }
@@ -374,4 +383,174 @@ fn serve_answers_line_by_line() {
     assert_eq!(first["id"], json!(1));
     let second: Value = serde_json::from_str(responses[1]).expect("json");
     assert_eq!(second["id"], json!(2));
+}
+
+fn collections_of(server: &mut Server, id: &Value) -> Value {
+    call(server, "read_note", json!({ "id": id })).expect("read")["collections"].clone()
+}
+
+#[test]
+fn renames_notes_and_unpins_with_an_empty_title() {
+    let db = TestDb::new();
+    let mut server = db.server();
+    let created = create(&mut server, "# Draft\nbody");
+    let id = created["id"].clone();
+    let renamed = call(
+        &mut server,
+        "rename_note",
+        json!({ "id": id, "title": "Plan" }),
+    )
+    .expect("renamed");
+    assert_eq!(renamed["title"], json!("Plan"));
+    // A pinned title survives edits to the first line.
+    call(
+        &mut server,
+        "replace_in_note",
+        json!({ "id": id, "old_text": "# Draft", "new_text": "# Other" }),
+    )
+    .expect("edited");
+    assert_eq!(
+        call(&mut server, "read_note", json!({ "id": id })).expect("read")["title"],
+        json!("Plan")
+    );
+    let unpinned =
+        call(&mut server, "rename_note", json!({ "id": id, "title": "" })).expect("unpinned");
+    assert_eq!(unpinned["title"], json!("Other"));
+}
+
+#[test]
+fn manages_collection_membership_by_name() {
+    let db = TestDb::new();
+    let mut server = db.server();
+    let made = call(
+        &mut server,
+        "create_collection",
+        json!({ "name": "Work", "description": "job" }),
+    )
+    .expect("created");
+    assert_eq!(made["name"], json!("Work"));
+    let again =
+        call(&mut server, "create_collection", json!({ "name": "Work" })).expect_err("duplicate");
+    assert!(!again.is_empty());
+
+    let id = create(&mut server, "# Task")["id"].clone();
+    let added = call(
+        &mut server,
+        "add_to_collection",
+        json!({ "id": id, "collection": "Work" }),
+    )
+    .expect("added");
+    assert_eq!(added["collections"], json!(["Work"]));
+    let removed = call(
+        &mut server,
+        "remove_from_collection",
+        json!({ "id": id, "collection": "Work" }),
+    )
+    .expect("removed");
+    assert_eq!(removed["collections"], json!([]));
+    let missing = call(
+        &mut server,
+        "add_to_collection",
+        json!({ "id": id, "collection": "Nope" }),
+    )
+    .expect_err("unknown collection");
+    assert!(missing.contains("collection not found"));
+}
+
+#[test]
+fn encrypted_collections_are_refused() {
+    let db = TestDb::new();
+    let writer = db.open();
+    let vault = writer.create_collection("Vault", "").expect("collection");
+    writer
+        .encrypt_collection(&vault.id, "pw")
+        .expect("encrypted");
+    let mut server = db.server();
+    let id = create(&mut server, "# Plain")["id"].clone();
+    let error = call(
+        &mut server,
+        "add_to_collection",
+        json!({ "id": id, "collection": "Vault" }),
+    )
+    .expect_err("encrypted collection");
+    assert!(error.contains("encrypted"), "{error}");
+    assert_eq!(collections_of(&mut server, &id), json!([]));
+}
+
+#[test]
+fn archives_notes_into_one_archive_collection() {
+    let db = TestDb::new();
+    let mut server = db.server();
+    call(&mut server, "create_collection", json!({ "name": "Work" })).expect("created");
+    let first = create(&mut server, "# Old")["id"].clone();
+    call(
+        &mut server,
+        "add_to_collection",
+        json!({ "id": first, "collection": "Work" }),
+    )
+    .expect("added");
+    let archived = call(&mut server, "archive_note", json!({ "id": first })).expect("archived");
+    assert_eq!(archived["collections"], json!(["Archive"]));
+
+    let second = create(&mut server, "# Older")["id"].clone();
+    call(&mut server, "archive_note", json!({ "id": second })).expect("archived");
+    let collections = call(&mut server, "list_collections", json!({})).expect("listed");
+    let archive = collections["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .filter(|c| c["name"] == json!("Archive"))
+        .collect::<Vec<_>>();
+    assert_eq!(archive.len(), 1);
+    assert_eq!(archive[0]["notes"], json!(2));
+    // The text is kept.
+    assert_eq!(
+        call(&mut server, "read_note", json!({ "id": first })).expect("read")["text"],
+        json!("# Old")
+    );
+}
+
+#[test]
+fn delete_is_offered_only_when_allowed() {
+    let db = TestDb::new();
+    let mut server = db.server();
+    let created = create(&mut server, "# Gone");
+    let response = request(
+        &mut server,
+        "tools/call",
+        json!({ "name": "delete_note", "arguments": { "id": created["id"], "revision": created["revision"] } }),
+    );
+    assert_eq!(response["error"]["code"], json!(INVALID_PARAMS));
+    assert!(db
+        .open()
+        .get_note(created["id"].as_str().unwrap())
+        .unwrap()
+        .is_some());
+
+    let mut server = db.server_allowing_delete();
+    let tools = request(&mut server, "tools/list", json!({}))["result"]["tools"].clone();
+    assert!(tools
+        .as_array()
+        .expect("tools")
+        .iter()
+        .any(|tool| tool["name"] == json!("delete_note")));
+    let stale = call(
+        &mut server,
+        "delete_note",
+        json!({ "id": created["id"], "revision": "old" }),
+    )
+    .expect_err("stale revision");
+    assert!(stale.contains("changed since that revision"));
+    let deleted = call(
+        &mut server,
+        "delete_note",
+        json!({ "id": created["id"], "revision": created["revision"] }),
+    )
+    .expect("deleted");
+    assert_eq!(deleted["deleted"], json!(true));
+    assert!(db
+        .open()
+        .get_note(created["id"].as_str().unwrap())
+        .unwrap()
+        .is_none());
 }

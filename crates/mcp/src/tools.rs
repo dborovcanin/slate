@@ -4,7 +4,8 @@
 //! revision check, so a write never lands on text the client has not seen
 //! and an editor holding the note notices the change. File-backed notes
 //! (`mdfile:` ids) are not reachable, so a client cannot read or write
-//! arbitrary files through the server.
+//! arbitrary files through the server, and deleting is only offered when
+//! `[mcp] allow_delete` is on.
 
 use app_core::config::NoteSecurityConfig;
 use app_core::note_sources::MARKDOWN_NOTE_ID_PREFIX;
@@ -15,6 +16,8 @@ use ulid::Ulid;
 const DEFAULT_LIST_LIMIT: usize = 50;
 const MAX_LIST_LIMIT: usize = 500;
 const DEFAULT_SEARCH_LIMIT: usize = 20;
+/// Collection `archive_note` moves notes into, created when first needed.
+const ARCHIVE_COLLECTION: &str = "Archive";
 
 /// What a note created over MCP starts with, as for one created in the
 /// editor: `[editor.modules]` and `[editor.security]`.
@@ -27,11 +30,12 @@ pub struct NoteDefaults {
 pub(crate) struct Notes {
     db: Db,
     defaults: NoteDefaults,
+    allow_delete: bool,
 }
 
-/// The tools `tools/list` advertises.
-pub(crate) fn definitions() -> Value {
-    json!([
+/// The tools `tools/list` advertises; `delete_note` only with `allow_delete`.
+fn definitions(allow_delete: bool) -> Value {
+    let mut tools = json!([
         {
             "name": "list_notes",
             "description": "List notes, most recently updated first.",
@@ -128,13 +132,99 @@ pub(crate) fn definitions() -> Value {
                 "required": ["id", "text", "revision"]
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true }
+        },
+        {
+            "name": "rename_note",
+            "description": "Give a note a fixed title that later edits to its text do not change. An empty title makes it follow the first line again.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "title": { "type": "string" }
+                },
+                "required": ["id", "title"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true }
+        },
+        {
+            "name": "create_collection",
+            "description": "Create a collection (a named group of notes).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "description": { "type": "string" }
+                },
+                "required": ["name"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false }
+        },
+        {
+            "name": "add_to_collection",
+            "description": "Add a note to a collection (by name). A note can be in several collections.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "collection": { "type": "string" }
+                },
+                "required": ["id", "collection"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true }
+        },
+        {
+            "name": "remove_from_collection",
+            "description": "Take a note out of a collection (by name). The note itself stays.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "collection": { "type": "string" }
+                },
+                "required": ["id", "collection"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true }
+        },
+        {
+            "name": "archive_note",
+            "description": "Put a note away: move it into the Archive collection, out of its other collections. Its text and history are kept.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true }
         }
-    ])
+    ]);
+    if allow_delete {
+        tools.as_array_mut().expect("tool list").push(json!({
+            "name": "delete_note",
+            "description": "Delete a note for good, with its history. Fails if the note changed since the given revision (from read_note). Prefer archive_note unless asked to delete.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "revision": { "type": "string", "description": "Revision from read_note." }
+                },
+                "required": ["id", "revision"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true }
+        }));
+    }
+    tools
 }
 
 impl Notes {
-    pub(crate) fn new(db: Db, defaults: NoteDefaults) -> Self {
-        Self { db, defaults }
+    pub(crate) fn new(db: Db, defaults: NoteDefaults, allow_delete: bool) -> Self {
+        Self {
+            db,
+            defaults,
+            allow_delete,
+        }
+    }
+
+    pub(crate) fn definitions(&self) -> Value {
+        definitions(self.allow_delete)
     }
 
     /// Runs tool `name`; `None` when there is no such tool.
@@ -149,6 +239,12 @@ impl Notes {
             "append_to_note" => self.append_to_note(&args),
             "replace_in_note" => self.replace_in_note(&args),
             "update_note" => self.update_note(&args),
+            "rename_note" => self.rename_note(&args),
+            "create_collection" => self.create_collection(&args),
+            "add_to_collection" => self.add_to_collection(&args),
+            "remove_from_collection" => self.remove_from_collection(&args),
+            "archive_note" => self.archive_note(&args),
+            "delete_note" if self.allow_delete => self.delete_note(&args),
             _ => return None,
         })
     }
@@ -295,6 +391,65 @@ impl Notes {
         self.save(id, text, revision)
     }
 
+    fn rename_note(&self, args: &Map<String, Value>) -> Result<Value, String> {
+        let id = note_id_arg(args)?;
+        let title = string_arg(args, "title")?;
+        self.readable_note(id)?;
+        self.db.set_note_title(id, title)?;
+        Ok(json!({ "id": id, "title": self.title(id)? }))
+    }
+
+    fn create_collection(&self, args: &Map<String, Value>) -> Result<Value, String> {
+        let name = string_arg(args, "name")?;
+        let description = optional_string_arg(args, "description")?.unwrap_or_default();
+        let collection = self.db.create_collection(name, description)?;
+        Ok(json!({ "name": collection.name, "description": collection.description }))
+    }
+
+    fn add_to_collection(&self, args: &Map<String, Value>) -> Result<Value, String> {
+        let id = note_id_arg(args)?;
+        self.readable_note(id)?;
+        let collection_id = self.writable_collection_id(string_arg(args, "collection")?)?;
+        self.db
+            .add_notes_to_collection(&collection_id, &[id.to_string()])?;
+        Ok(json!({ "id": id, "collections": self.collection_names(id)? }))
+    }
+
+    fn remove_from_collection(&self, args: &Map<String, Value>) -> Result<Value, String> {
+        let id = note_id_arg(args)?;
+        self.readable_note(id)?;
+        let collection_id = self.writable_collection_id(string_arg(args, "collection")?)?;
+        self.db
+            .remove_notes_from_collection(&collection_id, &[id.to_string()])?;
+        Ok(json!({ "id": id, "collections": self.collection_names(id)? }))
+    }
+
+    fn archive_note(&self, args: &Map<String, Value>) -> Result<Value, String> {
+        let id = note_id_arg(args)?;
+        self.readable_note(id)?;
+        let archive_id = match self.db.get_collection_by_name(ARCHIVE_COLLECTION)? {
+            Some(_) => self.writable_collection_id(ARCHIVE_COLLECTION)?,
+            None => {
+                self.db
+                    .create_collection(ARCHIVE_COLLECTION, "Notes put away")?
+                    .id
+            }
+        };
+        self.db.set_note_collections(id, &[archive_id])?;
+        Ok(json!({ "id": id, "collections": self.collection_names(id)? }))
+    }
+
+    fn delete_note(&self, args: &Map<String, Value>) -> Result<Value, String> {
+        let id = note_id_arg(args)?;
+        let revision = string_arg(args, "revision")?;
+        let note = self.readable_note(id)?;
+        if note.updated_at != revision {
+            return Err(conflict_message(&note.updated_at));
+        }
+        self.db.delete_note(id, None)?;
+        Ok(json!({ "id": id, "deleted": true }))
+    }
+
     /// Stores `body` while the note is still at `revision`.
     fn save(&self, id: &str, body: &str, revision: &str) -> Result<Value, String> {
         match self
@@ -337,6 +492,20 @@ impl Notes {
         };
         match self.db.get_collection_by_name(name)? {
             Some(collection) => Ok(Some(collection.id)),
+            None => Err(format!(
+                "collection not found: {name} (list_collections shows the names)"
+            )),
+        }
+    }
+
+    /// Collection `name`, which must exist and not be encrypted: adding a
+    /// note to an encrypted collection needs its key, which only Slate has.
+    fn writable_collection_id(&self, name: &str) -> Result<String, String> {
+        match self.db.get_collection_by_name(name)? {
+            Some(collection) if collection.encrypted => Err(format!(
+                "collection {name} is encrypted; change its notes in Slate"
+            )),
+            Some(collection) => Ok(collection.id),
             None => Err(format!(
                 "collection not found: {name} (list_collections shows the names)"
             )),

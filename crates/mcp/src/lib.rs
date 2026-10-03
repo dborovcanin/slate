@@ -23,8 +23,8 @@ first line is its title (a `# Heading` line works well). Use search_notes or lis
 find notes, read_note to get a note's text and revision, and append_to_note for adding to \
 the end of a note. To change existing text, prefer replace_in_note (exact text, must occur \
 once) over update_note, which replaces the whole note. Writes are checked against the \
-revision you read: on a conflict, read the note again and redo the change. Encrypted notes \
-cannot be read or written, and notes cannot be deleted.";
+revision you read: on a conflict, read the note again and redo the change. To put a note \
+away, use archive_note. Encrypted notes and encrypted collections cannot be read or written.";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -37,9 +37,11 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(db: app_core::storage::Db, defaults: NoteDefaults) -> Self {
+    /// `allow_delete` offers `delete_note`; without it notes can only be
+    /// archived.
+    pub fn new(db: app_core::storage::Db, defaults: NoteDefaults, allow_delete: bool) -> Self {
         Self {
-            notes: tools::Notes::new(db, defaults),
+            notes: tools::Notes::new(db, defaults, allow_delete),
         }
     }
 
@@ -83,7 +85,7 @@ impl Server {
         match method {
             "initialize" => Ok(initialize_result(params)),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tools::definitions() })),
+            "tools/list" => Ok(json!({ "tools": self.notes.definitions() })),
             "tools/call" => {
                 let name = params
                     .get("name")
