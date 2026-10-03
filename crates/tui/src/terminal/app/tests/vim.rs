@@ -1208,6 +1208,25 @@ fn gd_on_a_qualified_variable_of_the_open_note_keeps_unsaved_edits() {
 }
 
 #[test]
+fn gd_on_a_link_to_the_open_note_keeps_unsaved_edits() {
+    let (db, mut app, path) = app_with_note("intro\n## Totals\nsee [[n1#Totals]]");
+    app.mode = UiMode::Normal;
+    app.editor.lines[0] = "intro edited".to_string();
+    app.mark_edited();
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = 7;
+
+    run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
+    assert_eq!(app.editor.lines[0], "intro edited");
+    assert_eq!(app.editor.cursor_line, 1);
+    assert!(app.status.ends_with("#Totals"), "{}", app.status);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn vim_each_normal_command_is_its_own_undo_step() {
     let (db, mut app, path) = app_with_note("one\ntwo\nthree");
     app.mode = UiMode::Normal;

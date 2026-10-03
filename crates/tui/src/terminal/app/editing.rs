@@ -4765,6 +4765,17 @@ impl TerminalApp {
             return false;
         };
         match db.get_note_meta(&link.note_id) {
+            Ok(Some(summary)) if summary.id == self.active_note.id => {
+                // Reloading would replace unsaved edits and undo history
+                // with the stored body; the open text is already this note.
+                match &link.heading {
+                    Some(h) => {
+                        self.jump_to_heading(h);
+                        self.status = format!("→ {}#{}", summary.title, h);
+                    }
+                    None => self.status = format!("→ {}", summary.title),
+                }
+            }
             Ok(Some(summary)) => match db.get_note(&summary.id) {
                 Ok(Some(_)) if !self.can_leave_note(db) => {}
                 Ok(Some(note)) => {
