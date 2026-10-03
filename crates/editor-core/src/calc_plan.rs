@@ -2067,18 +2067,20 @@ pub fn variable_definition_named(
 }
 
 /// Where `name` is assigned: `hint` when that line still assigns it, else
-/// the last line that does.
+/// the last line that does. Fenced code is skipped, as evaluation skips it.
 fn definition_target(
     lines: &[String],
     name: String,
     hint: Option<usize>,
     mask: CalcFeatureMask,
 ) -> Option<VariableDefinitionTarget> {
+    let in_code = table_syntax::code_block_lines(lines);
     let assigns_name = |idx: usize| {
-        lines
-            .get(idx)
-            .and_then(|text| line_assignment_def(text, mask).0)
-            .is_some_and(|assigned| assigned == name)
+        !in_code.get(idx).copied().unwrap_or(false)
+            && lines
+                .get(idx)
+                .and_then(|text| line_assignment_def(text, mask).0)
+                .is_some_and(|assigned| assigned == name)
     };
     let def_line = hint
         .filter(|&idx| assigns_name(idx))
@@ -3908,6 +3910,17 @@ mod tests {
             super::variable_definition_named(&lines, "missing", mask),
             None
         );
+    }
+
+    #[test]
+    fn variable_definitions_skip_fenced_code() {
+        let mask = CalcFeatureMask::default();
+        let lines = definition_lines("rate := 42\n```\nrate := 99\n```\nx := rate");
+        let named = super::variable_definition_named(&lines, "rate", mask).expect("defined");
+        assert_eq!(named.line, 0);
+        let index = super::build_calc_dependency_index(&lines, mask);
+        let at = super::variable_definition_at(&lines, index.as_ref(), 4, 5, mask);
+        assert_eq!(at.map(|t| t.line), Some(0));
     }
 
     #[test]

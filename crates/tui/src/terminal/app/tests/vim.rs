@@ -1188,6 +1188,26 @@ fn gd_on_a_qualified_variable_opens_its_note_at_the_definition() {
 }
 
 #[test]
+fn gd_on_a_qualified_variable_of_the_open_note_keeps_unsaved_edits() {
+    let (db, mut app, path) = app_with_note("rate := 42\nx := [[n1]].rate");
+    assert_eq!(app.active_note.id, "n1");
+    app.mode = UiMode::Normal;
+    app.editor.lines[0] = "rate := 43".to_string();
+    app.mark_edited();
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 13;
+
+    run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
+    assert_eq!(app.editor.lines[0], "rate := 43");
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (0, 0));
+    assert_eq!(app.status, "definition: rate");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn vim_each_normal_command_is_its_own_undo_step() {
     let (db, mut app, path) = app_with_note("one\ntwo\nthree");
     app.mode = UiMode::Normal;

@@ -4833,6 +4833,26 @@ impl TerminalApp {
         ) else {
             return false;
         };
+        if reference.note_id == self.active_note.id {
+            // Reloading would replace unsaved edits and undo history with
+            // the stored body; the definition is in the open text.
+            let target = crate::editor_core::calc_plan::variable_definition_named(
+                &self.editor.lines,
+                &reference.name,
+                self.calc_feature_mask(),
+            );
+            match target {
+                Some(target) => {
+                    self.editor.cursor_line = target.line;
+                    self.editor.cursor_col = target.col;
+                    self.adjust_cursor();
+                    self.adjust_scroll();
+                    self.status = format!("definition: {}", target.name);
+                }
+                None => self.status = format!("no {} in this note", reference.name),
+            }
+            return true;
+        }
         let found = db
             .get_note_meta(&reference.note_id)
             .and_then(|summary| match summary {
