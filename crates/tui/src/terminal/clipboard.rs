@@ -93,6 +93,65 @@ pub fn read_clipboard_via_commands() -> Option<String> {
     None
 }
 
+/// Image formats a note can hold, most preferred first. SVG is left out: notes
+/// refuse it.
+const CLIPBOARD_IMAGE_TYPES: [&str; 6] = [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/avif",
+];
+
+fn is_plain_text_type(mime: &str) -> bool {
+    mime.starts_with("text/plain") || matches!(mime, "UTF8_STRING" | "STRING" | "TEXT")
+}
+
+/// The image type to read from a clipboard offering `types`. With
+/// `prefer_text`, none when plain text is also offered: a spreadsheet copy
+/// offers both, and its text is what a paste means.
+fn pick_clipboard_image_type<'a>(types: &[&'a str], prefer_text: bool) -> Option<&'a str> {
+    if prefer_text && types.iter().any(|mime| is_plain_text_type(mime)) {
+        return None;
+    }
+    CLIPBOARD_IMAGE_TYPES
+        .iter()
+        .find_map(|wanted| types.iter().copied().find(|mime| mime == wanted))
+}
+
+/// Image bytes on the system clipboard. Terminals paste only text, so a
+/// clipboard holding just an image (a screenshot tool's copy) never reaches
+/// slate as a paste and has to be read here.
+pub fn read_clipboard_image_via_commands(prefer_text: bool) -> Option<Vec<u8>> {
+    let commands: [(&str, &[&str], &[&str]); 2] = [
+        ("wl-paste", &["--list-types"], &["--type"]),
+        (
+            "xclip",
+            &["-selection", "clipboard", "-target", "TARGETS", "-out"],
+            &["-selection", "clipboard", "-out", "-target"],
+        ),
+    ];
+    for (bin, list_args, read_args) in commands {
+        let Some(listing) = run_clipboard_read_command(bin, list_args) else {
+            continue;
+        };
+        let types = listing.lines().map(str::trim).collect::<Vec<_>>();
+        let Some(mime) = pick_clipboard_image_type(&types, prefer_text) else {
+            return None;
+        };
+        let output = Command::new(bin)
+            .args(read_args)
+            .arg(mime)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        return (output.status.success() && !output.stdout.is_empty()).then_some(output.stdout);
+    }
+    None
+}
+
 #[cfg(not(test))]
 fn write_terminal_sequence(sequence: &str) -> bool {
     if io::stdout().is_terminal() {
@@ -236,4 +295,46 @@ fn write_clipboard_via_osc52(text: &str) -> bool {
     let wrote_bel = write_terminal_sequence(&bel);
     let wrote_st = write_terminal_sequence(&st);
     wrote_bel || wrote_st
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_clipboard_image_type_takes_an_image_only_clipboard() {
+        assert_eq!(
+            pick_clipboard_image_type(&["image/png"], true),
+            Some("image/png")
+        );
+        assert_eq!(
+            pick_clipboard_image_type(&["TARGETS", "TIMESTAMP", "image/jpeg"], true),
+            Some("image/jpeg")
+        );
+    }
+
+    #[test]
+    fn pick_clipboard_image_type_prefers_png_and_skips_svg() {
+        assert_eq!(
+            pick_clipboard_image_type(&["image/svg+xml", "image/webp", "image/png"], true),
+            Some("image/png")
+        );
+        assert_eq!(pick_clipboard_image_type(&["image/svg+xml"], true), None);
+    }
+
+    #[test]
+    fn pick_clipboard_image_type_leaves_text_to_a_text_paste() {
+        let types = ["text/plain;charset=utf-8", "image/png"];
+        assert_eq!(pick_clipboard_image_type(&types, true), None);
+        assert_eq!(pick_clipboard_image_type(&types, false), Some("image/png"));
+        assert_eq!(
+            pick_clipboard_image_type(&["UTF8_STRING", "image/png"], true),
+            None
+        );
+        // A browser's image copy carries HTML, not plain text.
+        assert_eq!(
+            pick_clipboard_image_type(&["text/html", "image/png"], true),
+            Some("image/png")
+        );
+    }
 }

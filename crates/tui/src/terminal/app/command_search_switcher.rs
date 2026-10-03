@@ -1796,6 +1796,18 @@ impl TerminalApp {
                     }
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::PasteImage => {
+                    if !self.active_note_is_editable() {
+                        self.status = "paste-image: note is read-only".to_string();
+                    } else if let Some(image) =
+                        crate::terminal::clipboard::read_clipboard_image_via_commands(false)
+                    {
+                        self.paste_clipboard_image(db, &image);
+                    } else {
+                        self.status = "paste-image: no image on clipboard".to_string();
+                    }
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::WebSearch { query } => {
                     self.open_web_search(query);
                     return;

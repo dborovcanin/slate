@@ -54,6 +54,7 @@ pub enum CommandId {
     FormatCode,
     ClipWatch,
     ClipWatchStop,
+    PasteImage,
     Fold,
     Unfold,
     FoldToggle,
@@ -355,7 +356,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 67] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 68] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -693,6 +694,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 67] = [
         // `stop` is a synonym for `off`.
         aliases: &["clip-watch stop"],
         description: "stop clipboard watch",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::PasteImage,
+        value: "paste-image",
+        aliases: &[],
+        description: "paste image from clipboard at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {

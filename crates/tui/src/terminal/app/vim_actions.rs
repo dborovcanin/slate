@@ -260,6 +260,13 @@ impl TerminalApp {
         })
     }
 
+    pub(super) fn paste_clipboard_image(&mut self, db: &Db, image: &[u8]) {
+        if let Err(error) = self.insert_image_bytes(db, image) {
+            self.status = format!("image paste failed: {error}");
+        }
+        self.adjust_cursor();
+    }
+
     pub(super) fn apply_visual_selection_action(&mut self, delete: bool) -> bool {
         if !matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
             return false;
@@ -779,7 +786,11 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::PasteAfter => {
                     if self.clipboard.is_empty() {
-                        if let Some(sys_clip_text) = self.read_system_clipboard_text() {
+                        if let Some(image) = clipboard::read_clipboard_image_via_commands(true) {
+                            let line_len = line_char_len(self.current_line());
+                            self.editor.cursor_col = (self.editor.cursor_col + 1).min(line_len);
+                            self.paste_clipboard_image(db, &image);
+                        } else if let Some(sys_clip_text) = self.read_system_clipboard_text() {
                             self.clipboard = VimRegister::charwise(sys_clip_text);
                         }
                     }
@@ -837,7 +848,9 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::PasteBefore => {
                     // Reached only with an empty register: paste the system
                     // clipboard, like `p` does.
-                    if let Some(sys_clip_text) = self.read_system_clipboard_text() {
+                    if let Some(image) = clipboard::read_clipboard_image_via_commands(true) {
+                        self.paste_clipboard_image(db, &image);
+                    } else if let Some(sys_clip_text) = self.read_system_clipboard_text() {
                         self.clipboard = VimRegister::charwise(sys_clip_text);
                         if let Some((shared, scope_start_offset)) =
                             self.try_execute_shared_vim_action(action.intent, count, None)

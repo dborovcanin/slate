@@ -142,6 +142,7 @@ pub enum HostCommandPlan {
     ClipWatch {
         action: HostClipWatchAction,
     },
+    PasteImage,
     NoteSecurity {
         action: NoteSecurityAction,
     },
@@ -258,6 +259,7 @@ impl EditorEngine {
             CommandId::ClipWatchStop => Some(HostCommandPlan::ClipWatch {
                 action: HostClipWatchAction::Stop,
             }),
+            CommandId::PasteImage => Some(HostCommandPlan::PasteImage),
             CommandId::BackupExport => Some(HostCommandPlan::BackupExport { path: None }),
             CommandId::BackupLoad => Some(HostCommandPlan::BackupLoad { path: None }),
             CommandId::Write => Some(HostCommandPlan::Write {
@@ -593,6 +595,10 @@ mod tests {
             Some(HostCommandPlan::ClipWatch {
                 action: HostClipWatchAction::Stop,
             })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Vim, "paste-image"),
+            Some(HostCommandPlan::PasteImage)
         );
         assert_eq!(
             EditorEngine::plan_host_command(CommandMode::Editor, "module table toggle"),

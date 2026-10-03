@@ -78,6 +78,7 @@ Every command-bar command with its aliases. For what each feature does and its k
 | --- | --- | --- |
 | `clip-watch on` | `clip-watch start` | Paste each new clipboard text at the cursor |
 | `clip-watch off` | `clip-watch stop` | Stop clipboard watch |
+| `paste-image` | | Paste the image on the clipboard at the cursor |
 
 ## Web search
 

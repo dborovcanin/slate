@@ -80,6 +80,7 @@ Grouped by area, with the keys and commands for each. Commands run in the comman
 | Follow a link | `Ctrl+]`, `gd` |
 | Preview the linked note | `K` |
 | Images `![alt](./assets/x.png)`, imported by pasting an image path | paste |
+| Paste an image copied to the clipboard (screenshot) | `p` (empty register), `:paste-image` |
 | Image preview (sixel / kitty / iTerm2 / half-blocks) | `gx` (Normal), `Ctrl+O` (vim mode off); `o` opens the system viewer |
 | Web search with results you can open or insert as links | `?`, `:web <query>`; `Enter` open, `Shift+Enter` insert |
 

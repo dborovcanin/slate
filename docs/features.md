@@ -250,6 +250,7 @@ Markdown links `[text](url)` are styled in place.
 Syntax: `![alt](./assets/image.png)`. In the editor an image shows as a compact `[image: alt]` placeholder; the raw markdown appears while the cursor is inside it.
 
 - Pasting an image file path imports the image into the note's assets and inserts a relative image link.
+- An image itself on the clipboard (a screenshot tool's copy) never reaches the terminal as a paste: `p` / `P` with an empty register import it, as does `:paste-image`. Reading it needs `wl-paste` (Wayland) or `xclip` (X11).
 - The preview opens in a bounded dialog using sixel, kitty or iTerm2 graphics (half-blocks as fallback); decoding happens off the input thread and is cached. Inside tmux, passthrough is used when `allow-passthrough` is on.
 - Remote (`http://...`) images are never fetched.
 
@@ -369,6 +370,7 @@ Config `[web_search]`: `provider = "auto" | "brave" | "google" | "duckduckgo"`, 
 | -------------------------- | --------------------------------------------------------- |
 | `:clip-watch on` (`start`) | Watch the clipboard and paste each new text at the cursor |
 | `:clip-watch off` (`stop`) | Stop watching                                             |
+| `:paste-image`             | Paste the image on the clipboard at the cursor            |
 
 ## Collections
 
