@@ -3197,3 +3197,60 @@ fn outside_decryption_reloads_the_note_as_plain_text() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+/// `n1` encrypted by another process and open here, locked.
+fn app_with_locked_note(body: &str) -> (Db, Db, TerminalApp, PathBuf) {
+    let (db, mut app, path) = app_with_note(body);
+    app.autosave_enabled = false;
+    let other = Db::open(path.clone()).expect("second process");
+    other.encrypt_note("n1", "pw").expect("encrypted elsewhere");
+    app.reload_active_note(&db).expect("reopened");
+    app.mode = UiMode::Editor;
+    assert!(!app.active_note_is_editable(), "locked here");
+    (db, other, app, path)
+}
+
+#[test]
+fn outside_decryption_unlocks_a_locked_open_note() {
+    let (db, other, mut app, path) = app_with_locked_note("one");
+    std::thread::sleep(Duration::from_millis(2));
+    other.decrypt_note("n1", "pw").expect("decrypted elsewhere");
+    other.save_note("n1", "two").expect("edited elsewhere");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert!(app.active_note_is_editable());
+    assert_eq!(app.editor.lines, ["two"]);
+    assert!(
+        app.status.contains("decrypted outside Slate"),
+        "{}",
+        app.status
+    );
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn a_locked_open_note_edited_elsewhere_stays_locked_quietly() {
+    let (db, other, mut app, path) = app_with_locked_note("one");
+    other.unlock_note("n1", "pw").expect("unlocked elsewhere");
+    std::thread::sleep(Duration::from_millis(2));
+    other.save_note("n1", "private").expect("edited elsewhere");
+    app.status.clear();
+
+    take_outside_change(&mut app, &db);
+    assert!(!app.active_note_is_editable());
+    assert!(app.status.is_empty(), "{}", app.status);
+    assert_eq!(
+        Some(app.active_note.updated_at.clone()),
+        db.get_note_updated_at("n1").expect("revision")
+    );
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

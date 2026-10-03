@@ -2592,10 +2592,8 @@ impl TerminalApp {
             return;
         }
         self.outside_change_checked_at = Instant::now();
-        if !matches!(self.mode, UiMode::Editor | UiMode::Normal)
-            || self.background_save.is_some()
-            || !self.active_note_is_editable()
-        {
+        // A locked note is checked too: it may have been decrypted elsewhere.
+        if !matches!(self.mode, UiMode::Editor | UiMode::Normal) || self.background_save.is_some() {
             return;
         }
         let sources = note_sources(db);
@@ -2636,6 +2634,11 @@ impl TerminalApp {
             return;
         };
         let locked = note.access_mode != NoteAccessMode::None && !note.is_unlocked;
+        if locked && !self.active_note_is_editable() {
+            // Still locked here: there is no text to show, only a revision.
+            self.active_note.updated_at = note.updated_at;
+            return;
+        }
         if locked || note.access_mode != self.active_note.access_mode {
             // Encrypted or decrypted elsewhere: a locked note has no text to
             // diff against, so open it afresh, as switching to it would. A
