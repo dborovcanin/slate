@@ -16,6 +16,7 @@ Detailed project documentation is organized in [`docs/`](docs/README.md):
 - [Architecture](docs/architecture.md)
 - [Variables Specification](docs/variables.md)
 - [Export Reference](docs/export.md)
+- [MCP Server](docs/mcp.md) (connect Claude Code, Codex, opencode or another MCP client)
 
 Roadmap and planning docs are in [`roadmap/`](roadmap/).
 
@@ -110,6 +111,7 @@ rate := 1.19
 | Export to PDF, markdown or text (file or clipboard) | `:export pdf <path>`, `:export md [path]`, `:export txt [path]` |
 | Full database backup and restore | `:backup export <path.zip>`, `:backup load <path.zip>` |
 | IMAP mail into daily inbox notes (one-off or background) | `slate imap-sync`, `[imap] auto_sync_on_startup = true` |
+| MCP server so AI assistants and bots can read and write notes (off by default) | `slate mcp`, `[mcp] enabled = true` ([setup](docs/mcp.md)) |
 | Themes (14 color schemes, live config reload) | `[theme] color_scheme`, `accent` |
 
 **Storage**
@@ -176,9 +178,10 @@ style = true
 crates/
   editor-core/   # editing semantics: vim stepping, commands, markdown/table/list rules, folding, calc planning
   app-core/      # SQLite storage, note sources, calc engine, cross-note index, config
+  mcp/           # MCP server over stdio (`slate mcp`): note tools on top of app-core
   tui/           # terminal app (package `slate`)
     src/
-      lib.rs         # CLI parsing and mode selection (terminal, append, imap-sync)
+      lib.rs         # CLI parsing and mode selection (terminal, append, imap-sync, mcp)
       terminal/      # editor runtime, rendering, input, overlays
       commands/      # export (md/txt/pdf) and backup
       imap.rs        # IMAP sync (feature `imap`)

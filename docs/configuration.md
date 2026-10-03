@@ -180,6 +180,14 @@ Runtime validation constraints:
 - `max_body_bytes <= max_message_bytes`
 - `host`, `username`, `password_env`, and `folder` must be non-empty
 
+## MCP server
+
+`[mcp]` keys:
+
+- `enabled` (default `false`): lets `slate mcp` serve notes to MCP clients such as AI assistants. While it is `false`, `slate mcp` refuses to start.
+
+Notes created over MCP use `[editor.modules]` and `[editor.security]` like notes created in the editor. See [MCP Server](mcp.md) for client setup.
+
 ## Date format tokens
 
 Common supported tokens:

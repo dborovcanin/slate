@@ -15,5 +15,6 @@ Reference docs:
 - [Architecture](./architecture.md)
 - [Variables Specification](./variables.md)
 - [Export Reference](./export.md)
+- [MCP Server](./mcp.md) — let AI assistants and bots read and write notes
 
 Planning and roadmap documents now live in `roadmap/`.

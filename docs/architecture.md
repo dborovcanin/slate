@@ -4,11 +4,13 @@ This document describes Slate architecture boundaries and ownership.
 
 ## High-level layout
 
-Slate is a terminal application built from three crates:
+Slate is a terminal application built from these crates:
 
 - terminal app (`crates/tui/`, package `slate`): input, rendering, and host side effects
 - editor core (`crates/editor-core/`): editing semantics
 - app core (`crates/app-core/`): storage, note sources, calc evaluation, config
+- table syntax (`crates/table-syntax/`): markdown table structure shared by both cores
+- MCP server (`crates/mcp/`, package `slate-mcp`): `slate mcp`, note tools for MCP clients over stdio
 
 ## Layer ownership
 
@@ -43,6 +45,16 @@ Owns:
 - note source abstraction (db notes and file notes)
 - calc engine and cross-note variable index
 - config loading
+
+### MCP server (`slate-mcp`)
+
+A second adapter next to the terminal app, with no editing semantics of its own:
+
+- newline-delimited JSON-RPC over stdio (no SDK or async runtime)
+- tools that map onto `app-core` storage calls, with the same revision checks as editor saves
+- refuses encrypted and file-backed notes; no deletes
+
+The terminal app starts it for `slate mcp` (gated by `[mcp] enabled`). An open editor notices writes from it, or from any other process, through the stored revision and takes them in as an edit (`editor_core::operations::replace_text`).
 
 ## Command architecture
 

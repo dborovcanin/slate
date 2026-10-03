@@ -37,6 +37,7 @@ Conventions:
   - [Note security](#note-security)
   - [Export and backup](#export-and-backup)
   - [IMAP email sync](#imap-email-sync)
+  - [MCP server](#mcp-server)
   - [Themes, wrap and other settings](#themes-wrap-and-other-settings)
   - [Diagnostics](#diagnostics)
 
@@ -75,6 +76,8 @@ Encrypted notes ask for their password (or their collection's) before opening. C
 
 `[editor] format_on_save = true` runs `:format` before every save. If the note changed elsewhere since it was loaded, a save stops with `note changed since last load; use :w! to force save`.
 
+While idle, Slate checks about once a second whether the open note changed elsewhere (`slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate, an edited markdown file). Without unsaved changes the new text is loaded in place as one undoable edit, with the cursor and reminders kept on their lines (`note changed outside Slate; reloaded (u undoes)`). With unsaved changes your text is kept and the status line says so: `:e!` loads the stored note, `:w!` keeps your version.
+
 ### Note history
 
 Slate keeps older versions of every stored note. Saves less than five minutes apart form one editing session, and each session keeps the text from before it as a version (a session longer than half an hour is split). Versions are stored as the line changes between them, with an occasional full copy, so a small edit to a large note costs a few bytes; the history of an encrypted note is encrypted with it. File-backed notes (`slate file.md`) keep no history.
@@ -104,6 +107,7 @@ slate capture [text...]      add a timestamped entry to today's daily note and e
 cmd | slate capture          capture piped stdin
 cmd | slate append [--id <note-id>]   append stdin to a note and exit
 slate imap-sync              pull new mail once and exit
+slate mcp                    serve notes to MCP clients over stdio (needs [mcp] enabled = true)
 slate --help | -h
 ```
 
@@ -459,6 +463,10 @@ Details: [Export Reference](./export.md).
 - Messages are appended to daily inbox notes (`inbox-email-YYYY-MM-DD` by default), newest first, with UID checkpoints so nothing is imported twice.
 - First sync only takes recent mail (`initial_sync_past_days`, default 1). New mail triggers a desktop notification.
 - Any IMAP-over-TLS provider works; the password comes from `password_env`. Build without IMAP: `cargo build -p slate --no-default-features`.
+
+## MCP server
+
+`slate mcp` lets AI assistants and bots (Claude Code, Codex, opencode, any MCP client) list, search, read, create and edit notes over stdio. It is off until `[mcp] enabled = true`. Writes are checked against the revision the client read, encrypted and file-backed notes stay closed, and nothing can be deleted. Setup for each client and the tool list: [MCP Server](mcp.md).
 
 ## Themes, wrap and other settings
 
