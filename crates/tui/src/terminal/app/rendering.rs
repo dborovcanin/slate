@@ -1653,8 +1653,6 @@ impl TerminalApp {
 
         let selection_stats = self.selection_number_stats();
         let editor_status_owned = if self.mode == UiMode::Editor {
-            // Keep status bar stable during wiki-link popup usage; the popup
-            // itself already renders suggestions and selection state.
             self.variable_autocomplete_status_hint()
                 .map(|hint| format!("{}  [{}]", self.status, hint))
         } else {

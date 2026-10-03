@@ -2605,15 +2605,47 @@ impl TerminalApp {
     }
 
     pub(super) fn variable_autocomplete_state(&self) -> Option<VariableAutocompleteState> {
-        if self.mode != UiMode::Editor {
+        if self.mode != UiMode::Editor || !self.note_math_module_enabled() {
             return None;
         }
-        if !self.note_math_module_enabled() || !self.note_variables_module_enabled() {
+        let line = self.current_line();
+        if self.note_table_module_enabled() {
+            if let Some(completion) =
+                crate::editor_core::calc_plan::table_formula_function_completion(
+                    line,
+                    self.editor.cursor_col,
+                    self.variable_autocomplete_min_chars,
+                )
+            {
+                // Helpers first, then variables sharing the typed prefix.
+                let mut suggestions: Vec<String> = completion
+                    .suggestions
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
+                if self.note_variables_module_enabled() {
+                    suggestions.extend(build_variable_suggestions(
+                        &self.calc.variable_names,
+                        &completion.query,
+                        self.variable_autocomplete_min_chars,
+                        VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+                    ));
+                    suggestions.truncate(VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS);
+                }
+                return Some(VariableAutocompleteState {
+                    popup_anchor_col: completion.from_col,
+                    from_col: completion.from_col,
+                    to_col: completion.to_col,
+                    query: completion.query,
+                    suggestions,
+                });
+            }
+        }
+        if !self.note_variables_module_enabled() {
             return None;
         }
 
         // Cross-note prefix takes priority: [[ID]].partial
-        let line = self.current_line();
         if let Some((dep_id, bracket_col, from_col, partial)) =
             extract_cross_note_completion_prefix(line, self.editor.cursor_col)
         {
@@ -2825,35 +2857,16 @@ impl TerminalApp {
         )
     }
 
+    /// Status-bar hint for the completion Tab would insert. The open popup
+    /// already lists the suggestions, so the hint shows only once it is
+    /// dismissed.
     pub(super) fn variable_autocomplete_status_hint(&self) -> Option<String> {
-        let (query, suggestions, selected) = if self.variable_autocomplete_popup.visible {
-            (
-                self.variable_autocomplete_popup.query.clone(),
-                self.variable_autocomplete_popup.suggestions.clone(),
-                Some(self.variable_autocomplete_popup.selected_index),
-            )
-        } else {
-            let state = self.variable_autocomplete_state()?;
-            (state.query, state.suggestions, None)
-        };
-        let picks = suggestions
-            .iter()
-            .take(VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS)
-            .enumerate()
-            .map(|(idx, suggestion)| {
-                if selected == Some(idx) {
-                    format!(">{suggestion}<")
-                } else {
-                    suggestion.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("  ");
-        if picks.is_empty() {
-            None
-        } else {
-            Some(format!("var {query} -> {picks} (Tab/Enter)"))
+        if self.variable_autocomplete_popup.visible {
+            return None;
         }
+        let state = self.variable_autocomplete_state()?;
+        let pick = state.suggestions.first()?;
+        Some(format!("Tab: {pick}"))
     }
 
     pub(super) fn apply_variable_autocomplete_tab(&mut self) -> bool {

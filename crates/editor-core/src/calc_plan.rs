@@ -410,6 +410,65 @@ fn looks_like_date(s: &str) -> bool {
         || looks_like_date_with_delim(trimmed, '/')
 }
 
+/// Table formula helpers offered by completion, in suggestion order.
+pub const TABLE_FORMULA_FUNCTIONS: [&str; 4] = ["sum_row()", "sum_col()", "avg_row()", "avg_col()"];
+
+/// A completion for the function name being typed in a `:=` table cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableFormulaFunctionCompletion {
+    /// Char column where the typed name starts.
+    pub from_col: usize,
+    /// Char column of the cursor, where the typed name ends.
+    pub to_col: usize,
+    pub query: String,
+    pub suggestions: Vec<&'static str>,
+}
+
+/// Helpers matching the name typed just before `cursor_col` (a char column)
+/// when the cursor sits in a `:=` formula cell of a table row. Matching is
+/// case-insensitive; a name typed out in full with its `()` offers nothing.
+pub fn table_formula_function_completion(
+    line: &str,
+    cursor_col: usize,
+    min_chars: usize,
+) -> Option<TableFormulaFunctionCompletion> {
+    if !is_table_line(line) {
+        return None;
+    }
+    let cursor_byte = line
+        .char_indices()
+        .nth(cursor_col)
+        .map_or(line.len(), |(idx, _)| idx);
+    let pipes = table::table_pipe_positions(line);
+    let left_pipe = pipes.iter().rev().find(|&&pipe| pipe < cursor_byte)?;
+    let cell_before_cursor = line[left_pipe + 1..cursor_byte].trim_start();
+    let body = cell_before_cursor.strip_prefix(":=")?;
+
+    let name_len = body
+        .bytes()
+        .rev()
+        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        .count();
+    let query = &body[body.len() - name_len..];
+    if query.len() < min_chars.max(1) || query.as_bytes()[0].is_ascii_digit() {
+        return None;
+    }
+    let query_lower = query.to_ascii_lowercase();
+    let suggestions: Vec<&'static str> = TABLE_FORMULA_FUNCTIONS
+        .into_iter()
+        .filter(|name| name.starts_with(&query_lower))
+        .collect();
+    if suggestions.is_empty() {
+        return None;
+    }
+    Some(TableFormulaFunctionCompletion {
+        from_col: cursor_col - query.len(),
+        to_col: cursor_col,
+        query: query.to_string(),
+        suggestions,
+    })
+}
+
 pub fn builtin_formula_label(text: &str) -> Option<String> {
     if text.is_empty() {
         return None;
@@ -3172,6 +3231,52 @@ mod tests {
         let line = "- total / 2";
         let seg = find_list_calc_segment(line).expect("segment");
         assert_eq!(seg.expr, "total / 2");
+    }
+
+    #[test]
+    fn table_formula_function_completion_offers_matching_helpers() {
+        let line = "| 1 | :=sum_ |";
+        let completion = table_formula_function_completion(line, 12, 3).unwrap();
+        assert_eq!(completion.from_col, 8);
+        assert_eq!(completion.to_col, 12);
+        assert_eq!(completion.query, "sum_");
+        assert_eq!(completion.suggestions, vec!["sum_row()", "sum_col()"]);
+
+        let line = "| 1 | :=(1,1) + AVG |";
+        let completion = table_formula_function_completion(line, 19, 3).unwrap();
+        assert_eq!(completion.query, "AVG");
+        assert_eq!(completion.suggestions, vec!["avg_row()", "avg_col()"]);
+    }
+
+    #[test]
+    fn table_formula_function_completion_needs_formula_cell_and_min_chars() {
+        // Not a formula cell.
+        assert_eq!(
+            table_formula_function_completion("| 1 | sum_ |", 10, 3),
+            None
+        );
+        // Not a table row.
+        assert_eq!(table_formula_function_completion(":=sum_", 6, 3), None);
+        // Too short.
+        assert_eq!(
+            table_formula_function_completion("| 1 | :=su |", 10, 3),
+            None
+        );
+        // Already complete.
+        assert_eq!(
+            table_formula_function_completion("| 1 | :=sum_row() |", 17, 3),
+            None
+        );
+        // Cursor in a different cell than the formula.
+        assert_eq!(
+            table_formula_function_completion("| :=1 | sum_ |", 12, 3),
+            None
+        );
+        // No helper with that prefix.
+        assert_eq!(
+            table_formula_function_completion("| 1 | :=total |", 13, 3),
+            None
+        );
     }
 
     #[test]

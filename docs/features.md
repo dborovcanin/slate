@@ -302,7 +302,7 @@ Full rules: [Variables Specification](./variables.md).
 Markdown tables align as you type, and the cursor moves by cell.
 
 - Formula cells start with `:=`: `:=sum_col()`, `:=avg_row() * 2`, `:=tax_rate * subtotal`, `:=(1,2) + (2,2)` (1-based data-row references).
-- Helpers: `sum_row()`, `sum_col()`, `avg_row()`, `avg_col()`.
+- Helpers: `sum_row()`, `sum_col()`, `avg_row()`, `avg_col()`. Typing a helper name in a formula cell (`sum`, `avg_`) offers them in the autocomplete popup, with matching variables after.
 - Reference errors render as `!ERROR#out_of_bounds`, `!ERROR#non_numeric`, `!ERROR#self_reference`, `!ERROR#cycle`.
 - Multiline cells use continuation rows starting with `|>`.
 

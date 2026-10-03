@@ -1548,6 +1548,36 @@ fn variable_autocomplete_popup_appears_after_min_chars_and_supports_selection_ke
 }
 
 #[test]
+fn table_formula_autocomplete_offers_helpers_and_variables() {
+    let (db, mut app, path) =
+        app_with_note("sum_rate := 2\n| a | b |\n| --- | --- |\n| 1 | :=sum |");
+    app.mode = UiMode::Editor;
+    app.run_calc_recompute();
+    app.editor.cursor_line = 3;
+    app.editor.cursor_col = "| 1 | :=sum".chars().count();
+
+    app.handle_editor_key(&db, Key::Char('_'))
+        .expect("typing triggers popup refresh");
+    assert!(app.variable_autocomplete_popup.visible);
+    assert_eq!(
+        app.variable_autocomplete_popup.suggestions,
+        vec!["sum_row()", "sum_col()", "sum_rate"]
+    );
+    assert_eq!(app.variable_autocomplete_status_hint(), None);
+
+    app.handle_editor_key(&db, Key::ArrowDown)
+        .expect("down picks next");
+    app.handle_editor_key(&db, Key::Enter)
+        .expect("enter accepts selected suggestion");
+    assert!(app.editor.lines[3].contains(":=sum_col()"));
+    assert!(!app.variable_autocomplete_popup.visible);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn autocomplete_popup_esc_dismisses_and_tab_fallback_still_accepts_variable() {
     let (db, mut app, path) = app_with_note("total cost := 10\ntotal revenue := 20\ntot");
     app.editor.cursor_line = 2;
@@ -1654,7 +1684,7 @@ fn tab_accepts_variable_autocomplete_for_active_prefix() {
     let hint = app
         .variable_autocomplete_status_hint()
         .expect("autocomplete hint");
-    assert!(hint.contains("total cost"));
+    assert_eq!(hint, "Tab: total cost");
 
     app.handle_editor_key(&db, Key::Tab)
         .expect("tab accepts autocomplete");
