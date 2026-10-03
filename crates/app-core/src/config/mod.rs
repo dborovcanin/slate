@@ -205,6 +205,12 @@ max_results = 10
 images = "auto"
 # Maximum terminal row height for an inline image. Range: 1..100
 image_max_rows = 15
+# How copies reach the system clipboard:
+#   "auto"   system tools (wl-copy, xclip, xsel, pbcopy, clip.exe, tmux), then OSC 52 (default)
+#   "osc52"  OSC 52 only: the terminal holds the copy, so it outlives slate and
+#            works over SSH. The terminal must support it (foot, kitty, ghostty,
+#            wezterm, alacritty, iTerm2); slate cannot tell when it does not.
+clipboard = "auto"
 
 [mcp]
 # Let `slate mcp` serve notes to MCP clients (AI assistants and bots) over
@@ -410,6 +416,16 @@ pub enum TerminalImagesMode {
     Off,
 }
 
+/// How copies reach the system clipboard.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TerminalClipboardMode {
+    /// System clipboard tools, then OSC 52.
+    #[default]
+    Auto,
+    /// OSC 52 only, so the terminal holds the copy.
+    Osc52,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalImagesConfig {
     pub mode: TerminalImagesMode,
@@ -543,6 +559,7 @@ struct FileConfig {
 struct TerminalSection {
     images: Option<String>,
     image_max_rows: Option<usize>,
+    clipboard: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -853,6 +870,19 @@ pub fn load_terminal_images_config() -> TerminalImagesConfig {
     }
 }
 
+pub fn load_terminal_clipboard_mode() -> TerminalClipboardMode {
+    let Ok(path) = ensure_config_file() else {
+        return TerminalClipboardMode::default();
+    };
+    fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| parse_terminal_clipboard_mode(&text))
+        .unwrap_or_else(|err| {
+            eprintln!("Config: failed to parse {}: {err}", path.display());
+            TerminalClipboardMode::default()
+        })
+}
+
 fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
     let date_format = normalize_date_format(raw.editor.date_format);
@@ -1013,6 +1043,18 @@ pub fn parse_terminal_images_config(text: &str) -> Result<TerminalImagesConfig, 
         .map(|r| r.clamp(MIN_TERMINAL_IMAGE_MAX_ROWS, MAX_TERMINAL_IMAGE_MAX_ROWS))
         .unwrap_or(DEFAULT_TERMINAL_IMAGE_MAX_ROWS);
     Ok(TerminalImagesConfig { mode, max_rows })
+}
+
+pub fn parse_terminal_clipboard_mode(text: &str) -> Result<TerminalClipboardMode, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    let mode = raw
+        .terminal
+        .clipboard
+        .map(|mode| mode.trim().to_ascii_lowercase());
+    Ok(match mode.as_deref() {
+        Some("osc52") => TerminalClipboardMode::Osc52,
+        _ => TerminalClipboardMode::Auto,
+    })
 }
 
 fn normalize_terminal_images_mode(mode: Option<&str>) -> TerminalImagesMode {
@@ -1568,5 +1610,21 @@ mod tests {
         .expect("invalid mode parsed with fallback");
         assert_eq!(invalid_mode.mode, TerminalImagesMode::Auto);
         assert_eq!(invalid_mode.max_rows, 100);
+    }
+
+    #[test]
+    fn terminal_clipboard_mode_defaults_to_auto() {
+        assert_eq!(
+            parse_terminal_clipboard_mode(""),
+            Ok(TerminalClipboardMode::Auto)
+        );
+        assert_eq!(
+            parse_terminal_clipboard_mode("[terminal]\nclipboard = \"OSC52\"\n"),
+            Ok(TerminalClipboardMode::Osc52)
+        );
+        assert_eq!(
+            parse_terminal_clipboard_mode("[terminal]\nclipboard = \"nope\"\n"),
+            Ok(TerminalClipboardMode::Auto)
+        );
     }
 }

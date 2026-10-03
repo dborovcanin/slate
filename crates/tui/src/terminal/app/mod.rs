@@ -1787,7 +1787,7 @@ impl TerminalApp {
             return false;
         }
         self.clipboard_watch.enabled = true;
-        self.clipboard_watch.last_text = clipboard::read_clipboard_via_commands();
+        self.clipboard_watch.last_text = clipboard::read_clipboard_text();
         self.clipboard_watch.last_poll =
             Instant::now() - Duration::from_millis(CLIPBOARD_WATCH_POLL_MS);
         true
@@ -1848,7 +1848,7 @@ impl TerminalApp {
         }
         self.clipboard_watch.last_poll = Instant::now();
 
-        let Some(text) = clipboard::read_clipboard_via_commands() else {
+        let Some(text) = clipboard::read_clipboard_text() else {
             return;
         };
         if text.is_empty() {
@@ -1891,6 +1891,7 @@ pub fn run_terminal_session(
         return Ok(());
     }
 
+    clipboard::set_write_mode(crate::config::load_terminal_clipboard_mode());
     let (mut app, metrics) = TerminalApp::new_with_startup_metrics(
         db,
         opts,

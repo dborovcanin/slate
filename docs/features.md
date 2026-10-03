@@ -363,7 +363,8 @@ Config `[web_search]`: `provider = "auto" | "brave" | "google" | "duckduckgo"`, 
 
 ## Clipboard and clip-watch
 
-- Vim yanks and `:export md` / `:export txt` without a path go to the system clipboard (status shows the backend used).
+- Vim yanks and `:export md` / `:export txt` without a path go to the system clipboard (status shows the backend used): through `wl-copy`, `xclip`, `xsel`, `pbcopy`, `clip.exe` or tmux, otherwise OSC 52. With `[terminal] clipboard = "osc52"` copies go only through OSC 52, so the terminal holds them: they outlive slate and work over SSH, but a terminal without OSC 52 support drops them silently.
+- Clipboard text is read natively (Wayland data-control or X11), with the same tools as a fallback.
 - Pasted text is inserted as-is (no autoformat pass).
 
 | Command                    | Action                                                    |

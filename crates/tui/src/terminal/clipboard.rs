@@ -1,6 +1,9 @@
 #[cfg(not(test))]
 use std::io::{self, IsTerminal as _, Write};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+
+use app_core::config::TerminalClipboardMode;
 
 #[cfg(not(test))]
 use base64::Engine as _;
@@ -8,7 +11,6 @@ use base64::Engine as _;
 #[cfg_attr(test, allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardWriteBackend {
-    Arboard,
     Tmux,
     WlCopy,
     Xclip,
@@ -21,7 +23,6 @@ pub enum ClipboardWriteBackend {
 impl ClipboardWriteBackend {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Arboard => "native",
             Self::Tmux => "tmux",
             Self::WlCopy => "wl-copy",
             Self::Xclip => "xclip",
@@ -33,35 +34,58 @@ impl ClipboardWriteBackend {
     }
 }
 
+static WRITE_MODE: OnceLock<TerminalClipboardMode> = OnceLock::new();
+
+/// Sets how copies reach the clipboard, from `[terminal] clipboard`; once,
+/// at startup.
+pub fn set_write_mode(mode: TerminalClipboardMode) {
+    let _ = WRITE_MODE.set(mode);
+}
+
 #[cfg(test)]
 pub fn copy_text_to_clipboard(_text: &str) -> Option<ClipboardWriteBackend> {
     None
 }
 
+/// Copies through the system tools, whose copy outlives slate, then OSC 52.
+/// OSC 52 comes last because writing it says nothing about whether the
+/// terminal took it; `[terminal] clipboard = "osc52"` makes it the only way.
+///
+/// arboard is not used: the clipboard empties as soon as its handle drops,
+/// and in any case when slate exits.
 #[cfg(not(test))]
 pub fn copy_text_to_clipboard(text: &str) -> Option<ClipboardWriteBackend> {
     if text.is_empty() {
         return None;
     }
 
-    if let Some(backend) = write_clipboard_via_commands(text) {
-        return Some(backend);
-    }
-
-    if write_clipboard_via_osc52(text) {
-        return Some(ClipboardWriteBackend::Osc52);
-    }
-
-    if let Ok(mut ctx) = arboard::Clipboard::new() {
-        if ctx.set_text(text.to_string()).is_ok() {
-            return Some(ClipboardWriteBackend::Arboard);
+    if WRITE_MODE.get().copied().unwrap_or_default() == TerminalClipboardMode::Auto {
+        if let Some(backend) = write_clipboard_via_commands(text) {
+            return Some(backend);
         }
     }
 
-    None
+    write_clipboard_via_osc52(text).then_some(ClipboardWriteBackend::Osc52)
 }
 
-pub fn read_clipboard_via_commands() -> Option<String> {
+/// Text on the system clipboard, read natively (Wayland data-control or
+/// X11) and otherwise through the clipboard tools.
+pub fn read_clipboard_text() -> Option<String> {
+    read_clipboard_via_arboard().or_else(read_clipboard_via_commands)
+}
+
+fn read_clipboard_via_arboard() -> Option<String> {
+    // Kept for the session: on X11 each handle starts a thread and a server
+    // connection, too much for clip-watch to redo on every poll.
+    static CLIPBOARD: OnceLock<Option<Mutex<arboard::Clipboard>>> = OnceLock::new();
+    let clipboard = CLIPBOARD
+        .get_or_init(|| arboard::Clipboard::new().ok().map(Mutex::new))
+        .as_ref()?;
+    let text = clipboard.lock().ok()?.get_text().ok()?;
+    non_empty_text(text)
+}
+
+fn read_clipboard_via_commands() -> Option<String> {
     if let Some(text) = run_clipboard_read_command("wl-paste", &["-n"]) {
         return Some(text);
     }
@@ -247,7 +271,10 @@ fn run_clipboard_read_command(bin: &str, args: &[&str]) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let text = String::from_utf8(output.stdout).ok()?;
+    non_empty_text(String::from_utf8(output.stdout).ok()?)
+}
+
+fn non_empty_text(text: String) -> Option<String> {
     let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
     if trimmed.is_empty() {
         None

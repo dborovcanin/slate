@@ -251,13 +251,7 @@ impl TerminalApp {
     }
 
     pub(super) fn read_system_clipboard_text(&self) -> Option<String> {
-        clipboard::read_clipboard_via_commands().or_else(|| {
-            if let Ok(mut ctx) = arboard::Clipboard::new() {
-                ctx.get_text().ok()
-            } else {
-                None
-            }
-        })
+        clipboard::read_clipboard_text()
     }
 
     /// Imports a clipboard image into the note and returns its markdown,
