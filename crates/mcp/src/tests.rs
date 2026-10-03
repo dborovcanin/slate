@@ -554,3 +554,39 @@ fn delete_is_offered_only_when_allowed() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn notes_encrypted_on_creation_stay_closed() {
+    std::env::set_var("SLATE_MCP_TEST_PASSWORD", "pw");
+    let db = TestDb::new();
+    let defaults = NoteDefaults {
+        modules: NoteModules::default(),
+        security: app_core::config::NoteSecurityConfig {
+            encrypt_notes: true,
+            password_env: "SLATE_MCP_TEST_PASSWORD".to_string(),
+        },
+    };
+    let mut server = Server::new(db.open(), defaults, false);
+    let created = create(&mut server, "# Mine");
+    assert_eq!(created["title"], json!("Mine"));
+    let id = created["id"].as_str().expect("id").to_string();
+
+    // Edited elsewhere with the password: the server still cannot read it.
+    let other = db.open();
+    other.unlock_note(&id, "pw").expect("unlocked elsewhere");
+    other
+        .save_note(&id, "# Mine\nprivate edit")
+        .expect("edited elsewhere");
+    for (tool, args) in [
+        ("read_note", json!({ "id": id })),
+        ("append_to_note", json!({ "id": id, "text": "x" })),
+        ("rename_note", json!({ "id": id, "title": "x" })),
+    ] {
+        let error = call(&mut server, tool, args).expect_err("closed");
+        assert!(error.contains("encrypted"), "{tool}: {error}");
+    }
+    assert_eq!(
+        other.get_note(&id).expect("lookup").expect("note").body,
+        "# Mine\nprivate edit"
+    );
+}

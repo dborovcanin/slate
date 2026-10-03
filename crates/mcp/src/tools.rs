@@ -332,22 +332,25 @@ impl Notes {
             password.as_deref(),
             collection_id.as_deref(),
         )?;
-        let revision = if text.is_empty() {
-            created.updated_at
+        let saved = if text.is_empty() {
+            Ok(created.updated_at)
         } else {
-            match self
-                .db
+            self.db
                 .save_note_revision_if(&id, text, Some(&created.updated_at), None)
-            {
-                Ok(revision) => revision.updated_at,
-                Err(error) => {
-                    // Do not leave an empty note behind.
-                    let _ = self.db.delete_note(&id, password.as_deref());
-                    return Err(error);
-                }
-            }
+                .map(|revision| revision.updated_at)
         };
-        Ok(json!({ "id": id, "title": self.title(&id)?, "revision": revision }))
+        let saved = saved.and_then(|revision| Ok((revision, self.title(&id)?)));
+        // A note encrypted on creation stays closed to clients from now on:
+        // the key it was created with is not kept.
+        self.db.lock_note(&id);
+        match saved {
+            Ok((revision, title)) => Ok(json!({ "id": id, "title": title, "revision": revision })),
+            Err(error) => {
+                // Do not leave an empty note behind.
+                let _ = self.db.delete_note(&id, password.as_deref());
+                Err(error)
+            }
+        }
     }
 
     fn append_to_note(&self, args: &Map<String, Value>) -> Result<Value, String> {
@@ -464,13 +467,15 @@ impl Notes {
         }
     }
 
-    /// The stored note `id`, which must exist and not be locked.
+    /// The stored note `id`, which must exist and not be encrypted. A key
+    /// this process happens to hold does not count: encrypted notes are
+    /// only ever opened in Slate.
     fn readable_note(&self, id: &str) -> Result<Note, String> {
         let note = self
             .db
             .get_note(id)?
             .ok_or_else(|| format!("note not found: {id}"))?;
-        if note.access_mode != NoteAccessMode::None && !note.is_unlocked {
+        if note.access_mode != NoteAccessMode::None {
             return Err(format!(
                 "note {id} is encrypted; it can only be opened in Slate"
             ));
