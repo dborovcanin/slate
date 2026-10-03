@@ -19,6 +19,7 @@ icons = "nerd"
 markdown_autoformat = true
 checklist_auto_reorder = true
 autosave = true
+reload_outside_changes = true
 format_on_save = false
 vim_mode = false
 wrap = true
@@ -103,6 +104,7 @@ max_body_bytes = 524288
 - `markdown_autoformat`
 - `checklist_auto_reorder`
 - `autosave`
+- `reload_outside_changes`
 - `format_on_save`
 - `vim_mode`
 - `wrap`
@@ -115,6 +117,7 @@ Behavior notes:
 - `autosave = true` enables implicit save flows (idle flush + save on exit/switch).
 - with `autosave = false`, explicit writes persist body changes. Switching notes or quitting with unsaved changes is refused once (vim's E37); repeating it, `:q!` or `:e!` discards them.
 - a failed save (for example a note changed elsewhere) keeps the editor open with the changes; autosave waits for the next edit. `:w!` overwrites, `:e!` reloads.
+- `reload_outside_changes = true` (default) checks the open note about once a second while idle and loads changes made elsewhere (`slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate) as one undoable edit when there are no unsaved changes. Set it to `false` to skip the check; such changes then show up as a save conflict, as before.
 - `format_on_save = true` runs format before save.
 - `vim_mode = true` starts the editor in vim normal mode.
 - `wrap = true` (default) soft-wraps long lines at word boundaries. Tables, code fences, code blocks, and code files keep horizontal scrolling so columns stay aligned. With `wrap = false` every line scrolls horizontally.

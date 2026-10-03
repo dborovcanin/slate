@@ -14,6 +14,7 @@ const DEFAULT_DAILY_TEMPLATE: &str = "# {date}\n\n";
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_CHECKLIST_AUTO_REORDER: bool = true;
 const DEFAULT_AUTOSAVE: bool = true;
+const DEFAULT_RELOAD_OUTSIDE_CHANGES: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
 const DEFAULT_DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M";
 const DEFAULT_FORMAT_ON_SAVE: bool = false;
@@ -93,6 +94,10 @@ markdown_autoformat = true
 checklist_auto_reorder = true
 # Persist edits automatically (idle flush + save on exit/switch).
 autosave = true
+# Load changes made to the open note outside this window (slate mcp, slate
+# append, slate capture, IMAP sync, another Slate) while it has no unsaved
+# edits. Checks the stored note about once a second while idle.
+reload_outside_changes = true
 # Run :format before every save.
 format_on_save = false
 # Start the editor in Vim normal mode.
@@ -264,6 +269,8 @@ pub struct ThemeConfig {
     pub markdown_autoformat: bool,
     pub checklist_auto_reorder: bool,
     pub autosave: bool,
+    /// Take in changes made to the open note elsewhere while idle.
+    pub reload_outside_changes: bool,
     pub format_on_save: bool,
     pub vim_mode: bool,
     pub wrap: bool,
@@ -486,6 +493,7 @@ impl Default for ThemeConfig {
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
             checklist_auto_reorder: DEFAULT_CHECKLIST_AUTO_REORDER,
             autosave: DEFAULT_AUTOSAVE,
+            reload_outside_changes: DEFAULT_RELOAD_OUTSIDE_CHANGES,
             format_on_save: DEFAULT_FORMAT_ON_SAVE,
             vim_mode: DEFAULT_VIM_MODE,
             wrap: DEFAULT_WRAP,
@@ -549,6 +557,7 @@ struct EditorSection {
     markdown_autoformat: Option<bool>,
     checklist_auto_reorder: Option<bool>,
     autosave: Option<bool>,
+    reload_outside_changes: Option<bool>,
     format_on_save: Option<bool>,
     vim_mode: Option<bool>,
     wrap: Option<bool>,
@@ -802,10 +811,10 @@ pub fn load_web_search_config() -> WebSearchConfig {
 /// from a config the user did not mean.
 pub fn load_mcp_config() -> Result<(McpConfig, PathBuf), String> {
     let path = ensure_config_file()?;
-    let text = fs::read_to_string(&path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    let config = parse_mcp_config(&text)
-        .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let config =
+        parse_mcp_config(&text).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
     Ok((config, path))
 }
 
@@ -851,6 +860,10 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
             .checklist_auto_reorder
             .unwrap_or(DEFAULT_CHECKLIST_AUTO_REORDER),
         autosave: raw.editor.autosave.unwrap_or(DEFAULT_AUTOSAVE),
+        reload_outside_changes: raw
+            .editor
+            .reload_outside_changes
+            .unwrap_or(DEFAULT_RELOAD_OUTSIDE_CHANGES),
         format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
         wrap: raw.editor.wrap.unwrap_or(DEFAULT_WRAP),
@@ -1271,6 +1284,22 @@ mod tests {
     fn parses_markdown_autoformat_override() {
         let cfg = parse_theme_config("[editor]\nmarkdown_autoformat = false").expect("config");
         assert!(!cfg.markdown_autoformat);
+    }
+
+    #[test]
+    fn reload_outside_changes_is_on_unless_turned_off() {
+        assert!(
+            parse_theme_config("")
+                .expect("config")
+                .reload_outside_changes
+        );
+        assert!(
+            parse_theme_config(DEFAULT_CONFIG)
+                .expect("config")
+                .reload_outside_changes
+        );
+        let cfg = parse_theme_config("[editor]\nreload_outside_changes = false").expect("config");
+        assert!(!cfg.reload_outside_changes);
     }
 
     #[test]

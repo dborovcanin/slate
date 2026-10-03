@@ -3065,6 +3065,23 @@ fn outside_change_keeps_unsaved_edits_and_warns_once() {
 }
 
 #[test]
+fn outside_change_is_left_alone_when_turned_off() {
+    let (db, mut app, path) = app_with_note("one");
+    app.autosave_enabled = false;
+    app.note_creation_theme.reload_outside_changes = false;
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "two").expect("outside edit");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["one"]);
+    assert!(!app.status.contains("outside Slate"), "{}", app.status);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn outside_change_waits_while_an_overlay_is_open() {
     let (db, mut app, path) = app_with_note("one");
     app.autosave_enabled = false;

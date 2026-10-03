@@ -2583,9 +2583,12 @@ impl TerminalApp {
     /// while idle. A buffer without unsaved changes gets the new text as one
     /// edit, so the cursor and reminders follow it and `u` undoes it. One
     /// with unsaved changes keeps them: the status says the stored note
-    /// moved on, and saving reports the conflict as before.
+    /// moved on, and saving reports the conflict as before. Off with
+    /// `[editor] reload_outside_changes = false`.
     pub(super) fn maybe_take_outside_change(&mut self, db: &Db) {
-        if self.outside_change_checked_at.elapsed() < OUTSIDE_CHANGE_CHECK_INTERVAL {
+        if !self.note_creation_theme.reload_outside_changes
+            || self.outside_change_checked_at.elapsed() < OUTSIDE_CHANGE_CHECK_INTERVAL
+        {
             return;
         }
         self.outside_change_checked_at = Instant::now();

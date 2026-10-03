@@ -76,7 +76,7 @@ Encrypted notes ask for their password (or their collection's) before opening. C
 
 `[editor] format_on_save = true` runs `:format` before every save. If the note changed elsewhere since it was loaded, a save stops with `note changed since last load; use :w! to force save`.
 
-While idle, Slate checks about once a second whether the open note changed elsewhere (`slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate, an edited markdown file). Without unsaved changes the new text is loaded in place as one undoable edit, with the cursor and reminders kept on their lines (`note changed outside Slate; reloaded (u undoes)`). With unsaved changes your text is kept and the status line says so: `:e!` loads the stored note, `:w!` keeps your version.
+While idle (unless `[editor] reload_outside_changes = false`), Slate checks about once a second whether the open note changed elsewhere (`slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate, an edited markdown file). Without unsaved changes the new text is loaded in place as one undoable edit, with the cursor and reminders kept on their lines (`note changed outside Slate; reloaded (u undoes)`). With unsaved changes your text is kept and the status line says so: `:e!` loads the stored note, `:w!` keeps your version.
 
 ### Note history
 

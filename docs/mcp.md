@@ -125,7 +125,7 @@ Collections are named, not identified by id: `collection: "Work"`. Results come 
 
 ## Working alongside the editor
 
-While Slate is idle, it checks about once a second whether the open note was changed somewhere else. The check covers `slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate window, and edits to an open markdown file.
+While Slate is idle, it checks about once a second (unless `[editor] reload_outside_changes = false`) whether the open note was changed somewhere else. The check covers `slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate window, and edits to an open markdown file.
 
 - **No unsaved changes:** Slate loads the new text in place. Your cursor and reminders stay on the lines they were on, and the status line shows `note changed outside Slate; reloaded (u undoes)`. The reload is a single undo step.
 - **Unsaved changes:** Slate keeps your text and shows `note changed outside Slate (:e! loads it, :w! keeps your version)`. With autosave on, the next autosave stops with a conflict instead of overwriting the bot's change. Use `:e!` to take the stored note (dropping your edits) or `:w!` to keep yours (dropping the bot's).
