@@ -20,7 +20,7 @@ Variable names:
 - scope is note-local
 - definitions are global inside the note
 - if assigned multiple times, the last assignment wins
-- vim `gd` on a reference jumps to that last assignment
+- vim `gd` on a reference jumps to that last assignment; on `[[id]].name` it opens that note at the assignment of `name`
 
 ## Module gating
 

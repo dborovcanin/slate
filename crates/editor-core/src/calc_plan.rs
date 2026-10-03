@@ -2012,15 +2012,75 @@ pub fn variable_definition_at(
         .nth(col)
         .map_or(line.len(), |(byte, _)| byte);
     let name = variable_name_covering(line, cursor_byte, &names)?.to_string();
+    let hint = graph.and_then(|graph| graph.assignment_line_by_name.get(&name).copied());
+    definition_target(lines, name, hint, mask)
+}
 
+/// A `[[id]].name` reference to a variable of another note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QualifiedVariableRef {
+    pub note_id: String,
+    /// Normalized (lowercase, spaces collapsed) variable name.
+    pub name: String,
+}
+
+static QUALIFIED_VARIABLE_RE: OnceLock<Regex> = OnceLock::new();
+
+/// The `[[id]].name` reference whose `.name` part covers char column `col`.
+/// Matches the references the evaluator resolves across notes.
+pub fn qualified_variable_at(line: &str, col: usize) -> Option<QualifiedVariableRef> {
+    if !line.contains("[[") {
+        return None;
+    }
+    let regex = QUALIFIED_VARIABLE_RE.get_or_init(|| {
+        Regex::new(
+            r"\[\[([A-Za-z0-9][A-Za-z0-9_-]{0,63})\]\]\.([A-Za-z0-9_](?:[A-Za-z0-9_ ]*[A-Za-z0-9_])?)",
+        )
+        .expect("qualified variable regex is valid")
+    });
+    let cursor_byte = line
+        .char_indices()
+        .nth(col)
+        .map_or(line.len(), |(byte, _)| byte);
+    regex.captures_iter(line).find_map(|captures| {
+        let name = captures.get(2)?;
+        // From the `.` through the name's last char.
+        let covers = name.start() - 1 <= cursor_byte && cursor_byte < name.end();
+        covers.then(|| QualifiedVariableRef {
+            note_id: captures[1].to_string(),
+            name: collapse_spaces(name.as_str()).to_ascii_lowercase(),
+        })
+    })
+}
+
+/// The last assignment of the normalized variable `name` in `lines`, as
+/// `variable_definition_at` finds it for a local reference.
+pub fn variable_definition_named(
+    lines: &[String],
+    name: &str,
+    mask: CalcFeatureMask,
+) -> Option<VariableDefinitionTarget> {
+    if !mask.variables_active() {
+        return None;
+    }
+    definition_target(lines, name.to_string(), None, mask)
+}
+
+/// Where `name` is assigned: `hint` when that line still assigns it, else
+/// the last line that does.
+fn definition_target(
+    lines: &[String],
+    name: String,
+    hint: Option<usize>,
+    mask: CalcFeatureMask,
+) -> Option<VariableDefinitionTarget> {
     let assigns_name = |idx: usize| {
         lines
             .get(idx)
             .and_then(|text| line_assignment_def(text, mask).0)
             .is_some_and(|assigned| assigned == name)
     };
-    let def_line = graph
-        .and_then(|graph| graph.assignment_line_by_name.get(&name).copied())
+    let def_line = hint
         .filter(|&idx| assigns_name(idx))
         .or_else(|| (0..lines.len()).rev().find(|&idx| assigns_name(idx)))?;
     let def_text = &lines[def_line];
@@ -3817,6 +3877,37 @@ mod tests {
         let target =
             super::variable_definition_at(&lines, index.as_ref(), 2, 10, mask).expect("reference");
         assert_eq!((target.name.as_str(), target.line), ("unit price", 1));
+    }
+
+    #[test]
+    fn qualified_variable_at_covers_the_dot_and_name() {
+        let line = "x := [[01ARZ3NDEKTSV4RRFFQ69G5FAV]].Tax  Rate + 45";
+        let start = line.find('.').unwrap();
+        let end = line.find(" +").unwrap();
+        let expected = Some(QualifiedVariableRef {
+            note_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            name: "tax rate".to_string(),
+        });
+        assert_eq!(super::qualified_variable_at(line, start), expected);
+        assert_eq!(super::qualified_variable_at(line, end - 1), expected);
+        // The link itself, the space after the name, a plain line.
+        assert_eq!(super::qualified_variable_at(line, start - 1), None);
+        assert_eq!(super::qualified_variable_at(line, end), None);
+        assert_eq!(super::qualified_variable_at("tax rate + 1", 2), None);
+    }
+
+    #[test]
+    fn variable_definition_named_finds_the_last_assignment() {
+        let mask = CalcFeatureMask::default();
+        let lines = definition_lines("title\nrate := 1\nTax  Rate := 2\nrate := 3");
+        let target = super::variable_definition_named(&lines, "tax rate", mask).expect("defined");
+        assert_eq!((target.line, target.col), (2, 0));
+        let target = super::variable_definition_named(&lines, "rate", mask).expect("defined");
+        assert_eq!(target.line, 3);
+        assert_eq!(
+            super::variable_definition_named(&lines, "missing", mask),
+            None
+        );
     }
 
     #[test]

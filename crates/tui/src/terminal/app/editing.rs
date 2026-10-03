@@ -4820,6 +4820,60 @@ impl TerminalApp {
         self.status = format!("definition: {}", target.name);
     }
 
+    /// For `[[id]].name` at the cursor, opens that note at the assignment of
+    /// `name`, or at its top when the note no longer assigns it. False when
+    /// the cursor is not on such a name.
+    pub(super) fn go_to_qualified_variable_at_cursor(&mut self, db: &crate::storage::Db) -> bool {
+        if !self.note_math_module_enabled() {
+            return false;
+        }
+        let Some(reference) = crate::editor_core::calc_plan::qualified_variable_at(
+            self.current_line(),
+            self.editor.cursor_col,
+        ) else {
+            return false;
+        };
+        let found = db
+            .get_note_meta(&reference.note_id)
+            .and_then(|summary| match summary {
+                Some(summary) => Ok(db.get_note(&summary.id)?.map(|note| (summary.title, note))),
+                None => Ok(None),
+            });
+        let (title, note) = match found {
+            Ok(Some(found)) => found,
+            Ok(None) => {
+                self.status = "wiki-link: broken (note deleted)".to_string();
+                return true;
+            }
+            Err(e) => {
+                self.status = format!("wiki-link error: {e}");
+                return true;
+            }
+        };
+        if !self.can_leave_note(db) {
+            return true;
+        }
+        if let Err(e) = self.set_active_note(db, note) {
+            self.status = format!("wiki-link error: {e}");
+            return true;
+        }
+        let target = crate::editor_core::calc_plan::variable_definition_named(
+            &self.editor.lines,
+            &reference.name,
+            self.calc_feature_mask(),
+        );
+        let Some(target) = target else {
+            self.status = format!("→ {title} (no {} there)", reference.name);
+            return true;
+        };
+        self.editor.cursor_line = target.line;
+        self.editor.cursor_col = target.col;
+        self.adjust_cursor();
+        self.adjust_scroll();
+        self.status = format!("→ {title}: {}", target.name);
+        true
+    }
+
     pub(super) fn open_wiki_link_preview(&mut self, db: &crate::storage::Db) {
         let line = self.current_line().to_string();
         let Some(link) =

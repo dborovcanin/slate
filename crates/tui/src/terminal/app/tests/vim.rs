@@ -1156,6 +1156,38 @@ fn gd_goes_to_the_variable_definition() {
 }
 
 #[test]
+fn gd_on_a_qualified_variable_opens_its_note_at_the_definition() {
+    const DEP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let line = format!("a := [[{DEP}]].sum_rate + [[{DEP}]].gone");
+    let (db, mut app, path) =
+        app_with_linked_notes(&line, &[(DEP, "Rates\nother := 1\nsum_rate := 42")]);
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line.find("_rate").unwrap();
+
+    run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
+    assert_eq!(app.active_note.id, DEP);
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (2, 0));
+    assert_eq!(app.status, "→ Rates: sum_rate");
+
+    // A name the note no longer assigns still opens the note.
+    let (db2, mut app2, path2) = app_with_linked_notes(&line, &[(DEP, "Rates\nother := 1")]);
+    app2.mode = UiMode::Normal;
+    app2.editor.cursor_line = 0;
+    app2.editor.cursor_col = line.rfind(".gone").unwrap();
+    run_keys(&mut app2, &db2, &[Key::Char('g'), Key::Char('d')]);
+    assert_eq!(app2.active_note.id, DEP);
+    assert_eq!(app2.status, "→ Rates (no gone there)");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+    drop(app2);
+    drop(db2);
+    cleanup_db_files(&path2);
+}
+
+#[test]
 fn vim_each_normal_command_is_its_own_undo_step() {
     let (db, mut app, path) = app_with_note("one\ntwo\nthree");
     app.mode = UiMode::Normal;

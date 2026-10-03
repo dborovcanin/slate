@@ -285,7 +285,7 @@ sqrt(144) + 3^2         → 21
 
 - Assign with `name := expression`; reference by name anywhere in the note. Names are case-insensitive and may contain spaces.
 - Dependents update as definitions change; conversions store numeric values (`len := 3 m to km`).
-- `gd` (Normal) on a variable jumps to its definition (the last assignment, the one in effect).
+- `gd` (Normal) on a variable jumps to its definition (the last assignment, the one in effect). On `[[id]].name` it opens the other note at that definition.
 - Variable names are highlighted; an autocomplete popup appears after `[editor] variable_autocomplete_min_chars` (default 3) characters.
 - Another note's variable: `[[SHORTID]].name` (needs the `cross_note` module); typing `[[SHORTID]].` suggests that note's variables.
 

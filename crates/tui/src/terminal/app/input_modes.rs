@@ -579,7 +579,8 @@ impl TerminalApp {
             return Ok(());
         }
 
-        // gd: follow the wiki link or go to the variable definition at the cursor.
+        // gd: go to the definition of the `[[id]].name` or variable at the cursor,
+        // or follow the wiki link there.
         // Check vim state's pending Go before running the pipeline so 'gg' still
         // reaches the pipeline unimpeded.
         if key == Key::Char('d')
@@ -589,7 +590,9 @@ impl TerminalApp {
             )
         {
             self.vim_state.pending = None;
-            if !self.navigate_wiki_link_at_cursor(db) {
+            if !self.go_to_qualified_variable_at_cursor(db)
+                && !self.navigate_wiki_link_at_cursor(db)
+            {
                 self.go_to_variable_definition_at_cursor();
             }
             return Ok(());
