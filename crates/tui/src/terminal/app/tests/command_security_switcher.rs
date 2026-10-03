@@ -3122,3 +3122,21 @@ fn outside_change_waits_while_an_overlay_is_open() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn outside_change_keeps_the_cursor_on_a_char_boundary() {
+    let (db, mut app, path) = app_with_note("ab");
+    app.autosave_enabled = false;
+    app.mode = UiMode::Normal;
+    app.editor.cursor_col = 1;
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "éx").expect("outside edit");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["éx"]);
+    assert!(app.editor.cursor_col <= 1);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
