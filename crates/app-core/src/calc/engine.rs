@@ -226,6 +226,8 @@ struct FormulaCallSpan {
 struct TableBlockInfo {
     data_rows: Vec<Vec<usize>>,
     row_lookup: FxHashMap<usize, usize>,
+    /// Cell count of the delimiter row: the table's width.
+    column_count: usize,
 }
 
 #[derive(Default)]
@@ -259,6 +261,7 @@ impl TableEvalCache {
         };
 
         let mut delimiter_row: Option<usize> = None;
+        let mut column_count = 0usize;
         let mut data_rows: Vec<Vec<usize>> = Vec::new();
         let mut row_lookup: FxHashMap<usize, usize> = FxHashMap::default();
         let after_header = table_syntax::after_header_row(end + 1 - start, |idx| {
@@ -271,6 +274,7 @@ impl TableEvalCache {
                 && table_syntax::is_delimiter_row_at(&row_cells, Some(row_idx) == after_header)
             {
                 delimiter_row = Some(row_idx);
+                column_count = row_cells.len();
                 continue;
             }
             if delimiter_row.is_some() {
@@ -293,6 +297,7 @@ impl TableEvalCache {
         let info = Arc::new(TableBlockInfo {
             data_rows,
             row_lookup,
+            column_count,
         });
         for row_idx in start..=end {
             self.block_by_line.insert(row_idx, Some(Arc::clone(&info)));
@@ -1846,7 +1851,10 @@ fn resolve_table_coordinate_value(
     let target_logical_row = data_rows
         .get(row_1based.saturating_sub(1))
         .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?;
-    let target_col = col_1based.saturating_sub(1);
+    if col_1based > table_block.column_count {
+        return Err(TABLE_REF_ERROR_OUT_OF_BOUNDS);
+    }
+    let target_col = col_1based - 1;
 
     let current_logical_row = table_block.row_lookup.get(&line_idx).copied();
     let target_logical_idx = row_1based.saturating_sub(1);
@@ -3703,6 +3711,25 @@ mod tests {
             "| --- | --- | --- |".to_string(),
             "| a | 10 | |".to_string(),
             "| b | 20 | :=(3,2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some(TABLE_REF_ERROR_OUT_OF_BOUNDS.to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_reports_column_out_of_bounds() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | :=(1,4) |".to_string(),
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(
