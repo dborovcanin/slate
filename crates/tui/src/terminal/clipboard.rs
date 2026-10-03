@@ -137,19 +137,40 @@ pub fn read_clipboard_image_via_commands(prefer_text: bool) -> Option<Vec<u8>> {
             continue;
         };
         let types = listing.lines().map(str::trim).collect::<Vec<_>>();
-        let Some(mime) = pick_clipboard_image_type(&types, prefer_text) else {
-            return None;
-        };
-        let output = Command::new(bin)
-            .args(read_args)
-            .arg(mime)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        return (output.status.success() && !output.stdout.is_empty()).then_some(output.stdout);
+        let mime = pick_clipboard_image_type(&types, prefer_text)?;
+        // One byte past the note limit is enough for the importer to refuse
+        // the image, without holding all of a larger one.
+        let limit = app_core::note_sources::MAX_NOTE_IMAGE_BYTES + 1;
+        return read_command_bounded(Command::new(bin).args(read_args).arg(mime), limit);
     }
     None
+}
+
+/// The command's stdout, cut off at `limit` bytes; a command still writing
+/// then is killed.
+fn read_command_bounded(command: &mut Command, limit: usize) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut bytes = Vec::new();
+    let read = child
+        .stdout
+        .take()?
+        .take(limit as u64)
+        .read_to_end(&mut bytes);
+    let cut_off = bytes.len() >= limit;
+    if cut_off {
+        let _ = child.kill();
+    }
+    let status = child.wait().ok()?;
+    if read.is_err() || bytes.is_empty() || !(cut_off || status.success()) {
+        return None;
+    }
+    Some(bytes)
 }
 
 #[cfg(not(test))]
@@ -300,6 +321,22 @@ fn write_clipboard_via_osc52(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_command_bounded_stops_at_the_limit() {
+        let mut long = Command::new("head");
+        long.args(["-c", "100000", "/dev/zero"]);
+        assert_eq!(
+            read_command_bounded(&mut long, 10).map(|bytes| bytes.len()),
+            Some(10)
+        );
+
+        let mut short = Command::new("head");
+        short.args(["-c", "4", "/dev/zero"]);
+        assert_eq!(read_command_bounded(&mut short, 10), Some(vec![0; 4]));
+
+        assert_eq!(read_command_bounded(&mut Command::new("false"), 10), None);
+    }
 
     #[test]
     fn pick_clipboard_image_type_takes_an_image_only_clipboard() {

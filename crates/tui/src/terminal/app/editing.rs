@@ -2591,18 +2591,16 @@ impl TerminalApp {
     }
 
     /// Imports image bytes, such as an image read off the system clipboard,
-    /// into the note and inserts its markdown at the cursor.
-    pub(super) fn insert_image_bytes(
-        &mut self,
+    /// into the note and returns the markdown that shows it.
+    pub(super) fn import_image_bytes(
+        &self,
         db: &crate::storage::Db,
         bytes: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
         let imported =
             note_sources.import_image_bytes_by_id(&self.active_note.id, None, None, bytes)?;
-        self.insert_paste(&format!("![Image]({})", imported.markdown_path));
-        self.status = "image inserted".to_string();
-        Ok(())
+        Ok(format!("![Image]({})", imported.markdown_path))
     }
 
     pub(super) fn insert_newline(&mut self) {

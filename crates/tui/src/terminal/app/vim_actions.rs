@@ -260,11 +260,19 @@ impl TerminalApp {
         })
     }
 
-    pub(super) fn paste_clipboard_image(&mut self, db: &Db, image: &[u8]) {
-        if let Err(error) = self.insert_image_bytes(db, image) {
-            self.status = format!("image paste failed: {error}");
+    /// Imports a clipboard image into the note and returns its markdown,
+    /// or none with the failure in the status line.
+    pub(super) fn import_clipboard_image(&mut self, db: &Db, image: &[u8]) -> Option<String> {
+        match self.import_image_bytes(db, image) {
+            Ok(markdown) => {
+                self.status = "image inserted".to_string();
+                Some(markdown)
+            }
+            Err(error) => {
+                self.status = format!("image paste failed: {error}");
+                None
+            }
         }
-        self.adjust_cursor();
     }
 
     pub(super) fn apply_visual_selection_action(&mut self, delete: bool) -> bool {
@@ -786,12 +794,14 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::PasteAfter => {
                     if self.clipboard.is_empty() {
-                        if let Some(image) = clipboard::read_clipboard_image_via_commands(true) {
-                            let line_len = line_char_len(self.current_line());
-                            self.editor.cursor_col = (self.editor.cursor_col + 1).min(line_len);
-                            self.paste_clipboard_image(db, &image);
-                        } else if let Some(sys_clip_text) = self.read_system_clipboard_text() {
-                            self.clipboard = VimRegister::charwise(sys_clip_text);
+                        // An image is imported once; its markdown then pastes
+                        // like clipboard text, so a count repeats the link.
+                        let pasted = match clipboard::read_clipboard_image_via_commands(true) {
+                            Some(image) => self.import_clipboard_image(db, &image),
+                            None => self.read_system_clipboard_text(),
+                        };
+                        if let Some(text) = pasted {
+                            self.clipboard = VimRegister::charwise(text);
                         }
                     }
                     if !self.clipboard.is_empty() {
@@ -848,9 +858,11 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::PasteBefore => {
                     // Reached only with an empty register: paste the system
                     // clipboard, like `p` does.
-                    if let Some(image) = clipboard::read_clipboard_image_via_commands(true) {
-                        self.paste_clipboard_image(db, &image);
-                    } else if let Some(sys_clip_text) = self.read_system_clipboard_text() {
+                    let pasted = match clipboard::read_clipboard_image_via_commands(true) {
+                        Some(image) => self.import_clipboard_image(db, &image),
+                        None => self.read_system_clipboard_text(),
+                    };
+                    if let Some(sys_clip_text) = pasted {
                         self.clipboard = VimRegister::charwise(sys_clip_text);
                         if let Some((shared, scope_start_offset)) =
                             self.try_execute_shared_vim_action(action.intent, count, None)

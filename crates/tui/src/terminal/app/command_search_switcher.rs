@@ -1802,7 +1802,10 @@ impl TerminalApp {
                     } else if let Some(image) =
                         crate::terminal::clipboard::read_clipboard_image_via_commands(false)
                     {
-                        self.paste_clipboard_image(db, &image);
+                        if let Some(markdown) = self.import_clipboard_image(db, &image) {
+                            self.insert_paste(&markdown);
+                            self.adjust_cursor();
+                        }
                     } else {
                         self.status = "paste-image: no image on clipboard".to_string();
                     }
