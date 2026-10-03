@@ -237,8 +237,10 @@ pub(super) fn reformat_table_cursor_row_raw(
     col_widths: &[usize],
     delimiter: bool,
     cursor_col: usize,
-) -> String {
-    reformat_table_row_impl(line, col_widths, delimiter, Some(cursor_col), false).0
+) -> (String, usize) {
+    let (text, cursor, _) =
+        reformat_table_row_impl(line, col_widths, delimiter, Some(cursor_col), false);
+    (text, cursor.unwrap_or(cursor_col))
 }
 
 fn reformat_table_row_impl(
@@ -373,6 +375,13 @@ fn reformat_table_row_impl(
                 // markers. Pad based on visible width so columns align.
                 let visible_w = cell_visible_width(cell_content) + cursor_trailing_ws;
                 let raw_chars = cell_content.chars().count();
+                if cursor_cell_idx == Some(ci) {
+                    let raw = &trimmed[left_pipe_byte + 1..right_pipe_byte];
+                    let content_start = left_pipe_byte + 1 + raw.len() - raw.trim_start().len();
+                    let cb = cursor_byte_in_trimmed.unwrap_or(content_start);
+                    let before_cursor = &trimmed[content_start..cb.max(content_start)];
+                    mapped_cursor = Some(out_chars + before_cursor.chars().count());
+                }
                 out.push_str(cell_content);
                 out_chars += raw_chars;
                 for _ in 0..cursor_trailing_ws {

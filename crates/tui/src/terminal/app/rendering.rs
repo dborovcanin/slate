@@ -1960,7 +1960,10 @@ impl TerminalApp {
             calc_ghost = None;
             reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
         } else {
-            if !is_cursor_line {
+            formula_segments = self.table_formula_segments_cached(&line_text);
+            // Formula masking rebuilds the row from source. Link ranges from
+            // the unmasked row would underline unrelated output padding.
+            if !is_cursor_line && formula_segments.is_empty() {
                 let (rendered, underlines) = self.render_wiki_link_display_line(&line_text);
                 rendered_line = Cow::Owned(rendered);
                 wiki_link_underline_ranges = underlines;
@@ -1970,7 +1973,6 @@ impl TerminalApp {
                 reminder_strikethrough = reminder.remind_at_ms <= now_ms;
             }
 
-            formula_segments = self.table_formula_segments_cached(&line_text);
             if !formula_segments.is_empty() {
                 // Formula rows render a marker in-cell (`value*`,
                 // `value**`, …) and keep the detailed per-formula
@@ -2103,7 +2105,7 @@ impl TerminalApp {
                     // cursor-aware collapsed reflow (markers removed),
                     // matching what `render_line` actually displays.
                     let cursor = line_cursor_col.unwrap_or(self.editor.cursor_col);
-                    let raw_display = reformat_table_cursor_row_raw(
+                    let (raw_display, raw_cursor) = reformat_table_cursor_row_raw(
                         rendered_line.as_ref(),
                         &col_widths,
                         delimiter,
@@ -2120,7 +2122,9 @@ impl TerminalApp {
                     table_reflow_cell_pipes =
                         cell_idx.and_then(|idx| display_cell_pipe_positions(&raw_display, idx));
                     let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
-                    line_cursor_col = Some(mc);
+                    // Styling consumes raw text coordinates; the terminal
+                    // caret uses the separately collapsed display coordinates.
+                    line_cursor_col = Some(raw_cursor);
                     cursor_line_override = Some((collapsed_display, mc));
                     rendered_line = Cow::Owned(raw_display);
                 } else {

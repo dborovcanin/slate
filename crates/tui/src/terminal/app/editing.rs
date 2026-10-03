@@ -2609,46 +2609,13 @@ impl TerminalApp {
             return None;
         }
         let line = self.current_line();
-        if self.note_table_module_enabled() {
-            if let Some(completion) =
-                crate::editor_core::calc_plan::table_formula_function_completion(
-                    line,
-                    self.editor.cursor_col,
-                    self.variable_autocomplete_min_chars,
-                )
-            {
-                // Helpers first, then variables sharing the typed prefix.
-                let mut suggestions: Vec<String> = completion
-                    .suggestions
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                if self.note_variables_module_enabled() {
-                    suggestions.extend(build_variable_suggestions(
-                        &self.calc.variable_names,
-                        &completion.query,
-                        self.variable_autocomplete_min_chars,
-                        VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-                    ));
-                    suggestions.truncate(VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS);
-                }
-                return Some(VariableAutocompleteState {
-                    popup_anchor_col: completion.from_col,
-                    from_col: completion.from_col,
-                    to_col: completion.to_col,
-                    query: completion.query,
-                    suggestions,
-                });
-            }
-        }
-        if !self.note_variables_module_enabled() {
-            return None;
-        }
-
         // Cross-note prefix takes priority: [[ID]].partial
         if let Some((dep_id, bracket_col, from_col, partial)) =
             extract_cross_note_completion_prefix(line, self.editor.cursor_col)
         {
+            if !self.note_variables_module_enabled() {
+                return None;
+            }
             let exports = cross_note_exports_for_autocomplete(
                 &dep_id,
                 &self.cross_note_var_index,
@@ -2689,6 +2656,43 @@ impl TerminalApp {
                     suggestions,
                 });
             }
+            return None;
+        }
+
+        if self.note_table_module_enabled() {
+            if let Some(completion) =
+                crate::editor_core::calc_plan::table_formula_function_completion(
+                    line,
+                    self.editor.cursor_col,
+                    self.variable_autocomplete_min_chars,
+                )
+            {
+                // Helpers first, then variables sharing the typed prefix.
+                let mut suggestions: Vec<String> = completion
+                    .suggestions
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
+                if self.note_variables_module_enabled() {
+                    suggestions.extend(build_variable_suggestions(
+                        &self.calc.variable_names,
+                        &completion.query,
+                        self.variable_autocomplete_min_chars,
+                        VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+                    ));
+                    suggestions.truncate(VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS);
+                }
+                return Some(VariableAutocompleteState {
+                    popup_anchor_col: completion.from_col,
+                    from_col: completion.from_col,
+                    to_col: completion.to_col,
+                    query: completion.query,
+                    suggestions,
+                });
+            }
+        }
+        if !self.note_variables_module_enabled() {
+            return None;
         }
 
         if self.calc.variable_names.is_empty() {

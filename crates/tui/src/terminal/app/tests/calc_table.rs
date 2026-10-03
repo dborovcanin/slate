@@ -2297,3 +2297,75 @@ fn fenced_code_does_not_change_notebook_variables() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn qualified_table_completion_and_cursor_follow_typed_variable() {
+    const DEP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let prefix = format!("| 1 | :=[[{DEP}]].");
+    let body = format!("| a | b |\n| --- | --- |\n{prefix} |\n");
+    let (db, mut app, path) = app_with_linked_notes(&body, &[(DEP, "sum_rate := 42")]);
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = prefix.chars().count();
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('s'), Key::Char('u'), Key::Char('m')],
+    );
+    let (screen, cursor) = render_screen(&mut app);
+    let row = &screen[cursor.row as usize];
+    let expected = row.find(".sum").expect("visible qualifier") + 4;
+    assert_eq!(cursor.col as usize, expected, "{row}");
+    assert!(app.variable_autocomplete_popup.visible);
+    assert_eq!(
+        app.variable_autocomplete_popup.suggestions,
+        vec!["sum_rate"]
+    );
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert!(app.editor.lines[2].contains(&format!("[[{DEP}]].sum_rate")));
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn masked_formula_does_not_leave_link_underlines_on_padding() {
+    const DEP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let body = format!("| a | b |\n| --- | --- |\n| 1 | :=[[{DEP}]].sum_rate |\n");
+    let (db, mut app, path) = app_with_linked_notes(&body, &[(DEP, "sum_rate := 42")]);
+    app.editor.cursor_line = 3;
+    app.editor.cursor_col = 0;
+    let display = app.prepare_display_line(2, 0);
+    assert!(!display.text.contains(DEP));
+    let (rows, cols) = super::super::input::terminal_size();
+    let mut buf = Buffer::empty(Rect::new(0, 0, cols as u16, rows as u16));
+    app.render_to_buffer(&mut buf);
+    assert!(
+        !buf.content
+            .iter()
+            .any(|cell| cell.modifier.contains(ratatui::style::Modifier::UNDERLINED)),
+        "unexpected underline in masked formula row"
+    );
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn qualified_table_completion_never_falls_back_to_local_helpers() {
+    const DEP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let prefix = format!("| 1 | :=[[{DEP}]].");
+    let body = format!("sum_local := 7\n| a | b |\n| --- | --- |\n{prefix} |");
+    let (db, mut app, path) = app_with_linked_notes(&body, &[(DEP, "other := 42")]);
+    app.editor.cursor_line = 3;
+    app.editor.cursor_col = prefix.chars().count();
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('s'), Key::Char('u'), Key::Char('m')],
+    );
+    assert!(!app.variable_autocomplete_popup.visible);
+    assert!(app.variable_autocomplete_state().is_none());
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

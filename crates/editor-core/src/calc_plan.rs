@@ -449,8 +449,12 @@ pub fn table_formula_function_completion(
         .rev()
         .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
         .count();
-    let query = &body[body.len() - name_len..];
-    if query.len() < min_chars.max(1) || query.as_bytes()[0].is_ascii_digit() {
+    let (before, query) = body.split_at(body.len() - name_len);
+    // A name after `.` is qualified (`[[id]].sum`), never a local helper.
+    if query.len() < min_chars.max(1)
+        || query.as_bytes()[0].is_ascii_digit()
+        || before.ends_with('.')
+    {
         return None;
     }
     let query_lower = query.to_ascii_lowercase();
@@ -3275,6 +3279,11 @@ mod tests {
         // No helper with that prefix.
         assert_eq!(
             table_formula_function_completion("| 1 | :=total |", 13, 3),
+            None
+        );
+        // Qualified name.
+        assert_eq!(
+            table_formula_function_completion("| 1 | :=x.sum |", 13, 3),
             None
         );
     }
