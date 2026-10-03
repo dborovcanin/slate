@@ -3341,6 +3341,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slate-mcp"
+version = "0.3.0"
+dependencies = [
+ "app-core",
+ "serde_json",
+ "ulid",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
