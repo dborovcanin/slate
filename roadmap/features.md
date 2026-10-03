@@ -33,7 +33,7 @@ Keep expensive indexing asynchronous and panels driven by cached state. Text-cha
 - [x] Daily notes — `slate today` / `:today` create today's note from a configurable template. Still open: optional Google Calendar / ICS integration pulls the day's events into the scaffold as a starting structure.
 - [ ] "On this day" recall view.
 - [ ] Random note resurfacing.
-- [ ] MCP for AI tools
+- [x] MCP for AI tools — `slate mcp` (off until `[mcp] enabled = true`) lets assistants and bots list, search, read, create, edit, rename and archive notes and manage collections; deleting needs `[mcp] allow_delete`. Still open: reminders and images over MCP.
 
 ## Organization
 

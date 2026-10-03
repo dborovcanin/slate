@@ -127,7 +127,7 @@ Collections are named, not identified by id: `collection: "Work"`. Results come 
 
 - **Revisions.** `read_note`, `list_notes` and every write return the note's `revision`. `update_note` needs it, and `replace_in_note` checks it when given. If the note changed since that revision (in the editor, or through another tool call), the write is refused with `the note changed since that revision ... read it again and redo the change`, and nothing is overwritten.
 - **Appends** are applied in one step against whatever text is stored, so they need no revision.
-- **New notes** get the same per-note modules as notes created in the editor (`[editor.modules]`). If `[editor.security] encrypt_notes = true`, the server needs the password variable (`password_env`, default `SLATE_NOTES_PASSWORD`) in its environment, or `create_note` fails.
+- **New notes** get the same per-note modules as notes created in the editor (`[editor.modules]`). If `[editor.security] encrypt_notes = true`, the server needs the password variable (`password_env`, default `SLATE_NOTES_PASSWORD`) in its environment, or `create_note` fails. A note created encrypted is closed to the client as soon as it exists, like any other encrypted note: the client cannot read, append to or edit it afterwards.
 - **History.** Bot edits are recorded in [note history](features.md#note-history) like any other save, so `:history` can restore a version from before them.
 - **Titles** come from the first line, as in the editor. A note renamed in the browser (`r`) keeps its name.
 
@@ -137,14 +137,16 @@ While Slate is idle, it checks about once a second (unless `[editor] reload_outs
 
 - **No unsaved changes:** Slate loads the new text in place. Your cursor and reminders stay on the lines they were on, and the status line shows `note changed outside Slate; reloaded (u undoes)`. The reload is a single undo step.
 - **Note deleted** (`delete_note`): Slate keeps the text on screen and shows `note was deleted outside Slate (:w! saves it again)`.
+- **Note encrypted elsewhere and then edited:** Slate locks the open note instead of showing it as empty, and asks for its password at the first edit (`note was encrypted outside Slate; enter its password to edit`).
+- **Locked note decrypted elsewhere and then edited:** Slate reopens it with the new text (`note was decrypted outside Slate; reloaded`).
 - **Unsaved changes:** Slate keeps your text and shows `note changed outside Slate (:e! loads it, :w! keeps your version)`. With autosave on, the next autosave stops with a conflict instead of overwriting the bot's change. Use `:e!` to take the stored note (dropping your edits) or `:w!` to keep yours (dropping the bot's).
 
-The check waits while an overlay (command bar, switcher, browser, search, visual selection) is open. Lists such as the note switcher pick up new notes the next time they open.
+Encrypting or decrypting a note does not change its revision, so either one alone shows up the next time the note is saved or reopened rather than right away. The check waits while an overlay (command bar, switcher, browser, search, visual selection) is open. Lists such as the note switcher pick up new notes the next time they open.
 
 ## What the server cannot do
 
 - **Delete notes**, unless you allow it. Without `[mcp] allow_delete = true`, `delete_note` isn't offered and `archive_note` is the way to put a note away. With it, deleting also removes the note's history, so `:history` cannot bring it back.
-- **Open encrypted notes.** Encrypted notes, including notes in encrypted collections, are listed (`"encrypted": true`) but cannot be read, searched or written. Notes cannot be added to or removed from an encrypted collection, since that needs its key. They can only be unlocked in Slate.
+- **Open encrypted notes.** Encrypted notes, including notes in encrypted collections and notes the client itself created while `encrypt_notes` is on, are listed (`"encrypted": true`) but cannot be read, searched or written. Notes cannot be added to or removed from an encrypted collection, since that needs its key. They can only be unlocked in Slate.
 - **Reach files.** Markdown files opened with `slate file.md` aren't available, so a client cannot read or write arbitrary files through the server.
 - **Set reminders, change modules, or rename or delete collections.**
 

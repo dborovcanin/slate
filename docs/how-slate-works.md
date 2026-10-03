@@ -28,6 +28,7 @@ Slate stores notes in SQLite with WAL mode.
 - an encrypted note's text and history are sealed with a random per-note key; `wrapped_key` holds that key sealed by the note's password (PBKDF2 with `encryption_salt`) or by the key of the encrypted collection in `key_collection_id`, whose own key is stored in `collection_keys` sealed by the collection's password (see `crates/app-core/src/storage/encryption.rs`)
 - members of an encrypted collection stay encrypted: joining seals a plain note under the collection's key, and `Db::decrypt_note` and `Db::encrypt_note` refuse a member (decrypting, or moving it off the collection's key); leaving keeps the collection's key until the collection is decrypted
 - schema changes run once per database, in order, recorded in `PRAGMA user_version`
+- `updated_at` is the note's revision: every save is checked against the revision its writer read, so a save never lands on text it has not seen (`:w!` overrides). Other processes write to the same database (`slate append`, `slate capture`, IMAP sync, `slate mcp`, another Slate); an idle editor checks the open note's revision about once a second and takes outside changes in as one undoable edit (`[editor] reload_outside_changes`, see [MCP Server](mcp.md#working-alongside-the-editor))
 
 Markdown file notes are also supported:
 

@@ -53,6 +53,10 @@ initial_sync_max_messages = 200
 initial_sync_past_days = 1
 max_message_bytes = 8388608
 max_body_bytes = 524288
+
+[mcp]
+enabled = false
+allow_delete = false
 ```
 
 ## Theme settings
