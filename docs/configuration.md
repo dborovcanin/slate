@@ -19,6 +19,7 @@ icons = "nerd"
 markdown_autoformat = true
 checklist_auto_reorder = true
 autosave = true
+reload_outside_changes = true
 format_on_save = false
 vim_mode = false
 wrap = true
@@ -52,6 +53,10 @@ initial_sync_max_messages = 200
 initial_sync_past_days = 1
 max_message_bytes = 8388608
 max_body_bytes = 524288
+
+[mcp]
+enabled = false
+allow_delete = false
 ```
 
 ## Theme settings
@@ -103,6 +108,7 @@ max_body_bytes = 524288
 - `markdown_autoformat`
 - `checklist_auto_reorder`
 - `autosave`
+- `reload_outside_changes`
 - `format_on_save`
 - `vim_mode`
 - `wrap`
@@ -115,6 +121,7 @@ Behavior notes:
 - `autosave = true` enables implicit save flows (idle flush + save on exit/switch).
 - with `autosave = false`, explicit writes persist body changes. Switching notes or quitting with unsaved changes is refused once (vim's E37); repeating it, `:q!` or `:e!` discards them.
 - a failed save (for example a note changed elsewhere) keeps the editor open with the changes; autosave waits for the next edit. `:w!` overwrites, `:e!` reloads.
+- `reload_outside_changes = true` (default) checks the open note about once a second while idle and loads changes made elsewhere (`slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate) as one undoable edit when there are no unsaved changes. Set it to `false` to skip the check; such changes then show up as a save conflict, as before.
 - `format_on_save = true` runs format before save.
 - `vim_mode = true` starts the editor in vim normal mode.
 - `wrap = true` (default) soft-wraps long lines at word boundaries. Tables, code fences, code blocks, and code files keep horizontal scrolling so columns stay aligned. With `wrap = false` every line scrolls horizontally.
@@ -179,6 +186,15 @@ Runtime validation constraints:
 - `initial_sync_past_days`: `0..3650`
 - `max_body_bytes <= max_message_bytes`
 - `host`, `username`, `password_env`, and `folder` must be non-empty
+
+## MCP server
+
+`[mcp]` keys:
+
+- `enabled` (default `false`): lets `slate mcp` serve notes to MCP clients such as AI assistants. While it is `false`, `slate mcp` refuses to start.
+- `allow_delete` (default `false`): also offers `delete_note`, which deletes a note and its history for good. Without it, clients can only move notes to the `Archive` collection.
+
+Notes created over MCP use `[editor.modules]` and `[editor.security]` like notes created in the editor. See [MCP Server](mcp.md) for client setup.
 
 ## Date format tokens
 

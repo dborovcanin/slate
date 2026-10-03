@@ -33,6 +33,8 @@ enum Mode {
     Append,
     /// Append a timestamped entry to today's daily note; `None` reads stdin.
     Capture(Option<String>),
+    /// Serve notes to MCP clients over stdio.
+    Mcp,
 }
 
 pub(crate) fn note_id_for_file(path: &Path) -> String {
@@ -62,6 +64,7 @@ fn print_help() {
   slate capture [text...]
   slate append [--id <note-id>]
   slate imap-sync
+  slate mcp
 
 Modes:
   <file>      Open a text/code file
@@ -70,6 +73,8 @@ Modes:
               (text from arguments, or piped stdin)
   append      Append stdin to a note and exit
   imap-sync   Pull messages from configured IMAP inbox once
+  mcp         Serve notes to MCP clients (AI assistants) over stdio;
+              off unless [mcp] enabled = true in the config
 
 Options:
   --new, -n   Create and edit a new note
@@ -86,6 +91,7 @@ fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions
     let mut force_imap = false;
     let mut force_append = false;
     let mut force_today = false;
+    let mut force_mcp = false;
     let mut capture: Option<Option<String>> = None;
     let mut saw_note_flag = false;
     let mut opts = TerminalOptions::default();
@@ -100,6 +106,7 @@ fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions
             }
             "imap-sync" => force_imap = true,
             "today" => force_today = true,
+            "mcp" => force_mcp = true,
             "capture" => {
                 // Everything after `capture` is the text to capture.
                 let text = args[i + 1..].join(" ");
@@ -154,12 +161,24 @@ fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions
         return Err("Cannot combine imap-sync with note selection flags".to_string());
     }
 
-    let subcommands = [force_append, force_imap, force_today, capture.is_some()]
-        .iter()
-        .filter(|set| **set)
-        .count();
+    let subcommands = [
+        force_append,
+        force_imap,
+        force_today,
+        force_mcp,
+        capture.is_some(),
+    ]
+    .iter()
+    .filter(|set| **set)
+    .count();
     if subcommands > 1 {
-        return Err("Use only one of append, imap-sync, today, capture".to_string());
+        return Err("Use only one of append, imap-sync, today, capture, mcp".to_string());
+    }
+    if force_mcp {
+        if saw_note_flag || opts.note_id.is_some() || startup_file.is_some() {
+            return Err("mcp cannot be combined with note selection".to_string());
+        }
+        return Ok((Mode::Mcp, opts));
     }
     if (force_today || capture.is_some())
         && (saw_note_flag || opts.note_id.is_some() || startup_file.is_some())
@@ -276,6 +295,37 @@ fn run_capture(text: Option<String>, theme: &config::ThemeConfig) -> Result<(), 
     Ok(())
 }
 
+/// Serves MCP on stdin/stdout until the client closes stdin. Nothing else may
+/// write to stdout meanwhile: it carries the protocol.
+fn run_mcp(theme: &config::ThemeConfig) -> Result<(), String> {
+    let (mcp, path) = config::load_mcp_config()?;
+    if !mcp.enabled {
+        return Err(format!(
+            "slate mcp: the MCP server is off; set `enabled = true` under [mcp] in {}",
+            path.display()
+        ));
+    }
+    let core = AppCore::open_default()?;
+    let modules = &theme.default_modules;
+    let defaults = slate_mcp::NoteDefaults {
+        modules: app_core::storage::NoteModules {
+            math: modules.math,
+            table: modules.table,
+            variables: modules.variables,
+            style: modules.style,
+            cross_note: modules.cross_note,
+        },
+        security: theme.security.clone(),
+    };
+    let mut server = slate_mcp::Server::new(core.db().clone(), defaults, mcp.allow_delete);
+    slate_mcp::serve(
+        &mut server,
+        std::io::stdin().lock(),
+        std::io::stdout().lock(),
+    )
+    .map_err(|e| format!("slate mcp: {e}"))
+}
+
 fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(), String> {
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
@@ -366,6 +416,7 @@ pub fn run() {
         Ok((Mode::ImapSync, _)) => run_imap_sync(),
         Ok((Mode::Append, opts)) => run_append(opts.note_id.as_deref()),
         Ok((Mode::Capture(text), _)) => run_capture(text, &cfg),
+        Ok((Mode::Mcp, _)) => run_mcp(&cfg),
         Ok((Mode::Today, mut opts)) => AppCore::open_default()
             .and_then(|core| ensure_today_note(core.db(), &cfg))
             .and_then(|id| {
@@ -494,6 +545,14 @@ mod tests {
         assert_eq!(mode, Mode::Capture(None));
         let err = parse_args(&args(&["capture"]), true).expect_err("tty without text");
         assert!(err.contains("Nothing to capture"));
+    }
+
+    #[test]
+    fn parse_supports_mcp_mode_without_a_tty() {
+        let (mode, _) = parse_args(&args(&["mcp"]), false).expect("parsed");
+        assert_eq!(mode, Mode::Mcp);
+        assert!(parse_args(&args(&["mcp", "--new"]), false).is_err());
+        assert!(parse_args(&args(&["mcp", "today"]), false).is_err());
     }
 
     #[test]

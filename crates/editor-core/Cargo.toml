@@ -9,6 +9,7 @@ regex = "1"
 rustc-hash = "2"
 table-syntax = { path = "../table-syntax" }
 fend-core = "1"
+similar = "3.2.0"
 
 [dev-dependencies]
 serde_json = "1"

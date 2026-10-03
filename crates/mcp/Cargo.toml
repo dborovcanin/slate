@@ -1,0 +1,13 @@
+[package]
+name = "slate-mcp"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name = "slate_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+app-core = { path = "../app-core" }
+serde_json = "1"
+ulid = "1"

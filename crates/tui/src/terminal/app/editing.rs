@@ -15,7 +15,8 @@ use super::{
     UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
 use crate::terminal::text_utils::{
-    byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
+    byte_index, char_col_at_byte, cursor_render_char_col, remove_char_at,
+    viewport_col_for_display_col,
 };
 use crate::terminal::{folding, input};
 use app_core::calc::ExternVar;
@@ -3227,7 +3228,7 @@ impl TerminalApp {
                 let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, target);
                 if let Some(line) = self.editor.lines.get(line_idx) {
                     self.editor.cursor_line = line_idx;
-                    self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
+                    self.editor.cursor_col = char_col_at_byte(line, line_byte);
                 }
                 self.adjust_cursor_after_operation(op);
                 self.adjust_scroll();
@@ -3314,7 +3315,7 @@ impl TerminalApp {
             let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, final_anchor);
             if let Some(line) = self.editor.lines.get(line_idx) {
                 self.editor.cursor_line = line_idx;
-                self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
+                self.editor.cursor_col = char_col_at_byte(line, line_byte);
             }
             // A rewrite of the cursor line alone (e.g. a table row reformatted
             // after a keystroke) is covered by the incremental fold update in
@@ -3394,7 +3395,7 @@ impl TerminalApp {
         let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, final_anchor);
         if let Some(line) = self.editor.lines.get(line_idx) {
             self.editor.cursor_line = line_idx;
-            self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
+            self.editor.cursor_col = char_col_at_byte(line, line_byte);
         }
         self.folds.rescan_pending = true;
         self.mark_edited_from_line_with_span(

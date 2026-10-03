@@ -15,9 +15,9 @@ Keeping semantics in the core crates remains a goal: it keeps behavior testable 
 
 Slate is a **computational notebook for the terminal**: a fast scratchpad where notes calculate. Its distinctive pieces are live inline calculation with units, variables shared across notes, spreadsheet-style table formulas, styled-in-place markdown editing (no split preview), and instant capture.
 
-Full knowledge-base apps (for example ZenNotes TUI: vault of Markdown files, panes and tabs, kanban tasks, CSV databases, preview pane, MCP) cover organisation breadth. Slate should not chase that feature list. New work should either strengthen the computational notebook or remove friction from everyday editing.
+Full knowledge-base apps (for example ZenNotes TUI: vault of Markdown files, panes and tabs, kanban tasks, CSV databases, preview pane) cover organisation breadth. Slate should not chase that feature list. New work should either strengthen the computational notebook or remove friction from everyday editing.
 
-Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`, the yazi-style collection browser (`Ctrl+B`, `-`, `:browse`) with configurable icons (`[theme] icons`), note history (`:history`).
+Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`, the yazi-style collection browser (`Ctrl+B`, `-`, `:browse`) with configurable icons (`[theme] icons`), note history (`:history`), an MCP server for AI assistants and bots (`slate mcp`, off by default) with the open note reloading changes made outside it.
 
 ### Next steps (ordered)
 

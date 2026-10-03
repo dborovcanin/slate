@@ -14,6 +14,7 @@ const DEFAULT_DAILY_TEMPLATE: &str = "# {date}\n\n";
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_CHECKLIST_AUTO_REORDER: bool = true;
 const DEFAULT_AUTOSAVE: bool = true;
+const DEFAULT_RELOAD_OUTSIDE_CHANGES: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
 const DEFAULT_DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M";
 const DEFAULT_FORMAT_ON_SAVE: bool = false;
@@ -43,6 +44,8 @@ const DEFAULT_IMAP_MAX_BODY_BYTES: usize = 512 * 1024;
 const DEFAULT_PERF_ENABLED: bool = false;
 const DEFAULT_PERF_LOG_PATH: &str = "";
 const DEFAULT_BACKGROUND_TASKS_ENABLED: bool = true;
+const DEFAULT_MCP_ENABLED: bool = false;
+const DEFAULT_MCP_ALLOW_DELETE: bool = false;
 const MIN_IMAP_MAX_BYTES: usize = 1024;
 const MAX_IMAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const MIN_IMAP_POLL_SECONDS: u64 = 10;
@@ -92,6 +95,10 @@ markdown_autoformat = true
 checklist_auto_reorder = true
 # Persist edits automatically (idle flush + save on exit/switch).
 autosave = true
+# Load changes made to the open note outside this window (slate mcp, slate
+# append, slate capture, IMAP sync, another Slate) while it has no unsaved
+# edits. Checks the stored note about once a second while idle.
+reload_outside_changes = true
 # Run :format before every save.
 format_on_save = false
 # Start the editor in Vim normal mode.
@@ -199,6 +206,16 @@ images = "auto"
 # Maximum terminal row height for an inline image. Range: 1..100
 image_max_rows = 15
 
+[mcp]
+# Let `slate mcp` serve notes to MCP clients (AI assistants and bots) over
+# stdio. Clients can list, search, read, create, edit, rename and archive
+# notes and manage collections; they cannot open encrypted notes. Off by
+# default.
+enabled = false
+# Also let clients delete notes for good (with their history). Without it
+# they can only move notes to the Archive collection.
+allow_delete = false
+
 [startup]
 # Enable non-critical startup work asynchronously after first paint/edit
 # (prewarm/hydration/background sync loops).
@@ -257,6 +274,8 @@ pub struct ThemeConfig {
     pub markdown_autoformat: bool,
     pub checklist_auto_reorder: bool,
     pub autosave: bool,
+    /// Take in changes made to the open note elsewhere while idle.
+    pub reload_outside_changes: bool,
     pub format_on_save: bool,
     pub vim_mode: bool,
     pub wrap: bool,
@@ -340,6 +359,23 @@ impl Default for PerfConfig {
         Self {
             enabled: DEFAULT_PERF_ENABLED,
             log_path: DEFAULT_PERF_LOG_PATH.to_string(),
+        }
+    }
+}
+
+/// `[mcp]`: the `slate mcp` server for MCP clients.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConfig {
+    pub enabled: bool,
+    /// Clients may delete notes, not only archive them.
+    pub allow_delete: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_MCP_ENABLED,
+            allow_delete: DEFAULT_MCP_ALLOW_DELETE,
         }
     }
 }
@@ -465,6 +501,7 @@ impl Default for ThemeConfig {
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
             checklist_auto_reorder: DEFAULT_CHECKLIST_AUTO_REORDER,
             autosave: DEFAULT_AUTOSAVE,
+            reload_outside_changes: DEFAULT_RELOAD_OUTSIDE_CHANGES,
             format_on_save: DEFAULT_FORMAT_ON_SAVE,
             vim_mode: DEFAULT_VIM_MODE,
             wrap: DEFAULT_WRAP,
@@ -498,6 +535,8 @@ struct FileConfig {
     terminal: TerminalSection,
     #[serde(default)]
     startup: StartupSection,
+    #[serde(default)]
+    mcp: McpSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -526,6 +565,7 @@ struct EditorSection {
     markdown_autoformat: Option<bool>,
     checklist_auto_reorder: Option<bool>,
     autosave: Option<bool>,
+    reload_outside_changes: Option<bool>,
     format_on_save: Option<bool>,
     vim_mode: Option<bool>,
     wrap: Option<bool>,
@@ -589,6 +629,12 @@ struct PerfSection {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct StartupSection {
     background_tasks_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct McpSection {
+    enabled: Option<bool>,
+    allow_delete: Option<bool>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -769,6 +815,18 @@ pub fn load_web_search_config() -> WebSearchConfig {
     }
 }
 
+/// Reads `[mcp]`. Unlike the other loaders, a config that cannot be read or
+/// parsed is an error rather than the defaults, so the server never starts
+/// from a config the user did not mean.
+pub fn load_mcp_config() -> Result<(McpConfig, PathBuf), String> {
+    let path = ensure_config_file()?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let config =
+        parse_mcp_config(&text).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+    Ok((config, path))
+}
+
 pub fn load_terminal_images_config() -> TerminalImagesConfig {
     let path = match ensure_config_file() {
         Ok(path) => path,
@@ -811,6 +869,10 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
             .checklist_auto_reorder
             .unwrap_or(DEFAULT_CHECKLIST_AUTO_REORDER),
         autosave: raw.editor.autosave.unwrap_or(DEFAULT_AUTOSAVE),
+        reload_outside_changes: raw
+            .editor
+            .reload_outside_changes
+            .unwrap_or(DEFAULT_RELOAD_OUTSIDE_CHANGES),
         format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
         wrap: raw.editor.wrap.unwrap_or(DEFAULT_WRAP),
@@ -921,6 +983,14 @@ fn parse_perf_config(text: &str) -> Result<PerfConfig, String> {
     Ok(PerfConfig {
         enabled: raw.perf.enabled.unwrap_or(DEFAULT_PERF_ENABLED),
         log_path: normalize_optional_path(raw.perf.log_path),
+    })
+}
+
+fn parse_mcp_config(text: &str) -> Result<McpConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(McpConfig {
+        enabled: raw.mcp.enabled.unwrap_or(DEFAULT_MCP_ENABLED),
+        allow_delete: raw.mcp.allow_delete.unwrap_or(DEFAULT_MCP_ALLOW_DELETE),
     })
 }
 
@@ -1227,6 +1297,22 @@ mod tests {
     }
 
     #[test]
+    fn reload_outside_changes_is_on_unless_turned_off() {
+        assert!(
+            parse_theme_config("")
+                .expect("config")
+                .reload_outside_changes
+        );
+        assert!(
+            parse_theme_config(DEFAULT_CONFIG)
+                .expect("config")
+                .reload_outside_changes
+        );
+        let cfg = parse_theme_config("[editor]\nreload_outside_changes = false").expect("config");
+        assert!(!cfg.reload_outside_changes);
+    }
+
+    #[test]
     fn parses_checklist_auto_reorder_override() {
         let cfg = parse_theme_config("[editor]\nchecklist_auto_reorder = false").expect("config");
         assert!(!cfg.checklist_auto_reorder);
@@ -1418,6 +1504,19 @@ mod tests {
         let offset = UtcOffset::from_hms(2, 0, 0).expect("offset");
         let note_id = resolve_email_note_id(&special, now, offset);
         assert_eq!(note_id, "inbox-email-2024-05-01");
+    }
+
+    #[test]
+    fn mcp_is_off_unless_enabled() {
+        assert_eq!(parse_mcp_config("").expect("parsed"), McpConfig::default());
+        assert!(!McpConfig::default().enabled);
+        let defaults = parse_mcp_config(DEFAULT_CONFIG).expect("parsed");
+        assert!(!defaults.enabled);
+        assert!(!defaults.allow_delete);
+        let parsed =
+            parse_mcp_config("[mcp]\nenabled = true\nallow_delete = true\n").expect("parsed");
+        assert!(parsed.enabled);
+        assert!(parsed.allow_delete);
     }
 
     #[test]

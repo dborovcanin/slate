@@ -824,6 +824,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "similar",
  "table-syntax",
 ]
 
@@ -3333,11 +3334,21 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "slate-mcp",
  "time",
  "ttf-parser",
  "ulid",
  "unicode-width",
  "url",
+]
+
+[[package]]
+name = "slate-mcp"
+version = "0.3.0"
+dependencies = [
+ "app-core",
+ "serde_json",
+ "ulid",
 ]
 
 [[package]]

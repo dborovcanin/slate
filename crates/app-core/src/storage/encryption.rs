@@ -512,6 +512,12 @@ impl Db {
         self.seal_plain_note(conn, id, &Protector::password(&password)?, false)
     }
 
+    /// Forgets the key this handle holds for note `id`, so it is locked
+    /// again until unlocked with its password.
+    pub fn lock_note(&self, id: &str) {
+        self.note_access.clear(id);
+    }
+
     pub fn unlock_note(&self, id: &str, password: &str) -> Result<Note, String> {
         let password = normalize_password(password)?;
         let conn = self.conn.lock()?;

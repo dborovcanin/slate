@@ -18,6 +18,11 @@ fn note_sources(db: &Db) -> app_core::note_sources::NoteSourceService {
     app_core::note_sources::NoteSourceService::new(db.clone())
 }
 
+/// How often an idle editor checks whether the open note was changed
+/// outside it. Each check reads one revision (a row lookup, or a file's
+/// modification time).
+const OUTSIDE_CHANGE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
 const TERMINAL_PERF_COMMAND_SUGGESTIONS: [(&str, &str); 8] = [
     ("perf status", "show terminal perf tracing status"),
     ("perf where", "show terminal perf log location"),
@@ -2571,6 +2576,114 @@ impl TerminalApp {
         self.autosave_paused_at = None;
         self.leave_refused_at = None;
         Ok(())
+    }
+
+    /// Takes in a change made to the open note outside this session (`slate
+    /// mcp`, `slate append`, another Slate), checked about once a second
+    /// while idle. A buffer without unsaved changes gets the new text as one
+    /// edit, so the cursor and reminders follow it and `u` undoes it. One
+    /// with unsaved changes keeps them: the status says the stored note
+    /// moved on, and saving reports the conflict as before. Off with
+    /// `[editor] reload_outside_changes = false`.
+    pub(super) fn maybe_take_outside_change(&mut self, db: &Db) {
+        if !self.note_creation_theme.reload_outside_changes
+            || self.outside_change_checked_at.elapsed() < OUTSIDE_CHANGE_CHECK_INTERVAL
+        {
+            return;
+        }
+        self.outside_change_checked_at = Instant::now();
+        // A locked note is checked too: it may have been decrypted elsewhere.
+        if !matches!(self.mode, UiMode::Editor | UiMode::Normal) || self.background_save.is_some() {
+            return;
+        }
+        let sources = note_sources(db);
+        let identity = sources.parse_identity(&self.active_note.id);
+        let revision = match sources.get_note_revision(&identity) {
+            Ok(Some(revision)) => revision,
+            Ok(None) => {
+                // Deleted elsewhere (e.g. `delete_note` over MCP): keep the
+                // buffer, which a forced write stores again.
+                if self.outside_change_reported.as_deref() != Some("") {
+                    self.outside_change_reported = Some(String::new());
+                    self.status = "note was deleted outside Slate (:w! saves it again)".to_string();
+                    self.render_state.dirty = true;
+                }
+                return;
+            }
+            Err(_) => return,
+        };
+        if revision == self.active_note.updated_at {
+            return;
+        }
+        if self.dirty || self.reminders_unsaved() {
+            if self.outside_change_reported.as_deref() != Some(revision.as_str()) {
+                self.outside_change_reported = Some(revision);
+                self.status =
+                    "note changed outside Slate (:e! loads it, :w! keeps your version)".to_string();
+                self.render_state.dirty = true;
+            }
+            return;
+        }
+        // Reminders deferred at startup are placed on the buffer first, so
+        // the edit below moves them too.
+        self.hydrate_startup_reminders(db, true);
+        if self.startup_reminder_hydration_pending {
+            return;
+        }
+        let Ok(Some(note)) = sources.open_note(&identity) else {
+            return;
+        };
+        let locked = note.access_mode != NoteAccessMode::None && !note.is_unlocked;
+        if locked && !self.active_note_is_editable() {
+            // Still locked here: there is no text to show, only a revision.
+            self.active_note.updated_at = note.updated_at;
+            return;
+        }
+        if locked || note.access_mode != self.active_note.access_mode {
+            // Encrypted or decrypted elsewhere: a locked note has no text to
+            // diff against, so open it afresh, as switching to it would. A
+            // locked one asks for its password at the first edit.
+            let (line, col) = (self.editor.cursor_line, self.editor.cursor_col);
+            if self.set_active_note(db, note).is_err() {
+                return;
+            }
+            if !locked {
+                self.editor.cursor_line = line.min(self.editor.lines.len().saturating_sub(1));
+                self.editor.cursor_col = col;
+                self.adjust_cursor();
+                self.adjust_scroll();
+            }
+            self.status = if locked {
+                "note was encrypted outside Slate; enter its password to edit".to_string()
+            } else {
+                "note was decrypted outside Slate; reloaded".to_string()
+            };
+            self.outside_change_reported = None;
+            self.render_state.dirty = true;
+            return;
+        }
+        let text = self
+            .editor
+            .joined_text_cache
+            .clone()
+            .unwrap_or_else(|| join_lines(&self.editor.lines));
+        if let Some(op) = crate::editor_core::operations::replace_text(&text, &note.body) {
+            self.history.break_coalescing();
+            self.apply_edit_operation(&op);
+            self.history.break_coalescing();
+            // The buffer now holds the stored text.
+            self.dirty = false;
+            self.history.checkpoint(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            );
+            self.status = "note changed outside Slate; reloaded (u undoes)".to_string();
+        }
+        self.active_note.updated_at = note.updated_at;
+        self.outside_change_reported = None;
+        self.update_switcher_item_after_body_save();
+        self.render_state.dirty = true;
     }
 
     fn update_switcher_item_after_body_save(&mut self) {

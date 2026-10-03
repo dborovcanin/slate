@@ -24,6 +24,16 @@ pub fn line_char_len(text: &str) -> usize {
     text.chars().count()
 }
 
+/// The char column of byte offset `byte` in `text`; an offset past the end
+/// or inside a multi-byte char counts the chars that start before it.
+pub fn char_col_at_byte(text: &str, byte: usize) -> usize {
+    let mut end = byte.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].chars().count()
+}
+
 pub fn byte_index(text: &str, char_idx: usize) -> usize {
     if char_idx == 0 {
         return 0;
@@ -200,4 +210,17 @@ pub fn case_insensitive_matches(line: &str, query_lower: &str) -> Vec<(usize, us
         }
     }
     matches
+}
+
+#[cfg(test)]
+mod char_col_tests {
+    use super::char_col_at_byte;
+
+    #[test]
+    fn char_col_at_byte_rounds_down_inside_multibyte_chars() {
+        assert_eq!(char_col_at_byte("éx", 0), 0);
+        assert_eq!(char_col_at_byte("éx", 1), 0);
+        assert_eq!(char_col_at_byte("éx", 2), 1);
+        assert_eq!(char_col_at_byte("éx", 99), 2);
+    }
 }

@@ -2999,3 +2999,258 @@ fn module_command_keeps_a_save_conflict_with_changes_made_elsewhere() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+/// Runs the idle check for outside changes now, as if a second had passed.
+fn take_outside_change(app: &mut TerminalApp, db: &Db) {
+    app.outside_change_checked_at = Instant::now() - Duration::from_secs(2);
+    app.maybe_take_outside_change(db);
+}
+
+#[test]
+fn outside_change_reloads_a_clean_buffer_as_one_undoable_edit() {
+    let (db, mut app, path) = app_with_note("# Log\n- a");
+    app.autosave_enabled = false;
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 2;
+
+    // Nothing changed: nothing happens.
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.history.undo_depth(), 0);
+
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "intro\n# Log\n- a\n- b")
+        .expect("outside edit");
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["intro", "# Log", "- a", "- b"]);
+    assert!(!app.dirty);
+    assert_eq!(
+        Some(app.active_note.updated_at.clone()),
+        db.get_note_updated_at("n1").expect("revision")
+    );
+    // The cursor stays on the text it was on.
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (2, 2));
+    assert!(app.status.contains("reloaded"), "{}", app.status);
+
+    app.undo(&db);
+    assert_eq!(app.editor.lines, ["# Log", "- a"]);
+    assert!(app.dirty, "undoing the reload is an unsaved edit");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_change_keeps_unsaved_edits_and_warns_once() {
+    let (db, mut app, path) = app_with_conflicting_edit();
+    app.autosave_enabled = false;
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["mine"]);
+    assert!(app.dirty);
+    assert!(
+        app.status.contains("changed outside Slate"),
+        "{}",
+        app.status
+    );
+
+    app.status.clear();
+    take_outside_change(&mut app, &db);
+    assert!(app.status.is_empty(), "warned once per change");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_change_is_left_alone_when_turned_off() {
+    let (db, mut app, path) = app_with_note("one");
+    app.autosave_enabled = false;
+    app.note_creation_theme.reload_outside_changes = false;
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "two").expect("outside edit");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["one"]);
+    assert!(!app.status.contains("outside Slate"), "{}", app.status);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_delete_keeps_the_buffer_and_warns_once() {
+    let (db, mut app, path) = app_with_note("keep me");
+    app.autosave_enabled = false;
+    db.delete_note("n1", None).expect("deleted elsewhere");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["keep me"]);
+    assert!(
+        app.status.contains("deleted outside Slate"),
+        "{}",
+        app.status
+    );
+    app.status.clear();
+    take_outside_change(&mut app, &db);
+    assert!(app.status.is_empty(), "warned once");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_change_waits_while_an_overlay_is_open() {
+    let (db, mut app, path) = app_with_note("one");
+    app.autosave_enabled = false;
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "two").expect("outside edit");
+
+    app.mode = UiMode::CommandBar;
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["one"]);
+
+    app.mode = UiMode::Editor;
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["two"]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_change_keeps_the_cursor_on_a_char_boundary() {
+    let (db, mut app, path) = app_with_note("ab");
+    app.autosave_enabled = false;
+    app.mode = UiMode::Normal;
+    app.editor.cursor_col = 1;
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "éx").expect("outside edit");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["éx"]);
+    assert!(app.editor.cursor_col <= 1);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_encryption_locks_the_open_note_instead_of_blanking_it() {
+    let (db, mut app, path) = app_with_note("secret text");
+    app.autosave_enabled = false;
+    let other = Db::open(path.clone()).expect("second process");
+    std::thread::sleep(Duration::from_millis(2));
+    other.encrypt_note("n1", "pw").expect("encrypted elsewhere");
+    other
+        .save_note("n1", "new private")
+        .expect("edited elsewhere");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert!(!app.active_note_is_editable());
+    assert!(!app.dirty);
+    assert!(
+        app.status.contains("encrypted outside Slate"),
+        "{}",
+        app.status
+    );
+    assert_eq!(app.history.undo_depth(), 0, "no undoable blanking edit");
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_decryption_reloads_the_note_as_plain_text() {
+    let (db, mut app, path) = app_with_note("one");
+    app.autosave_enabled = false;
+    let other = Db::open(path.clone()).expect("second process");
+    other.encrypt_note("n1", "pw").expect("encrypted");
+    db.unlock_note("n1", "pw").expect("unlocked here");
+    app.reload_active_note(&db).expect("open unlocked");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+
+    std::thread::sleep(Duration::from_millis(2));
+    // Encrypting or decrypting keeps the revision; the edit after it moves it.
+    other.decrypt_note("n1", "pw").expect("decrypted elsewhere");
+    other.save_note("n1", "two").expect("edited elsewhere");
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.editor.lines, ["two"]);
+    assert!(
+        app.status.contains("decrypted outside Slate"),
+        "{}",
+        app.status
+    );
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+/// `n1` encrypted by another process and open here, locked.
+fn app_with_locked_note(body: &str) -> (Db, Db, TerminalApp, PathBuf) {
+    let (db, mut app, path) = app_with_note(body);
+    app.autosave_enabled = false;
+    let other = Db::open(path.clone()).expect("second process");
+    other.encrypt_note("n1", "pw").expect("encrypted elsewhere");
+    app.reload_active_note(&db).expect("reopened");
+    app.mode = UiMode::Editor;
+    assert!(!app.active_note_is_editable(), "locked here");
+    (db, other, app, path)
+}
+
+#[test]
+fn outside_decryption_unlocks_a_locked_open_note() {
+    let (db, other, mut app, path) = app_with_locked_note("one");
+    std::thread::sleep(Duration::from_millis(2));
+    other.decrypt_note("n1", "pw").expect("decrypted elsewhere");
+    other.save_note("n1", "two").expect("edited elsewhere");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert!(app.active_note_is_editable());
+    assert_eq!(app.editor.lines, ["two"]);
+    assert!(
+        app.status.contains("decrypted outside Slate"),
+        "{}",
+        app.status
+    );
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn a_locked_open_note_edited_elsewhere_stays_locked_quietly() {
+    let (db, other, mut app, path) = app_with_locked_note("one");
+    other.unlock_note("n1", "pw").expect("unlocked elsewhere");
+    std::thread::sleep(Duration::from_millis(2));
+    other.save_note("n1", "private").expect("edited elsewhere");
+    app.status.clear();
+
+    take_outside_change(&mut app, &db);
+    assert!(!app.active_note_is_editable());
+    assert!(app.status.is_empty(), "{}", app.status);
+    assert_eq!(
+        Some(app.active_note.updated_at.clone()),
+        db.get_note_updated_at("n1").expect("revision")
+    );
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

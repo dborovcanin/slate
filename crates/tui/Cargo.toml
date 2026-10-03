@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 app-core = { path = "../app-core" }
 editor-core = { path = "../editor-core" }
+slate-mcp = { path = "../mcp" }
 ulid = "1"
 regex = "1"
 aho-corasick = "1"
