@@ -3333,6 +3333,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "slate-mcp",
  "time",
  "ttf-parser",
  "ulid",
