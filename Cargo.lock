@@ -824,6 +824,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "similar",
  "table-syntax",
 ]
 
