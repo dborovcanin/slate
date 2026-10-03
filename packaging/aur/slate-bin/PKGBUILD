@@ -1,27 +1,35 @@
+# Maintainer: Dusan Borovcanin <borovcanindusan1@gmail.com>
+
+# The binary the Release workflow builds for a v* tag, repackaged.
+#
+# pkgver and sha256sums are rewritten by scripts/aur-publish.sh when a tag is
+# released, so the copy in the repository always describes a real release.
+
 pkgname=slate-bin
-pkgver=0.2.0.r0.g0000000
+_pkgname=slate
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="Minimal, keyboard-first terminal note-taking scratchpad (prebuilt binary)"
-arch=("x86_64")
+# The Release workflow publishes one Linux binary, and it is x86-64.
+arch=('x86_64')
 url="https://github.com/dborovcanin/slate"
-license=("custom")
-depends=(
-  "gcc-libs"
-  "glibc"
-)
-provides=("slate")
-conflicts=("slate" "slate-git")
-source=(
-  "slate-${pkgver}-linux-x86_64.tar.gz::https://github.com/dborovcanin/slate/releases/download/aur-bin/slate-${pkgver}-linux-x86_64.tar.gz"
-  "slate.desktop"
-)
-sha256sums=(
-  "REPLACE_WITH_CI_SHA256"
-  "5f9574913c9693ad1b5e656211d8944a3e89ff3dc94dd17ee87bc3740acff88e"
-)
+license=('custom')
+# What readelf -d records: libgcc_s, libm and libc.
+depends=('glibc' 'libgcc')
+options=('!debug')
+conflicts=('slate' 'slate-git')
+# The tag archive comes along for the desktop entry, the icon and the README:
+# the release asset is the binary on its own.
+source=("$_pkgname-$pkgver-linux-x86_64::$url/releases/download/v$pkgver/slate-linux-x86_64"
+  "$_pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP'
+  'SKIP')
 
 package() {
-  install -Dm755 "slate" "${pkgdir}/usr/bin/slate"
-  install -Dm644 "${srcdir}/slate.desktop" "${pkgdir}/usr/share/applications/slate.desktop"
-  install -Dm644 "slate.png" "${pkgdir}/usr/share/pixmaps/slate.png"
+  install -Dm755 "$srcdir/$_pkgname-$pkgver-linux-x86_64" "$pkgdir/usr/bin/$_pkgname"
+
+  cd "$_pkgname-$pkgver"
+  install -Dm644 slate.desktop "$pkgdir/usr/share/applications/slate.desktop"
+  install -Dm644 slate.png "$pkgdir/usr/share/pixmaps/slate.png"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
 }

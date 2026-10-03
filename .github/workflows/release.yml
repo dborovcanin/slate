@@ -1,0 +1,143 @@
+name: Release
+
+# A v* tag is the whole trigger: pushing one (scripts/release.sh does it) builds
+# the binaries, publishes the GitHub release and updates slate-bin on the AUR.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+# One release at a time per tag. Two runs for the same tag each compile their
+# own binary, and a Rust release build is not byte-for-byte reproducible, so
+# the second overwrites the asset the first published and any checksum taken
+# from the first stops matching. Queueing rather than cancelling, because a run
+# that has already pushed to the AUR should be allowed to finish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.asset }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: slate-linux-x86_64
+          - os: macos-latest
+            asset: slate-macos-aarch64
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The tag has to describe the version it ships, or the AUR package would
+      # name one release and install another.
+      - name: Check the tag against Cargo.toml
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          declared=$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' crates/tui/Cargo.toml | head -n 1)
+          if [ "v$declared" != "$TAG" ]; then
+            echo "::error::$TAG does not match crates/tui/Cargo.toml version $declared"
+            exit 1
+          fi
+
+      - name: Build the downloadable binary
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          cargo build --release --locked -p slate --bin slate
+          mkdir -p dist
+          install -m755 target/release/slate "dist/$ASSET"
+          cd dist
+          shasum -a 256 "$ASSET" >"$ASSET.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create the GitHub release and attach the assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: slate-*
+          generate_release_notes: true
+
+  # slate-bin points at the release by checksum, so this cannot run until the
+  # binary and the tag archive are downloadable.
+  #
+  # Skipped entirely when AUR_SSH_PRIVATE_KEY is not configured, so a fork that
+  # tags a release publishes to GitHub and stops there.
+  aur:
+    needs: release
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 30
+    steps:
+      - name: Install what publishing needs
+        run: |
+          pacman -Syu --noconfirm --needed git openssh pacman-contrib
+
+      - uses: actions/checkout@v5
+
+      # makepkg reads the PKGBUILD and refuses to do it as root, so the whole
+      # publish runs as an ordinary user that owns the checkout.
+      - name: Make a build user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          git config --system --add safe.directory "$GITHUB_WORKSPACE"
+
+      # Nothing a tag or an account name carries reaches this script as script:
+      # the values arrive through the environment and are read as variables.
+      - name: Publish to the AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "AUR_SSH_PRIVATE_KEY is not set; nothing to publish to."
+            exit 0
+          fi
+
+          # Created empty at its final mode first: writing it and chmod-ing
+          # afterwards leaves the key readable for as long as that takes.
+          install -d -m700 -o builder -g builder /home/builder/.ssh
+          install -m600 -o builder -g builder /dev/null /home/builder/.ssh/aur
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" >/home/builder/.ssh/aur
+
+          # The host keys are pinned in packaging/aur/known_hosts rather than
+          # scanned here, so a push never trusts whatever answers on the day.
+          runuser -u builder -- env \
+            HOME=/home/builder \
+            AUR_SSH_KEY=/home/builder/.ssh/aur \
+            WORKSPACE="$GITHUB_WORKSPACE" \
+            VERSION="${GITHUB_REF_NAME#v}" \
+            ACTOR="$ACTOR" \
+            bash -c '
+              set -eu
+              git config --global user.name "slate release"
+              git config --global user.email "$ACTOR@users.noreply.github.com"
+              cd "$WORKSPACE"
+              scripts/aur-publish.sh "$VERSION"
+            '
