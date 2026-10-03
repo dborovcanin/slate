@@ -2635,6 +2635,30 @@ impl TerminalApp {
         let Ok(Some(note)) = sources.open_note(&identity) else {
             return;
         };
+        let locked = note.access_mode != NoteAccessMode::None && !note.is_unlocked;
+        if locked || note.access_mode != self.active_note.access_mode {
+            // Encrypted or decrypted elsewhere: a locked note has no text to
+            // diff against, so open it afresh, as switching to it would. A
+            // locked one asks for its password at the first edit.
+            let (line, col) = (self.editor.cursor_line, self.editor.cursor_col);
+            if self.set_active_note(db, note).is_err() {
+                return;
+            }
+            if !locked {
+                self.editor.cursor_line = line.min(self.editor.lines.len().saturating_sub(1));
+                self.editor.cursor_col = col;
+                self.adjust_cursor();
+                self.adjust_scroll();
+            }
+            self.status = if locked {
+                "note was encrypted outside Slate; enter its password to edit".to_string()
+            } else {
+                "note was decrypted outside Slate; reloaded".to_string()
+            };
+            self.outside_change_reported = None;
+            self.render_state.dirty = true;
+            return;
+        }
         let text = self
             .editor
             .joined_text_cache

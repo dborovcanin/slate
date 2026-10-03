@@ -3140,3 +3140,60 @@ fn outside_change_keeps_the_cursor_on_a_char_boundary() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn outside_encryption_locks_the_open_note_instead_of_blanking_it() {
+    let (db, mut app, path) = app_with_note("secret text");
+    app.autosave_enabled = false;
+    let other = Db::open(path.clone()).expect("second process");
+    std::thread::sleep(Duration::from_millis(2));
+    other.encrypt_note("n1", "pw").expect("encrypted elsewhere");
+    other
+        .save_note("n1", "new private")
+        .expect("edited elsewhere");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert!(!app.active_note_is_editable());
+    assert!(!app.dirty);
+    assert!(
+        app.status.contains("encrypted outside Slate"),
+        "{}",
+        app.status
+    );
+    assert_eq!(app.history.undo_depth(), 0, "no undoable blanking edit");
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn outside_decryption_reloads_the_note_as_plain_text() {
+    let (db, mut app, path) = app_with_note("one");
+    app.autosave_enabled = false;
+    let other = Db::open(path.clone()).expect("second process");
+    other.encrypt_note("n1", "pw").expect("encrypted");
+    db.unlock_note("n1", "pw").expect("unlocked here");
+    app.reload_active_note(&db).expect("open unlocked");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+
+    std::thread::sleep(Duration::from_millis(2));
+    // Encrypting or decrypting keeps the revision; the edit after it moves it.
+    other.decrypt_note("n1", "pw").expect("decrypted elsewhere");
+    other.save_note("n1", "two").expect("edited elsewhere");
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.editor.lines, ["two"]);
+    assert!(
+        app.status.contains("decrypted outside Slate"),
+        "{}",
+        app.status
+    );
+
+    drop(other);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
