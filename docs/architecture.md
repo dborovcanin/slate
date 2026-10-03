@@ -52,7 +52,7 @@ A second adapter next to the terminal app, with no editing semantics of its own:
 
 - newline-delimited JSON-RPC over stdio (no SDK or async runtime)
 - tools that map onto `app-core` storage calls, with the same revision checks as editor saves
-- refuses encrypted and file-backed notes; no deletes
+- refuses encrypted and file-backed notes; deletes only with `[mcp] allow_delete`
 
 The terminal app starts it for `slate mcp` (gated by `[mcp] enabled`). An open editor notices writes from it, or from any other process, through the stored revision and takes them in as an edit (`editor_core::operations::replace_text`).
 

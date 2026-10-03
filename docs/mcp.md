@@ -30,6 +30,8 @@ The client starts `slate mcp` as a child process and talks to it over stdin/stdo
 
    While `enabled` is `false` (the default), `slate mcp` exits with an error naming the config file, so clients cannot reach your notes until you turn it on.
 
+   To also let clients delete notes for good, add `allow_delete = true`. Without it they can archive notes but not delete them.
+
 2. Make sure the client can find `slate`. `make install` puts it in `~/.local/bin/slate`. If that directory isn't on the `PATH` the client sees (desktop launchers and services often have a short `PATH`), use the absolute path in the configs below, for example `/home/you/.local/bin/slate`.
 
 Any client you connect can read and change every note that isn't encrypted. Only connect clients you trust with your notes.
@@ -112,6 +114,12 @@ Configure a stdio (or "local") server with the command `slate` and the argument 
 | `append_to_note` | `id`, `text` | Adds `text` to the end of the note on a new line. No revision needed |
 | `replace_in_note` | `id`, `old_text`, `new_text`, `revision?` | Replaces one exact piece of text. `old_text` must occur exactly once |
 | `update_note` | `id`, `text`, `revision` | Replaces the whole text of the note |
+| `rename_note` | `id`, `title` | Gives the note a fixed title, like renaming it in the browser. An empty title makes it follow the first line again |
+| `create_collection` | `name`, `description?` | Creates a collection |
+| `add_to_collection` | `id`, `collection` | Adds the note to a collection. A note can be in several |
+| `remove_from_collection` | `id`, `collection` | Takes the note out of a collection. The note stays |
+| `archive_note` | `id` | Moves the note into the `Archive` collection (created when first needed) and out of its other collections. Its text and history are kept |
+| `delete_note` | `id`, `revision` | Only with `[mcp] allow_delete = true`. Deletes the note and its history for good. Refused if the note changed since `revision` |
 
 Collections are named, not identified by id: `collection: "Work"`. Results come back as JSON, both as text and as structured content.
 
@@ -128,16 +136,17 @@ Collections are named, not identified by id: `collection: "Work"`. Results come 
 While Slate is idle, it checks about once a second (unless `[editor] reload_outside_changes = false`) whether the open note was changed somewhere else. The check covers `slate mcp`, `slate append`, `slate capture`, IMAP sync, another Slate window, and edits to an open markdown file.
 
 - **No unsaved changes:** Slate loads the new text in place. Your cursor and reminders stay on the lines they were on, and the status line shows `note changed outside Slate; reloaded (u undoes)`. The reload is a single undo step.
+- **Note deleted** (`delete_note`): Slate keeps the text on screen and shows `note was deleted outside Slate (:w! saves it again)`.
 - **Unsaved changes:** Slate keeps your text and shows `note changed outside Slate (:e! loads it, :w! keeps your version)`. With autosave on, the next autosave stops with a conflict instead of overwriting the bot's change. Use `:e!` to take the stored note (dropping your edits) or `:w!` to keep yours (dropping the bot's).
 
 The check waits while an overlay (command bar, switcher, browser, search, visual selection) is open. Lists such as the note switcher pick up new notes the next time they open.
 
 ## What the server cannot do
 
-- **Delete notes.** It has no tool for it.
-- **Open encrypted notes.** Encrypted notes, including notes in encrypted collections, are listed (`"encrypted": true`) but cannot be read, searched or written. They can only be unlocked in Slate.
+- **Delete notes**, unless you allow it. Without `[mcp] allow_delete = true`, `delete_note` isn't offered and `archive_note` is the way to put a note away. With it, deleting also removes the note's history, so `:history` cannot bring it back.
+- **Open encrypted notes.** Encrypted notes, including notes in encrypted collections, are listed (`"encrypted": true`) but cannot be read, searched or written. Notes cannot be added to or removed from an encrypted collection, since that needs its key. They can only be unlocked in Slate.
 - **Reach files.** Markdown files opened with `slate file.md` aren't available, so a client cannot read or write arbitrary files through the server.
-- **Set reminders, rename notes, change modules or manage collections.**
+- **Set reminders, change modules, or rename or delete collections.**
 
 ## Instructions for the bot
 
@@ -148,6 +157,7 @@ The server sends short usage instructions to the client when it connects. To mak
 
 - My notes are in Slate, available through the `slate` MCP tools.
 - Before writing, find the right note with `search_notes` or `list_notes`, and read it with `read_note`.
+- To put a note away, use `archive_note`. Never delete notes unless I ask.
 - Add to the end of a note with `append_to_note`. Change existing text with `replace_in_note`, using text copied exactly from `read_note`. Use `update_note` only to rewrite a whole note, and pass the `revision` from `read_note`.
 - If a write reports that the note changed, read it again and redo the change. Never force it.
 - New notes start with a `# Title` line. Put work notes in the `Work` collection.

@@ -466,7 +466,7 @@ Details: [Export Reference](./export.md).
 
 ## MCP server
 
-`slate mcp` lets AI assistants and bots (Claude Code, Codex, opencode, any MCP client) list, search, read, create and edit notes over stdio. It is off until `[mcp] enabled = true`. Writes are checked against the revision the client read, encrypted and file-backed notes stay closed, and nothing can be deleted. Setup for each client and the tool list: [MCP Server](mcp.md).
+`slate mcp` lets AI assistants and bots (Claude Code, Codex, opencode, any MCP client) list, search, read, create and edit notes over stdio. It is off until `[mcp] enabled = true`. Clients can also rename notes, manage collection membership and archive notes. Writes are checked against the revision the client read, encrypted and file-backed notes stay closed, and deleting is off unless `[mcp] allow_delete = true`. Setup for each client and the tool list: [MCP Server](mcp.md).
 
 ## Themes, wrap and other settings
 

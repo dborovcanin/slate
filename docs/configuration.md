@@ -188,6 +188,7 @@ Runtime validation constraints:
 `[mcp]` keys:
 
 - `enabled` (default `false`): lets `slate mcp` serve notes to MCP clients such as AI assistants. While it is `false`, `slate mcp` refuses to start.
+- `allow_delete` (default `false`): also offers `delete_note`, which deletes a note and its history for good. Without it, clients can only move notes to the `Archive` collection.
 
 Notes created over MCP use `[editor.modules]` and `[editor.security]` like notes created in the editor. See [MCP Server](mcp.md) for client setup.
 
