@@ -2600,8 +2600,19 @@ impl TerminalApp {
         }
         let sources = note_sources(db);
         let identity = sources.parse_identity(&self.active_note.id);
-        let Ok(Some(revision)) = sources.get_note_revision(&identity) else {
-            return;
+        let revision = match sources.get_note_revision(&identity) {
+            Ok(Some(revision)) => revision,
+            Ok(None) => {
+                // Deleted elsewhere (e.g. `delete_note` over MCP): keep the
+                // buffer, which a forced write stores again.
+                if self.outside_change_reported.as_deref() != Some("") {
+                    self.outside_change_reported = Some(String::new());
+                    self.status = "note was deleted outside Slate (:w! saves it again)".to_string();
+                    self.render_state.dirty = true;
+                }
+                return;
+            }
+            Err(_) => return,
         };
         if revision == self.active_note.updated_at {
             return;

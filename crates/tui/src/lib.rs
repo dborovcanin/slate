@@ -317,7 +317,7 @@ fn run_mcp(theme: &config::ThemeConfig) -> Result<(), String> {
         },
         security: theme.security.clone(),
     };
-    let mut server = slate_mcp::Server::new(core.db().clone(), defaults);
+    let mut server = slate_mcp::Server::new(core.db().clone(), defaults, mcp.allow_delete);
     slate_mcp::serve(
         &mut server,
         std::io::stdin().lock(),

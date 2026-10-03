@@ -3082,6 +3082,28 @@ fn outside_change_is_left_alone_when_turned_off() {
 }
 
 #[test]
+fn outside_delete_keeps_the_buffer_and_warns_once() {
+    let (db, mut app, path) = app_with_note("keep me");
+    app.autosave_enabled = false;
+    db.delete_note("n1", None).expect("deleted elsewhere");
+
+    take_outside_change(&mut app, &db);
+    assert_eq!(app.editor.lines, ["keep me"]);
+    assert!(
+        app.status.contains("deleted outside Slate"),
+        "{}",
+        app.status
+    );
+    app.status.clear();
+    take_outside_change(&mut app, &db);
+    assert!(app.status.is_empty(), "warned once");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn outside_change_waits_while_an_overlay_is_open() {
     let (db, mut app, path) = app_with_note("one");
     app.autosave_enabled = false;

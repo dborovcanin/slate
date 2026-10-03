@@ -45,6 +45,7 @@ const DEFAULT_PERF_ENABLED: bool = false;
 const DEFAULT_PERF_LOG_PATH: &str = "";
 const DEFAULT_BACKGROUND_TASKS_ENABLED: bool = true;
 const DEFAULT_MCP_ENABLED: bool = false;
+const DEFAULT_MCP_ALLOW_DELETE: bool = false;
 const MIN_IMAP_MAX_BYTES: usize = 1024;
 const MAX_IMAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const MIN_IMAP_POLL_SECONDS: u64 = 10;
@@ -207,9 +208,13 @@ image_max_rows = 15
 
 [mcp]
 # Let `slate mcp` serve notes to MCP clients (AI assistants and bots) over
-# stdio. Clients can list, search, read, create and edit notes; they cannot
-# delete notes or open encrypted ones. Off by default.
+# stdio. Clients can list, search, read, create, edit, rename and archive
+# notes and manage collections; they cannot open encrypted notes. Off by
+# default.
 enabled = false
+# Also let clients delete notes for good (with their history). Without it
+# they can only move notes to the Archive collection.
+allow_delete = false
 
 [startup]
 # Enable non-critical startup work asynchronously after first paint/edit
@@ -362,12 +367,15 @@ impl Default for PerfConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpConfig {
     pub enabled: bool,
+    /// Clients may delete notes, not only archive them.
+    pub allow_delete: bool,
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
             enabled: DEFAULT_MCP_ENABLED,
+            allow_delete: DEFAULT_MCP_ALLOW_DELETE,
         }
     }
 }
@@ -626,6 +634,7 @@ struct StartupSection {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct McpSection {
     enabled: Option<bool>,
+    allow_delete: Option<bool>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -981,6 +990,7 @@ fn parse_mcp_config(text: &str) -> Result<McpConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
     Ok(McpConfig {
         enabled: raw.mcp.enabled.unwrap_or(DEFAULT_MCP_ENABLED),
+        allow_delete: raw.mcp.allow_delete.unwrap_or(DEFAULT_MCP_ALLOW_DELETE),
     })
 }
 
@@ -1500,9 +1510,13 @@ mod tests {
     fn mcp_is_off_unless_enabled() {
         assert_eq!(parse_mcp_config("").expect("parsed"), McpConfig::default());
         assert!(!McpConfig::default().enabled);
-        assert!(!parse_mcp_config(DEFAULT_CONFIG).expect("parsed").enabled);
-        let parsed = parse_mcp_config("[mcp]\nenabled = true\n").expect("parsed");
+        let defaults = parse_mcp_config(DEFAULT_CONFIG).expect("parsed");
+        assert!(!defaults.enabled);
+        assert!(!defaults.allow_delete);
+        let parsed =
+            parse_mcp_config("[mcp]\nenabled = true\nallow_delete = true\n").expect("parsed");
         assert!(parsed.enabled);
+        assert!(parsed.allow_delete);
     }
 
     #[test]
