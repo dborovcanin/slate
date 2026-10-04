@@ -67,34 +67,69 @@ pub(super) fn is_duration_value(text: &str) -> bool {
 }
 
 /// Evaluates an expression holding clock times with `eval` (fend). `None`
-/// when the expression misuses a clock time, e.g. `09:10 + 11:45`.
+/// when the expression misuses a clock time (see [`rejects`]) or fend
+/// cannot evaluate it.
 pub(super) fn evaluate(expr: &str, mut eval: impl FnMut(&str) -> Option<String>) -> Option<String> {
     let tokens = tokenize(expr);
     let lowered = lower(expr, &tokens);
-    // An explicit conversion (`(17:00 - 09:00) to min`) asks fend's format.
-    // Only a duration converts: a clock time has no unit to convert to.
-    if let Some((at, word)) = conversion_at(expr, &tokens) {
-        // The source is everything before the `to`/`in` word, part of the
-        // token holding it included; the target is a unit, no time in it.
-        let mut source = tokens[..at].to_vec();
-        source.push((Token::Text, tokens[at].1.start..word));
-        let target_has_time = tokens[at + 1..]
-            .iter()
-            .any(|(token, _)| matches!(token, Token::Clock(_) | Token::Duration(_)));
-        let points = PointCounter::new(expr, &source).count()?;
-        return if points == 0 && !target_has_time {
-            eval(&lowered)
-        } else {
-            None
-        };
+    let plan = plan(expr, &tokens)?;
+    match plan {
+        Plan::Convert => return eval(&lowered),
+        // Left to the trailing-label fallback, like any prose.
+        Plan::Prose => return None,
+        Plan::Clock | Plan::Duration => {}
     }
-    let points = PointCounter::new(expr, &tokens).count()?;
     let seconds = eval(&format!("({lowered}) to s")).and_then(|text| parse_seconds(&text));
-    match (points, seconds) {
-        (1, Some(seconds)) => Some(format_clock(seconds)),
-        (0, Some(seconds)) => Some(format_duration(seconds)),
+    match (plan, seconds) {
+        (Plan::Clock, Some(seconds)) => Some(format_clock(seconds)),
+        (_, Some(seconds)) => Some(format_duration(seconds)),
         // Durations divided down to a plain number, e.g. `(17:00-09:00) / 4h`.
-        (0, None) => eval(&lowered),
+        (Plan::Duration, None) => eval(&lowered),
+        _ => None,
+    }
+}
+
+/// Whether `expr` misuses a clock time: `09:10 + 11:45`, `09:10 * 2`,
+/// `09:10 to min`. Such a line gets no result at all, not even from the part
+/// before a trailing label.
+pub(super) fn rejects(expr: &str) -> bool {
+    contains_time(expr) && plan(expr, &tokenize(expr)).is_none()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Plan {
+    /// Ends in a clock time.
+    Clock,
+    /// Ends in a duration, or a plain number.
+    Duration,
+    /// A duration converted with `to`/`in`, in fend's format.
+    Convert,
+    /// `to`/`in` followed by more times reads as prose: `9:00-17:00 in
+    /// office, 12:00-12:30 lunch`.
+    Prose,
+}
+
+/// What `expr` computes, or `None` when it misuses a clock time.
+fn plan(expr: &str, tokens: &[(Token, std::ops::Range<usize>)]) -> Option<Plan> {
+    let Some((at, word)) = conversion_at(expr, tokens) else {
+        return match PointCounter::new(expr, tokens).count()? {
+            1 => Some(Plan::Clock),
+            _ => Some(Plan::Duration),
+        };
+    };
+    // The source is everything before the `to`/`in` word, part of the token
+    // holding it included; the target is a unit, with no time in it.
+    let target_has_time = tokens[at + 1..]
+        .iter()
+        .any(|(token, _)| matches!(token, Token::Clock(_) | Token::Duration(_)));
+    if target_has_time {
+        return Some(Plan::Prose);
+    }
+    let mut source = tokens[..at].to_vec();
+    source.push((Token::Text, tokens[at].1.start..word));
+    // Only a duration converts: a clock time has no unit to convert to.
+    match PointCounter::new(expr, &source).count()? {
+        0 => Some(Plan::Convert),
         _ => None,
     }
 }
@@ -386,6 +421,11 @@ impl PointCounter {
             } else {
                 points - rhs
             };
+            // Each step must give a clock time or a duration: `09:00 +
+            // 10:00 - 11:00` adds two clock times on the way.
+            if !matches!(points, 0 | 1) {
+                return None;
+            }
         }
         Some(points)
     }
@@ -414,9 +454,10 @@ impl PointCounter {
                 self.next += 1;
                 self.signed()
             }
+            // A negated clock time means nothing.
             Token::Minus => {
                 self.next += 1;
-                self.signed().map(|points| -points)
+                self.signed().filter(|points| *points == 0)
             }
             _ => self.primary(),
         }
@@ -578,6 +619,12 @@ mod tests {
         assert_eq!(points("09:10 + 11:45"), None);
         assert_eq!(points("09:10 * 2"), None);
         assert_eq!(points("-09:10"), None);
+        assert_eq!(points("09:00 - 10:00 + 11:00"), Some(1));
+        assert_eq!(points("-(10:00 - 09:00) + 11:00"), Some(1));
+        assert_eq!(points("(09:00 + 10:00) - 11:00"), None);
+        assert_eq!(points("09:00 + 10:00 - 11:00"), None);
+        assert_eq!(points("2h - 09:00"), None);
+        assert_eq!(points("-(09:00) + 11:00"), None);
         assert_eq!(points("(09:10"), None);
         assert_eq!(points("09:10 meeting"), None);
     }
@@ -664,6 +711,27 @@ mod tests {
             "09:00-10:00 to s + 10:00-11:00",
         ] {
             assert_eq!(evaluate(expr, fend), None, "{expr}");
+        }
+    }
+
+    #[test]
+    fn rejects_misused_clock_times_but_not_prose() {
+        for expr in [
+            "09:10 + 11:45",
+            "09:10 * 2 groceries",
+            "09:10 + 2h to min",
+            "(09:00 + 10:00) - 11:00",
+        ] {
+            assert!(rejects(expr), "{expr}");
+        }
+        for expr in [
+            "10:30-11:00 standup",
+            "09:10 + 2h lunch",
+            "9:00-17:00 in office, 12:00-12:30 lunch",
+            "11:45 - 09:10 to min",
+            "2 + 2",
+        ] {
+            assert!(!rejects(expr), "{expr}");
         }
     }
 

@@ -1585,6 +1585,7 @@ fn evaluate_expression_with_variables(
 
     let text = match resolver.eval_raw(&substituted, ctx) {
         Some(text) => text,
+        None if temporal::rejects(&substituted) => return None,
         None => evaluate_leading_expression(&substituted, |prefix| resolver.eval_raw(prefix, ctx))?,
     };
     if text == expr {
@@ -1612,6 +1613,7 @@ fn evaluate_single(input: &str, ctx: &mut fend_core::Context) -> Option<String> 
     let (expr, applied_result) = split_applied_result(trimmed);
     let text = match evaluate_raw_expression(expr, ctx) {
         Some(text) => text,
+        None if temporal::rejects(expr) => return None,
         None => evaluate_leading_expression(expr, |prefix| evaluate_raw_expression(prefix, ctx))?,
     };
     if text == expr {
@@ -3096,6 +3098,12 @@ mod tests {
                 Some("approx. 7.0833333333 h"),
             ),
             ("09:10 * 2 to min", None),
+            ("09:10 + 2h to min", None),
+            ("(09:00 + 10:00) - 11:00", None),
+            ("09:00 + 10:00 - 11:00", None),
+            ("09:00 - 10:00 + 11:00", Some("10:00")),
+            ("09:10 + 2h lunch", Some("11:10")),
+            ("9:00-17:00 in office, 12:00-12:30 lunch", Some("8h")),
             ("09:10 + 11:45 to min", None),
             ("09:10 / 2 to min", None),
             ("09:10 + 2h", Some("11:10")),
