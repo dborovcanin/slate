@@ -73,9 +73,20 @@ pub(super) fn evaluate(expr: &str, mut eval: impl FnMut(&str) -> Option<String>)
     let lowered = lower(expr, &tokens);
     // An explicit conversion (`(17:00 - 09:00) to min`) asks fend's format.
     // Only a duration converts: a clock time has no unit to convert to.
-    if let Some(at) = conversion_at(expr, &tokens) {
-        let points = PointCounter::new(expr, &tokens[..=at]).count()?;
-        return if points == 0 { eval(&lowered) } else { None };
+    if let Some((at, word)) = conversion_at(expr, &tokens) {
+        // The source is everything before the `to`/`in` word, part of the
+        // token holding it included; the target is a unit, no time in it.
+        let mut source = tokens[..at].to_vec();
+        source.push((Token::Text, tokens[at].1.start..word));
+        let target_has_time = tokens[at + 1..]
+            .iter()
+            .any(|(token, _)| matches!(token, Token::Clock(_) | Token::Duration(_)));
+        let points = PointCounter::new(expr, &source).count()?;
+        return if points == 0 && !target_has_time {
+            eval(&lowered)
+        } else {
+            None
+        };
     }
     let points = PointCounter::new(expr, &tokens).count()?;
     let seconds = eval(&format!("({lowered}) to s")).and_then(|text| parse_seconds(&text));
@@ -306,24 +317,35 @@ fn is_quantity(text: &str) -> bool {
     true
 }
 
-/// The token holding a top-level `to` or `in` conversion, outside any
-/// parentheses. What precedes it is what gets converted.
-fn conversion_at(expr: &str, tokens: &[(Token, std::ops::Range<usize>)]) -> Option<usize> {
+/// A top-level `to` or `in` conversion, outside any parentheses: the index
+/// of the token holding the word and the word's byte offset in `expr`.
+fn conversion_at(expr: &str, tokens: &[(Token, std::ops::Range<usize>)]) -> Option<(usize, usize)> {
     let mut depth = 0usize;
-    tokens.iter().position(|(token, span)| match token {
-        Token::Open => {
-            depth += 1;
-            false
-        }
-        Token::Close => {
-            depth = depth.saturating_sub(1);
-            false
-        }
-        Token::Text if depth == 0 => expr[span.clone()]
-            .split_whitespace()
-            .any(|word| word.eq_ignore_ascii_case("to") || word.eq_ignore_ascii_case("in")),
-        _ => false,
-    })
+    tokens
+        .iter()
+        .enumerate()
+        .find_map(|(idx, (token, span))| match token {
+            Token::Open => {
+                depth += 1;
+                None
+            }
+            Token::Close => {
+                depth = depth.saturating_sub(1);
+                None
+            }
+            Token::Text if depth == 0 => {
+                let text = &expr[span.clone()];
+                text.split_whitespace()
+                    .find(|word| word.eq_ignore_ascii_case("to") || word.eq_ignore_ascii_case("in"))
+                    .map(|word| {
+                        (
+                            idx,
+                            span.start + (word.as_ptr() as usize - text.as_ptr() as usize),
+                        )
+                    })
+            }
+            _ => None,
+        })
 }
 
 /// Counts the clock times an expression adds up to: 1 means the result is a
@@ -628,11 +650,18 @@ mod tests {
             evaluate("(17:00 - 09:00) to min", fend).as_deref(),
             Some("<((61200 s) - (32400 s)) to min>")
         );
+        assert_eq!(
+            evaluate("11:45 - 09:10 to min", fend).as_deref(),
+            Some("<(42300 s) - (33000 s) to min>")
+        );
         for expr in [
             "09:10 + 2h to min",
+            "09:10 - 2h in h",
             "09:10 * 2 to min",
             "09:10 + 11:45 in h",
             "09:10 to min",
+            "09:00-10:00 to s + (09:00 * 2)",
+            "09:00-10:00 to s + 10:00-11:00",
         ] {
             assert_eq!(evaluate(expr, fend), None, "{expr}");
         }
