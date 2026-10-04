@@ -275,6 +275,7 @@ sqrt(144) + 3^2         → 21
 - Arithmetic, percentages, unit conversions and everything [fend](https://github.com/printfn/fend) evaluates.
 - Works on plain lines, list/checklist bodies, and table formula cells.
 - Date-like lines (`2026-09-29`, `29.09.2026`, `09/29/2026`) are ignored.
+- Clock times and ranges, see below.
 - Large notes compute only the visible region and fill values in off the input thread.
 
 | Key / command                 | Action                                                                   |
@@ -285,6 +286,27 @@ sqrt(144) + 3^2         → 21
 | `:sum row` / `:avg row`       | ... the table row                                                        |
 | `:sum column` / `:avg column` | ... the table column                                                     |
 | `:sum doc` / `:avg doc`       | ... the whole note                                                       |
+
+### Clock times
+
+```text
+09:10-11:45                → 2h 35min
+09:10-11:45 + 13:00-17:30  → 7h 5min
+11:45 - 09:10              → 2h 35min
+09:10 + 2h 30min           → 11:40
+9am-5pm - 30min            → 7h 30min
+22:00-02:00                → 4h
+(17:00 - 09:00) / 3        → 2h 40min
+10:30-11:00 standup        → 30min
+```
+
+- Clock times: `09:10`, `9:10:30`, `9:10pm` / `9:10 pm`, `9am` (a bare hour needs `am`/`pm` attached, so `5 pm` stays picometres), `24:00`.
+- A range is two clock times joined by `-` with no spaces; it runs forward, past midnight if needed. With spaces, `-` subtracts.
+- Clock time - clock time is a duration and clock time ± duration a clock time; adding, multiplying or dividing clock times gives no result.
+- Results read as `2h 35min` and `11:10`, so `Tab` and variables keep them: `start := 09:10`, `lunch := 12:00-12:45`, then `17:30 - start - lunch`.
+- A clock time on its own (`meeting at 10:30`) shows no result. `to` / `in` converts as usual: `(17:00 - 09:00) to min`.
+- A variable holding a clock time or duration is not offered to other notes yet. Durations written directly (`lunch := 45min`) keep only their number, like other units in variables.
+- `:sum` / `:avg` do not add up ranges yet.
 
 ## Variables and cross-note variables
 

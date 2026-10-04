@@ -34,7 +34,7 @@ Already done on this track: ratatui + crossterm port, buffer rendering, soft wra
 8. **Dates, money, time**
    - Date arithmetic: `next friday + 3 days`, `deadline - today`.
    - Currency conversion with a local rate cache refreshed in the background.
-   - Time tracking: `09:10-11:45` ranges summed per day.
+   - Time tracking: `09:10-11:45` ranges summed per day. Clock times, ranges and clock arithmetic in calculations done 2026-10-04 (`calc/temporal.rs`); summing per day (`:sum`, a total line) and duration variables written directly (`45min`) still open.
 9. **`slate calc "..."`** - one-shot evaluation from the shell (and `cmd | slate calc`), with access to exported note variables.
 10. **Dependency view** - for the value under the cursor, list the lines and notes that use it and the values it depends on, so cross-note calculations are easy to trust.
 11. **Outline and backlinks panel** - toggleable side panel (heading outline + notes linking here) using ratatui layout.
