@@ -1902,7 +1902,7 @@ pub fn run_terminal_session(
         config.markdown_autoformat,
         config.checklist_auto_reorder,
         config.variables_autocomplete_min_chars,
-        render::RenderPalette::for_theme(&config.color_scheme, &config.accent),
+        render::RenderPalette::for_theme(&config.color_scheme, &config.accent, &config.colors),
         config.date_format.clone(),
         config.date_time_format.clone(),
         cross_note_var_index,

@@ -1,5 +1,5 @@
 use crate::editor_core::markdown_tokens;
-use crate::terminal::canvas::contrast_fg_for_bg;
+use crate::terminal::canvas::{contrast_fg_for_bg, is_light_bg};
 pub use crate::terminal::markdown_view::collapse_markdown_line_for_cursor_with_formatting_boundary_exit;
 use crate::terminal::markdown_view::{hidden_line_prefix_marker_ranges, normalize_hidden_ranges};
 pub use crate::terminal::render_styles::VariableNames;
@@ -9,7 +9,7 @@ use crate::terminal::render_styles::{
 };
 pub use crate::terminal::theme::RenderPalette;
 use ratatui::buffer::Buffer;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -407,7 +407,10 @@ impl RenderContext {
         }
 
         hidden_ranges = normalize_hidden_ranges(hidden_ranges, len);
-        let selection_bg = selection_bg_for_surface(self.palette.surface_bg());
+        let selection_bg = self
+            .palette
+            .selection_bg
+            .unwrap_or_else(|| selection_bg_for_surface(self.palette.surface_bg()));
         let selection_fg = contrast_fg_for_bg(selection_bg);
         let selection_style = (!reverse_ranges.is_empty()).then_some(SelectionStyle {
             bg: selection_bg,
@@ -448,7 +451,7 @@ struct StyledLine {
 }
 
 impl StyledLine {
-    fn ghosts<'a>(&self, deco: &LineDecorations<'a>, fg: u8) -> Ghosts<'a> {
+    fn ghosts<'a>(&self, deco: &LineDecorations<'a>, fg: Color) -> Ghosts<'a> {
         Ghosts {
             calc: deco.calc_ghost,
             calc_prefix: self.calc_prefix,
@@ -486,12 +489,8 @@ pub struct LineDecorations<'a> {
     pub active_cursor_col: Option<usize>,
 }
 
-fn selection_bg_for_surface(surface_bg: u8) -> u8 {
-    if contrast_fg_for_bg(surface_bg) == 16 {
-        236
-    } else {
-        252
-    }
+fn selection_bg_for_surface(surface_bg: Color) -> Color {
+    Color::Indexed(if is_light_bg(surface_bg) { 236 } else { 252 })
 }
 
 fn contains_assignment_operator(text: &str) -> bool {
@@ -518,7 +517,11 @@ fn contains_assignment_operator(text: &str) -> bool {
     false
 }
 
-fn apply_table_formula_marker_styles(chars: &[char], styles: &mut [CharStyle], marker_color: u8) {
+fn apply_table_formula_marker_styles(
+    chars: &[char],
+    styles: &mut [CharStyle],
+    marker_color: Color,
+) {
     let len = chars.len();
     let mut i = 0usize;
     while i < len {
@@ -582,9 +585,9 @@ pub fn list_marker_end(text: &str) -> Option<usize> {
 
 #[derive(Clone, Copy)]
 struct SelectionStyle {
-    bg: u8,
-    fg: u8,
-    plain_fg: u8,
+    bg: Color,
+    fg: Color,
+    plain_fg: Color,
 }
 
 #[derive(Clone, Copy)]
@@ -593,7 +596,7 @@ struct Ghosts<'a> {
     calc_prefix: &'a str,
     reminder: Option<&'a str>,
     reminder_strikethrough: bool,
-    fg: u8,
+    fg: Color,
 }
 
 fn selection_intersects_cell(ranges: &[(usize, usize)], start: usize, end: usize) -> bool {
@@ -1233,8 +1236,8 @@ mod tests {
     #[test]
     fn render_visual_selection_uses_background_without_reverse_video() {
         let palette = RenderPalette {
-            surface_bg: 252,
-            text_fg: 16,
+            surface_bg: Color::Indexed(252),
+            text_fg: Color::Indexed(16),
             ..RenderPalette::default()
         };
         let mut ctx = RenderContext::new_with_palette(palette);
@@ -1283,7 +1286,7 @@ mod tests {
         let palette = RenderPalette::default();
         let out = render_plain(&mut ctx, "| a | 88* | 1455.86** |", 80);
         assert!(out.any_cell(
-            |cell| cell.modifier.contains(Modifier::DIM) && cell.fg == fg(palette.code_comment)
+            |cell| cell.modifier.contains(Modifier::DIM) && cell.fg == palette.code_comment
         ));
         assert!(out.text.contains("88*"));
         assert!(out.text.contains("1455.86**"));
@@ -1295,9 +1298,9 @@ mod tests {
         let palette = RenderPalette::default();
         let _ = render_plain(&mut ctx, "```rust", 60);
         let out = render_plain(&mut ctx, "let total = 42 // note", 60);
-        assert!(out.any_cell(|cell| cell.bg == fg(palette.code_block_bg)));
-        assert!(out.any_cell(|cell| cell.fg == fg(palette.code_keyword)));
-        assert!(out.any_cell(|cell| cell.fg == fg(palette.code_number)));
+        assert!(out.any_cell(|cell| cell.bg == palette.code_block_bg));
+        assert!(out.any_cell(|cell| cell.fg == palette.code_keyword));
+        assert!(out.any_cell(|cell| cell.fg == palette.code_number));
     }
 
     #[test]
@@ -1308,8 +1311,8 @@ mod tests {
         assert_eq!(out.text.len(), 12);
     }
 
-    fn is_bold_with_fg(cell: &ratatui::buffer::Cell, color: u8) -> bool {
-        cell.modifier.contains(Modifier::BOLD) && cell.fg == fg(color)
+    fn is_bold_with_fg(cell: &ratatui::buffer::Cell, color: Color) -> bool {
+        cell.modifier.contains(Modifier::BOLD) && cell.fg == color
     }
 
     #[test]
@@ -1373,7 +1376,7 @@ mod tests {
         };
         let out = render(&mut ctx, "alpha beta alpha", 40, 0, deco);
         let other = &out.buf[(0, 0)];
-        assert_eq!(other.fg, fg(palette.search_match));
+        assert_eq!(other.fg, palette.search_match);
         assert!(!other.modifier.contains(Modifier::BOLD));
         assert!(is_bold_with_fg(&out.buf[(11, 0)], palette.search_current));
     }
@@ -1386,8 +1389,8 @@ mod tests {
     #[test]
     fn render_supports_custom_palette_for_search_highlights() {
         assert_search_colors(RenderPalette {
-            search_match: 135,
-            search_current: 196,
+            search_match: Color::Indexed(135),
+            search_current: Color::Indexed(196),
             ..RenderPalette::default()
         });
     }

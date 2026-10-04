@@ -23,6 +23,7 @@ use crate::terminal::text_utils::{
 };
 use crate::terminal::{date_picker, input, media_sources, notifications, switcher, text_input};
 use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use ratatui::Frame;
 use std::borrow::Cow;
 use std::time::{Duration, Instant};
@@ -704,7 +705,7 @@ impl TerminalApp {
         buf: &mut Buffer,
         row: usize,
         cols: usize,
-        status_bg: u8,
+        status_bg: Color,
         right_sticky_text: &str,
     ) -> bool {
         if self.mode != UiMode::CommandBar || !self.command_completion.visible {

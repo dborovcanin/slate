@@ -496,6 +496,7 @@ Details: [Export Reference](./export.md).
 ## Themes, wrap and other settings
 
 - `[theme] color_scheme` (14 schemes, default `gruvbox-light`) and `accent`; config changes reload live.
+- `[theme.colors]` replaces single colours with exact hex, or `none` for the terminal's own (e.g. a transparent background); see [configuration](configuration.md#themecolors).
 - `[editor] wrap`, `markdown_autoformat`, `checklist_auto_reorder`, `autosave`, `format_on_save`, `vim_mode`, `date_format`, `date_time_format`, `variable_autocomplete_min_chars`.
 
 All keys: [Configuration](./configuration.md).

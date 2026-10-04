@@ -14,8 +14,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// unset attributes are cleared rather than inherited from the cell.
 #[derive(Clone, Copy, Default)]
 pub struct TextStyle {
-    pub fg: Option<u8>,
-    pub bg: Option<u8>,
+    pub fg: Option<Color>,
+    pub bg: Option<Color>,
     pub bold: bool,
     pub dim: bool,
     pub reverse: bool,
@@ -32,10 +32,10 @@ impl TextStyle {
 }
 
 /// Builds a style that replaces every attribute of the cell it is applied to.
-pub fn cell_style(fg: Option<u8>, bg: Option<u8>, modifiers: Modifier) -> Style {
+pub fn cell_style(fg: Option<Color>, bg: Option<Color>, modifiers: Modifier) -> Style {
     Style::reset()
-        .fg(fg.map_or(Color::Reset, Color::Indexed))
-        .bg(bg.map_or(Color::Reset, Color::Indexed))
+        .fg(fg.unwrap_or(Color::Reset))
+        .bg(bg.unwrap_or(Color::Reset))
         .remove_modifier(Modifier::all())
         .add_modifier(modifiers)
 }
@@ -76,14 +76,26 @@ pub fn ansi_256_rgb(index: u8) -> (u8, u8, u8) {
     (gray, gray, gray)
 }
 
-pub fn contrast_fg_for_bg(bg: u8) -> u8 {
-    let (r, g, b) = ansi_256_rgb(bg);
-    let luminance = (299u32 * r as u32 + 587u32 * g as u32 + 114u32 * b as u32) / 1000u32;
-    if luminance >= 140 {
-        16
-    } else {
-        231
+/// The RGB a colour shows as; `None` for the terminal's own, whose colour
+/// slate cannot know.
+pub fn color_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Indexed(index) => Some(ansi_256_rgb(index)),
+        _ => None,
     }
+}
+
+/// Whether text on `bg` should be dark. The terminal's own background
+/// counts as dark.
+pub fn is_light_bg(bg: Color) -> bool {
+    color_rgb(bg).is_some_and(|(r, g, b)| {
+        (299u32 * r as u32 + 587u32 * g as u32 + 114u32 * b as u32) / 1000u32 >= 140
+    })
+}
+
+pub fn contrast_fg_for_bg(bg: Color) -> Color {
+    Color::Indexed(if is_light_bg(bg) { 16 } else { 231 })
 }
 
 /// Writes `text` starting at (`row`, `col`), clipped to `max_width` cells and
@@ -192,8 +204,8 @@ pub fn draw_framed_surface(
     col: usize,
     width: usize,
     height: usize,
-    bg: u8,
-    border_fg: u8,
+    bg: Color,
+    border_fg: Color,
     border_bold: bool,
     title: Option<&str>,
     footer: Option<&str>,
@@ -417,12 +429,10 @@ pub mod test_support {
         buf.content().iter().any(pred)
     }
 
-    /// True when some cell shows `symbol` with the given 256-color fg and bg.
-    pub fn has_styled_symbol(buf: &Buffer, symbol: &str, fg: u8, bg: u8) -> bool {
+    /// True when some cell shows `symbol` with the given fg and bg.
+    pub fn has_styled_symbol(buf: &Buffer, symbol: &str, fg: Color, bg: Color) -> bool {
         has_cell(buf, |cell| {
-            cell.symbol() == symbol
-                && cell.fg == Color::Indexed(fg)
-                && cell.bg == Color::Indexed(bg)
+            cell.symbol() == symbol && cell.fg == fg && cell.bg == bg
         })
     }
 }

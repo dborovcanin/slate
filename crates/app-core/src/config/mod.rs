@@ -88,6 +88,24 @@ accent = "auto"
 #   nerd (needs a Nerd Font), unicode, ascii
 icons = "nerd"
 
+[theme.colors]
+# Colours that replace the color scheme's, as hex (`2e3440` or `#2e3440`) or
+# `none` for the terminal's own colour. Unset keys keep the scheme's colour.
+# foreground = "eceff4"
+# background = "none"
+# accent = "88c0d0"
+# code-block-background = "3b4252"
+# selection-background = "434c5e"
+# keyword = "81a1c1"
+# string = "a3be8c"
+# number = "b48ead"
+# comment = "616e88"
+# function = "88c0d0"
+# type = "8fbcbb"
+# variable = "ebcb8b"
+# search-match = "5e81ac"
+# search-current = "bf616a"
+
 [editor]
 # Enable markdown helpers while typing (list continuation, table alignment).
 markdown_autoformat = true
@@ -272,10 +290,55 @@ impl IconStyle {
     }
 }
 
+/// A colour from `[theme.colors]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeColor {
+    Rgb(u8, u8, u8),
+    /// The terminal's own colour (`none`).
+    Terminal,
+}
+
+impl ThemeColor {
+    /// Reads `2e3440`, `#2e3440` or `none`; anything else is no colour.
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("none") {
+            return Some(Self::Terminal);
+        }
+        let hex = value.strip_prefix('#').unwrap_or(value);
+        if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+        Some(Self::Rgb(channel(0)?, channel(2)?, channel(4)?))
+    }
+}
+
+/// `[theme.colors]`: colours replacing the color scheme's. `None` keeps the
+/// scheme's colour.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThemeColors {
+    pub foreground: Option<ThemeColor>,
+    pub background: Option<ThemeColor>,
+    pub accent: Option<ThemeColor>,
+    pub code_block_background: Option<ThemeColor>,
+    pub selection_background: Option<ThemeColor>,
+    pub keyword: Option<ThemeColor>,
+    pub string: Option<ThemeColor>,
+    pub number: Option<ThemeColor>,
+    pub comment: Option<ThemeColor>,
+    pub function: Option<ThemeColor>,
+    pub type_: Option<ThemeColor>,
+    pub variable: Option<ThemeColor>,
+    pub search_match: Option<ThemeColor>,
+    pub search_current: Option<ThemeColor>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeConfig {
     pub color_scheme: String,
     pub accent: String,
+    pub colors: ThemeColors,
     pub icons: IconStyle,
     pub markdown_autoformat: bool,
     pub checklist_auto_reorder: bool,
@@ -513,6 +576,7 @@ impl Default for ThemeConfig {
         Self {
             color_scheme: DEFAULT_COLOR_SCHEME.to_string(),
             accent: DEFAULT_ACCENT.to_string(),
+            colors: ThemeColors::default(),
             icons: DEFAULT_ICONS,
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
             checklist_auto_reorder: DEFAULT_CHECKLIST_AUTO_REORDER,
@@ -575,6 +639,49 @@ struct ThemeSection {
     color_scheme: Option<String>,
     accent: Option<String>,
     icons: Option<String>,
+    #[serde(default)]
+    colors: ThemeColorsSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+struct ThemeColorsSection {
+    foreground: Option<String>,
+    background: Option<String>,
+    accent: Option<String>,
+    code_block_background: Option<String>,
+    selection_background: Option<String>,
+    keyword: Option<String>,
+    string: Option<String>,
+    number: Option<String>,
+    comment: Option<String>,
+    function: Option<String>,
+    r#type: Option<String>,
+    variable: Option<String>,
+    search_match: Option<String>,
+    search_current: Option<String>,
+}
+
+impl ThemeColorsSection {
+    fn parse(&self) -> ThemeColors {
+        let color = |value: &Option<String>| value.as_deref().and_then(ThemeColor::parse);
+        ThemeColors {
+            foreground: color(&self.foreground),
+            background: color(&self.background),
+            accent: color(&self.accent),
+            code_block_background: color(&self.code_block_background),
+            selection_background: color(&self.selection_background),
+            keyword: color(&self.keyword),
+            string: color(&self.string),
+            number: color(&self.number),
+            comment: color(&self.comment),
+            function: color(&self.function),
+            type_: color(&self.r#type),
+            variable: color(&self.variable),
+            search_match: color(&self.search_match),
+            search_current: color(&self.search_current),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -889,6 +996,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     Ok(ThemeConfig {
         color_scheme: normalize_name(raw.theme.color_scheme, DEFAULT_COLOR_SCHEME),
         accent: normalize_name(raw.theme.accent, DEFAULT_ACCENT),
+        colors: raw.theme.colors.parse(),
         icons: IconStyle::parse(raw.theme.icons.as_deref()),
         markdown_autoformat: raw
             .editor
@@ -1610,6 +1718,46 @@ mod tests {
         .expect("invalid mode parsed with fallback");
         assert_eq!(invalid_mode.mode, TerminalImagesMode::Auto);
         assert_eq!(invalid_mode.max_rows, 100);
+    }
+
+    #[test]
+    fn theme_colors_override_only_what_is_set() {
+        let cfg = parse_theme_config("").expect("theme config parsed");
+        assert_eq!(cfg.colors, ThemeColors::default());
+
+        let cfg = parse_theme_config(
+            r##"
+            [theme.colors]
+            foreground = "eceff4"
+            background = "NONE"
+            accent = "#88C0D0"
+            type = "8fbcbb"
+            search-current = "bf616a"
+            keyword = "not-a-colour"
+            number = "#abc"
+            "##,
+        )
+        .expect("theme colors parsed");
+        assert_eq!(
+            cfg.colors.foreground,
+            Some(ThemeColor::Rgb(0xec, 0xef, 0xf4))
+        );
+        assert_eq!(cfg.colors.background, Some(ThemeColor::Terminal));
+        assert_eq!(cfg.colors.accent, Some(ThemeColor::Rgb(0x88, 0xc0, 0xd0)));
+        assert_eq!(cfg.colors.type_, Some(ThemeColor::Rgb(0x8f, 0xbc, 0xbb)));
+        assert_eq!(
+            cfg.colors.search_current,
+            Some(ThemeColor::Rgb(0xbf, 0x61, 0x6a))
+        );
+        assert_eq!(cfg.colors.keyword, None);
+        assert_eq!(cfg.colors.number, None);
+        assert_eq!(cfg.colors.comment, None);
+    }
+
+    #[test]
+    fn default_config_parses_with_its_colors_commented_out() {
+        let cfg = parse_theme_config(DEFAULT_CONFIG).expect("default config parsed");
+        assert_eq!(cfg.colors, ThemeColors::default());
     }
 
     #[test]

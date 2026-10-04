@@ -415,12 +415,13 @@ mod tests {
     use super::*;
     use crate::terminal::canvas::test_support::{has_styled_symbol, screen};
     use crate::terminal::render::RenderPalette;
+    use ratatui::style::Color;
 
     #[test]
     fn draw_date_picker_border_uses_accent_and_surface_background() {
         let palette = RenderPalette {
-            primary: 201,
-            surface_bg: 250,
+            primary: Color::Indexed(201),
+            surface_bg: Color::Indexed(250),
             ..RenderPalette::default()
         };
         let view = DatePickerView {
@@ -438,7 +439,7 @@ mod tests {
         let mut buf = screen(24, 80);
         draw_date_picker(&view, &mut buf, 24, 80, palette);
         assert!(
-            has_styled_symbol(&buf, "╭", 201, 250),
+            has_styled_symbol(&buf, "╭", Color::Indexed(201), Color::Indexed(250)),
             "date picker border should use accent fg with surface bg"
         );
     }

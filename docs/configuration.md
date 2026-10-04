@@ -66,6 +66,7 @@ allow_delete = false
 - `color_scheme`
 - `accent`
 - `icons`
+- `[theme.colors]`, see below
 
 ### color_scheme values
 
@@ -100,6 +101,31 @@ allow_delete = false
 - `nerd` (default): Nerd Font glyphs, as in yazi or lsd. Needs a [Nerd Font](https://www.nerdfonts.com/) in the terminal.
 - `unicode`: symbols from standard Unicode blocks, for any font.
 - `ascii`: plain ASCII markers.
+
+
+### `[theme.colors]`
+
+Colours that replace the color scheme's, much like foot's `[colors]`. Each value is hex (`2e3440` or `#2e3440`), shown exactly as written, or `none` for the terminal's own colour; `background = "none"` lets the terminal background (and its transparency) show through the editor. Unset keys, and values slate cannot read, keep the scheme's colour. `accent` here wins over `[theme] accent`.
+
+```toml
+[theme.colors]
+foreground = "eceff4"
+background = "none"
+accent = "88c0d0"
+code-block-background = "3b4252"
+selection-background = "434c5e"
+keyword = "81a1c1"
+string = "a3be8c"
+number = "b48ead"
+comment = "616e88"
+function = "88c0d0"
+type = "8fbcbb"
+variable = "ebcb8b"
+search-match = "5e81ac"
+search-current = "bf616a"
+```
+
+With `background = "none"`, slate treats the background as dark when picking text colours on it; on a light terminal, set `selection-background` too.
 
 ## Editor settings
 

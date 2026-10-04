@@ -1,5 +1,5 @@
 use crate::terminal::canvas::cell_style;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 
 use crate::editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType, MarkdownLineInfo};
 use crate::terminal::markdown_view::{
@@ -18,8 +18,8 @@ pub(super) struct CharStyle {
     pub(super) strikethrough: bool,
     pub(super) underline: bool,
     pub(super) reverse: bool,
-    pub(super) fg: Option<u8>,
-    pub(super) bg: Option<u8>,
+    pub(super) fg: Option<Color>,
+    pub(super) bg: Option<Color>,
 }
 
 impl CharStyle {
@@ -166,7 +166,7 @@ pub(super) fn apply_variable_styles(
     chars: &[char],
     styles: &mut [CharStyle],
     variable_names: Option<&VariableNames>,
-    variable_color: u8,
+    variable_color: Color,
 ) {
     let Some(variable_names) = variable_names else {
         return;

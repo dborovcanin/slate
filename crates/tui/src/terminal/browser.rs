@@ -20,7 +20,7 @@ use super::icons::Icons;
 use super::render::{LineDecorations, RenderContext, RenderPalette};
 use super::switcher::fuzzy_score;
 use super::text_utils::case_insensitive_matches;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 
 /// Characters of a note body loaded for its preview.
 pub const PREVIEW_BODY_CHARS: usize = 6_000;
@@ -695,11 +695,11 @@ fn pane_layout(cols: usize) -> (Option<Pane>, Pane, Option<Pane>) {
 
 /// One list row: optional marker, icon, text and a dim right-aligned label.
 pub(crate) struct Row {
-    pub marker: Option<u8>,
+    pub marker: Option<Color>,
     pub icon: &'static str,
-    pub icon_fg: u8,
+    pub icon_fg: Color,
     pub text: String,
-    pub text_fg: u8,
+    pub text_fg: Color,
     pub bold: bool,
     pub right: String,
 }
@@ -743,7 +743,7 @@ pub(crate) fn draw_rows(
             None => bg,
         };
         let on_accent = hover == Some(Hover::Focused);
-        let fg_on = |fg: u8| {
+        let fg_on = |fg: Color| {
             if on_accent {
                 contrast_fg_for_bg(row_bg)
             } else {
@@ -813,7 +813,7 @@ pub(crate) fn draw_rows(
 }
 
 /// Icon and its color for a note: open, protected, daily or plain.
-pub(crate) fn note_icon(look: &Look, note: &NoteEntry) -> (&'static str, u8) {
+pub(crate) fn note_icon(look: &Look, note: &NoteEntry) -> (&'static str, Color) {
     let icons = look.icons;
     let palette = look.palette;
     if note.id == look.active_note_id {
