@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use table_syntax::{is_table_line, split_table_cells, table_pipe_positions};
 
+use super::temporal;
+
 pub struct CalcEngine;
 
 /// A variable value imported from another note for cross-note calc evaluation.
@@ -562,7 +564,7 @@ impl<'a> VariableResolver<'a> {
                     dependency = Some(None);
                     continue;
                 };
-                frame.substituted.push_str(&value);
+                push_variable_value(&mut frame.substituted, &value);
                 frame.cursor = span.end;
                 frame.next += 1;
             }
@@ -650,6 +652,15 @@ impl<'a> VariableResolver<'a> {
                     frame.name
                 ),
             ),
+            // A clock time or duration keeps its unit; other values keep
+            // only their number.
+            Some(raw_value) if temporal::is_time_value(&raw_value) => {
+                self.states
+                    .insert(frame.normalized.clone(), ResolveState::Resolved);
+                self.values
+                    .insert(frame.normalized.clone(), raw_value.clone());
+                return Some(raw_value);
+            }
             Some(raw_value) => match extract_first_number(&raw_value) {
                 Some(numeric) => {
                     let formatted = format_number(numeric);
@@ -700,7 +711,7 @@ impl<'a> VariableResolver<'a> {
                 return None;
             };
 
-            out.push_str(&value);
+            push_variable_value(&mut out, &value);
             cursor = span.end;
         }
         out.push_str(&expression[cursor..]);
@@ -708,9 +719,12 @@ impl<'a> VariableResolver<'a> {
         Some(out)
     }
 
+    /// Values for other notes. Clock times and durations are left out until
+    /// exports carry units: their first number (`9` of `09:10`) would mislead.
     fn numeric_values(&self) -> FxHashMap<String, f64> {
         self.values
             .iter()
+            .filter(|(_, v)| !temporal::is_time_value(v))
             .filter_map(|(k, v)| extract_first_number(v).map(|n| (k.clone(), n)))
             .collect()
     }
@@ -729,6 +743,19 @@ impl<'a> VariableResolver<'a> {
             line,
             message,
         });
+    }
+}
+
+/// Appends a variable's value to an expression, in parentheses when it is a
+/// duration like `2h 35min`: `lunch * 2` then doubles all of it, and the
+/// parentheses mark it as a duration for the result.
+fn push_variable_value(out: &mut String, value: &str) {
+    if temporal::is_duration_value(value) {
+        out.push('(');
+        out.push_str(value);
+        out.push(')');
+    } else {
+        out.push_str(value);
     }
 }
 
@@ -1379,7 +1406,7 @@ fn evaluate_prepared(
                 Some(value)
             } else if let Some((_name, normalized, rhs)) = parse_variable_assignment(expression) {
                 let resolved = resolver.resolve(&normalized, &mut ctx);
-                if assignment_rhs_is_plain_numeric_literal(&rhs) {
+                if assignment_rhs_is_plain_numeric_literal(&rhs) || temporal::is_bare_clock(&rhs) {
                     None
                 } else {
                     resolved
@@ -1558,7 +1585,11 @@ fn evaluate_expression_with_variables(
 
     let text = match resolver.eval_raw(&substituted, ctx) {
         Some(text) => text,
-        None => evaluate_leading_expression(&substituted, |prefix| resolver.eval_raw(prefix, ctx))?,
+        None => evaluate_leading_expression(&substituted, |prefix| {
+            temporal::label_is_prose(&substituted, prefix)
+                .then(|| resolver.eval_raw(prefix, ctx))
+                .flatten()
+        })?,
     };
     if text == expr {
         return None;
@@ -1585,7 +1616,11 @@ fn evaluate_single(input: &str, ctx: &mut fend_core::Context) -> Option<String> 
     let (expr, applied_result) = split_applied_result(trimmed);
     let text = match evaluate_raw_expression(expr, ctx) {
         Some(text) => text,
-        None => evaluate_leading_expression(expr, |prefix| evaluate_raw_expression(prefix, ctx))?,
+        None => evaluate_leading_expression(expr, |prefix| {
+            temporal::label_is_prose(expr, prefix)
+                .then(|| evaluate_raw_expression(prefix, ctx))
+                .flatten()
+        })?,
     };
     if text == expr {
         return None;
@@ -1633,6 +1668,13 @@ fn evaluate_leading_expression(
 }
 
 fn evaluate_raw_expression(expr: &str, ctx: &mut fend_core::Context) -> Option<String> {
+    if temporal::contains_time(expr) {
+        return temporal::evaluate(expr, |lowered| evaluate_with_fend(lowered, ctx));
+    }
+    evaluate_with_fend(expr, ctx)
+}
+
+fn evaluate_with_fend(expr: &str, ctx: &mut fend_core::Context) -> Option<String> {
     match fend_core::evaluate_with_interrupt(expr, ctx, &GENERATION_INTERRUPT) {
         Ok(result) => Some(result.get_main_result().to_string()),
         Err(_) => None,
@@ -2853,7 +2895,7 @@ fn extract_first_number(text: &str) -> Option<f64> {
 }
 
 fn has_calc_signal(s: &str) -> bool {
-    if looks_like_date(s) {
+    if looks_like_date(s) || temporal::is_bare_clock(s) {
         return false;
     }
 
@@ -3043,6 +3085,100 @@ mod tests {
             variables_enabled: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn evaluates_clock_times_and_ranges() {
+        let engine = CalcEngine::new();
+        for (line, expected) in [
+            ("09:10-11:45", Some("2h 35min")),
+            ("11:45 - 09:10", Some("2h 35min")),
+            ("09:10 - 11:45", Some("-(2h 35min)")),
+            ("22:00-02:00", Some("4h")),
+            ("00:00-24:00", Some("24h")),
+            ("00:00-24:00 + 01:00-02:00", Some("25h")),
+            ("(17:00 - 09:00) to min", Some("480 mins")),
+            ("11:45 - 09:10 to min", Some("155 mins")),
+            (
+                "09:10-11:45 + 13:00-17:30 to h",
+                Some("approx. 7.0833333333 h"),
+            ),
+            ("09:10 * 2 to min", None),
+            ("09:10 + 2h to min", None),
+            ("(09:00 + 10:00) - 11:00", None),
+            ("09:00 + 10:00 - 11:00", None),
+            ("09:00 - 10:00 + 11:00", Some("10:00")),
+            ("09:10 + 2h lunch", Some("11:10")),
+            ("9:00-17:00 in office, 12:00-12:30 lunch", None),
+            ("09:00-10:00 to s + (09:00 * 2)", None),
+            ("11:45 - 09:10 work", Some("2h 35min")),
+            ("2h + 09:10 lunch", Some("11:10")),
+            ("10:30-11:00 in office", Some("30min")),
+            ("09:10-11:45 code-review", Some("2h 35min")),
+            ("09:10 + 11:45 to min", None),
+            ("09:10 / 2 to min", None),
+            ("09:10 + 2h", Some("11:10")),
+            ("09:10 + 2h 30min", Some("11:40")),
+            ("23:30 + 45min", Some("00:15")),
+            ("9am-5pm - 30min", Some("7h 30min")),
+            ("09:10-11:45 + 13:00-17:30", Some("7h 5min")),
+            ("(17:00 - 09:00) / 3", Some("2h 40min")),
+            ("(17:00 - 09:00) / 4h", Some("2")),
+            ("10:30-11:00 standup", Some("30min")),
+            ("09:10-11:45 = 2h 35min", None),
+            ("09:10", None),
+            ("9am", None),
+            ("9:10 pm", None),
+            ("09:10 + 11:45", None),
+            ("09:10 * 2", None),
+            ("meeting at 10:30", None),
+            ("2 + 2", Some("4")),
+        ] {
+            assert_eq!(engine.evaluate(line).as_deref(), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn clock_results_read_back_as_the_same_value() {
+        let engine = CalcEngine::new();
+        assert_eq!(engine.evaluate("11:10 - 09:10").as_deref(), Some("2h"));
+        assert_eq!(
+            engine.evaluate("-(2h 35min) + 09:10-11:45").as_deref(),
+            Some("0min")
+        );
+    }
+
+    #[test]
+    fn variables_keep_clock_times_and_durations() {
+        let engine = CalcEngine::new();
+        let lines = note(&[
+            "start := 09:10",
+            "end := 17:30",
+            "lunch := 12:00-12:45",
+            "end - start - lunch",
+            "start + 2h",
+            "lunch * 2",
+            "end - start - 45min",
+        ]);
+        let result = engine.evaluate_note_context(&lines, variables_on());
+        let values: Vec<_> = result.line_results.iter().map(Option::as_deref).collect();
+        assert_eq!(
+            values,
+            vec![
+                None,
+                None,
+                Some("45min"),
+                Some("7h 35min"),
+                Some("11:10"),
+                Some("1h 30min"),
+                Some("7h 35min"),
+            ]
+        );
+        assert!(
+            result.variable_values.is_empty(),
+            "{:?}",
+            result.variable_values
+        );
     }
 
     #[test]

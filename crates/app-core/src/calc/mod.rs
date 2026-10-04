@@ -1,4 +1,5 @@
 mod engine;
+mod temporal;
 
 pub use engine::{
     current_eval_generation, scan_cross_note_refs, scan_variable_assignments,
