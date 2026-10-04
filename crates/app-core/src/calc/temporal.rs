@@ -72,8 +72,10 @@ pub(super) fn evaluate(expr: &str, mut eval: impl FnMut(&str) -> Option<String>)
     let tokens = tokenize(expr);
     let lowered = lower(expr, &tokens);
     // An explicit conversion (`(17:00 - 09:00) to min`) asks fend's format.
-    if has_conversion(expr, &tokens) {
-        return eval(&lowered);
+    // Only a duration converts: a clock time has no unit to convert to.
+    if let Some(at) = conversion_at(expr, &tokens) {
+        let points = PointCounter::new(expr, &tokens[..=at]).count()?;
+        return if points == 0 { eval(&lowered) } else { None };
     }
     let points = PointCounter::new(expr, &tokens).count()?;
     let seconds = eval(&format!("({lowered}) to s")).and_then(|text| parse_seconds(&text));
@@ -147,7 +149,13 @@ fn lex_clock_or_range(expr: &str, start: usize) -> Option<(Token, usize)> {
     // `11:45 - 09:10` is a subtraction.
     if expr.as_bytes().get(end) == Some(&b'-') {
         if let Some((range_end, to)) = lex_clock(expr, end + 1) {
-            let length = (to - from).rem_euclid(SECONDS_PER_DAY);
+            // Only a range ending before it starts runs past midnight;
+            // `00:00-24:00` is a whole day.
+            let length = if to < from {
+                to - from + SECONDS_PER_DAY
+            } else {
+                to - from
+            };
             return Some((Token::Duration(length), range_end));
         }
     }
@@ -298,10 +306,11 @@ fn is_quantity(text: &str) -> bool {
     true
 }
 
-/// A top-level `to` or `in` conversion, outside any parentheses.
-fn has_conversion(expr: &str, tokens: &[(Token, std::ops::Range<usize>)]) -> bool {
+/// The token holding a top-level `to` or `in` conversion, outside any
+/// parentheses. What precedes it is what gets converted.
+fn conversion_at(expr: &str, tokens: &[(Token, std::ops::Range<usize>)]) -> Option<usize> {
     let mut depth = 0usize;
-    tokens.iter().any(|(token, span)| match token {
+    tokens.iter().position(|(token, span)| match token {
         Token::Open => {
             depth += 1;
             false
@@ -524,6 +533,8 @@ mod tests {
         assert_eq!(clocks("09:10-11:45"), vec![Token::Duration(9_300)]);
         assert_eq!(clocks("9am-5pm"), vec![Token::Duration(28_800)]);
         assert_eq!(clocks("22:00-02:00"), vec![Token::Duration(14_400)]);
+        assert_eq!(clocks("00:00-24:00"), vec![Token::Duration(86_400)]);
+        assert_eq!(clocks("09:00-09:00"), vec![Token::Duration(0)]);
         assert_eq!(
             clocks("11:45 - 09:10"),
             vec![Token::Clock(42_300), Token::Clock(33_000)]
@@ -608,6 +619,23 @@ mod tests {
         assert!(!is_quantity(" round"));
         assert!(!is_quantity(" 2 "));
         assert!(!is_quantity(" 2 to min"));
+    }
+
+    #[test]
+    fn converts_only_durations() {
+        let fend = |expr: &str| Some(format!("<{expr}>"));
+        assert_eq!(
+            evaluate("(17:00 - 09:00) to min", fend).as_deref(),
+            Some("<((61200 s) - (32400 s)) to min>")
+        );
+        for expr in [
+            "09:10 + 2h to min",
+            "09:10 * 2 to min",
+            "09:10 + 11:45 in h",
+            "09:10 to min",
+        ] {
+            assert_eq!(evaluate(expr, fend), None, "{expr}");
+        }
     }
 
     #[test]

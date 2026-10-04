@@ -301,10 +301,10 @@ sqrt(144) + 3^2         → 21
 ```
 
 - Clock times: `09:10`, `9:10:30`, `9:10pm` / `9:10 pm`, `9am` (a bare hour needs `am`/`pm` attached, so `5 pm` stays picometres), `24:00`.
-- A range is two clock times joined by `-` with no spaces; it runs forward, past midnight if needed. With spaces, `-` subtracts.
+- A range is two clock times joined by `-` with no spaces; it runs forward, past midnight if it ends before it starts (`00:00-24:00` is a whole day). With spaces, `-` subtracts.
 - Clock time - clock time is a duration and clock time ± duration a clock time; adding, multiplying or dividing clock times gives no result.
 - Results read as `2h 35min` and `11:10`, so `Tab` and variables keep them: `start := 09:10`, `lunch := 12:00-12:45`, then `17:30 - start - lunch`.
-- A clock time on its own (`meeting at 10:30`) shows no result. `to` / `in` converts as usual: `(17:00 - 09:00) to min`.
+- A clock time on its own (`meeting at 10:30`) shows no result. `to` / `in` converts a duration as usual: `(17:00 - 09:00) to min`; a clock time does not convert.
 - A variable holding a clock time or duration is not offered to other notes yet. Durations written directly (`lunch := 45min`) keep only their number, like other units in variables.
 - `:sum` / `:avg` do not add up ranges yet.
 
