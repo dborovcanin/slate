@@ -89,11 +89,42 @@ pub(super) fn evaluate(expr: &str, mut eval: impl FnMut(&str) -> Option<String>)
     }
 }
 
-/// Whether `expr` misuses a clock time: `09:10 + 11:45`, `09:10 * 2`,
-/// `09:10 to min`. Such a line gets no result at all, not even from the part
-/// before a trailing label.
-pub(super) fn rejects(expr: &str) -> bool {
-    contains_time(expr) && plan(expr, &tokenize(expr)).is_none()
+/// Whether the part of `expr` after `prefix` is a label, so a line that
+/// fails as a whole may show `prefix`'s result: `11:45 - 09:10 work`. Not
+/// when the rest holds more calculation (`09:00-10:00 to s + (09:00 * 2)`),
+/// or a conversion refused for a clock time (`09:10 + 2h to min`). Lines
+/// without times are not checked.
+pub(super) fn label_is_prose(expr: &str, prefix: &str) -> bool {
+    let expr = expr.trim();
+    if !contains_time(expr) {
+        return true;
+    }
+    let Some(rest) = expr.get(prefix.len()..) else {
+        return false;
+    };
+    let bytes = rest.as_bytes();
+    let calculates = tokenize(rest).iter().any(|(token, span)| match token {
+        Token::Clock(_) | Token::Duration(_) | Token::Plus | Token::Product => true,
+        // A dash inside a word (`code-review`) is not a subtraction.
+        Token::Minus => {
+            let is_letter = |idx: Option<usize>| {
+                idx.and_then(|idx| bytes.get(idx))
+                    .is_some_and(u8::is_ascii_alphabetic)
+            };
+            !(is_letter(span.start.checked_sub(1)) && is_letter(Some(span.end)))
+        }
+        _ => false,
+    });
+    if calculates {
+        return false;
+    }
+    // `to`/`in` starts a label only when the line was a conversion fend
+    // could not do (`10:30-11:00 in office`), not one refused.
+    let starts_conversion = rest
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("to") || word.eq_ignore_ascii_case("in"));
+    !starts_conversion || plan(expr, &tokenize(expr)) == Some(Plan::Convert)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -715,23 +746,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_misused_clock_times_but_not_prose() {
-        for expr in [
-            "09:10 + 11:45",
-            "09:10 * 2 groceries",
-            "09:10 + 2h to min",
-            "(09:00 + 10:00) - 11:00",
+    fn tells_trailing_labels_from_more_calculation() {
+        for (expr, prefix) in [
+            ("11:45 - 09:10 work", "11:45 - 09:10"),
+            ("2h + 09:10 lunch", "2h + 09:10"),
+            ("09:10-11:45 code-review (team)", "09:10-11:45"),
+            ("10:30-11:00 in office", "10:30-11:00"),
+            ("100 - 20 to s + (3 * 2)", "100 - 20"),
         ] {
-            assert!(rejects(expr), "{expr}");
+            assert!(label_is_prose(expr, prefix), "{expr}");
         }
-        for expr in [
-            "10:30-11:00 standup",
-            "09:10 + 2h lunch",
-            "9:00-17:00 in office, 12:00-12:30 lunch",
-            "11:45 - 09:10 to min",
-            "2 + 2",
+        for (expr, prefix) in [
+            ("09:00-10:00 to s + (09:00 * 2)", "09:00-10:00"),
+            ("9:00-17:00 in office, 12:00-12:30 lunch", "9:00-17:00"),
+            ("09:10 + 2h to min", "09:10 + 2h"),
+            ("09:10-11:45 work - 2h", "09:10-11:45"),
         ] {
-            assert!(!rejects(expr), "{expr}");
+            assert!(!label_is_prose(expr, prefix), "{expr}");
         }
     }
 

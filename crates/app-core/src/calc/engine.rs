@@ -1585,8 +1585,11 @@ fn evaluate_expression_with_variables(
 
     let text = match resolver.eval_raw(&substituted, ctx) {
         Some(text) => text,
-        None if temporal::rejects(&substituted) => return None,
-        None => evaluate_leading_expression(&substituted, |prefix| resolver.eval_raw(prefix, ctx))?,
+        None => evaluate_leading_expression(&substituted, |prefix| {
+            temporal::label_is_prose(&substituted, prefix)
+                .then(|| resolver.eval_raw(prefix, ctx))
+                .flatten()
+        })?,
     };
     if text == expr {
         return None;
@@ -1613,8 +1616,11 @@ fn evaluate_single(input: &str, ctx: &mut fend_core::Context) -> Option<String> 
     let (expr, applied_result) = split_applied_result(trimmed);
     let text = match evaluate_raw_expression(expr, ctx) {
         Some(text) => text,
-        None if temporal::rejects(expr) => return None,
-        None => evaluate_leading_expression(expr, |prefix| evaluate_raw_expression(prefix, ctx))?,
+        None => evaluate_leading_expression(expr, |prefix| {
+            temporal::label_is_prose(expr, prefix)
+                .then(|| evaluate_raw_expression(prefix, ctx))
+                .flatten()
+        })?,
     };
     if text == expr {
         return None;
@@ -3103,7 +3109,12 @@ mod tests {
             ("09:00 + 10:00 - 11:00", None),
             ("09:00 - 10:00 + 11:00", Some("10:00")),
             ("09:10 + 2h lunch", Some("11:10")),
-            ("9:00-17:00 in office, 12:00-12:30 lunch", Some("8h")),
+            ("9:00-17:00 in office, 12:00-12:30 lunch", None),
+            ("09:00-10:00 to s + (09:00 * 2)", None),
+            ("11:45 - 09:10 work", Some("2h 35min")),
+            ("2h + 09:10 lunch", Some("11:10")),
+            ("10:30-11:00 in office", Some("30min")),
+            ("09:10-11:45 code-review", Some("2h 35min")),
             ("09:10 + 11:45 to min", None),
             ("09:10 / 2 to min", None),
             ("09:10 + 2h", Some("11:10")),
