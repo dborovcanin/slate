@@ -381,7 +381,7 @@ impl TerminalApp {
                 return Ok(());
             }
             Key::Paste(text) => {
-                if self.try_import_image_paste(db, &text)? {
+                if self.try_import_image_paste(db, &text)? || self.try_paste_as_table(&text) {
                     should_autoformat = false;
                     refresh_variable_popup = true;
                 } else {

@@ -2603,6 +2603,36 @@ impl TerminalApp {
         Ok(format!("![Image]({})", imported.markdown_path))
     }
 
+    /// Pasted CSV or TSV as markdown table lines, unless the note has tables
+    /// off, or the cursor is in a fenced code block or already in a table
+    /// (where a paste fills cells).
+    pub(super) fn pasted_table(&mut self, text: &str) -> Option<Vec<String>> {
+        if !self.note_table_module_enabled() || is_markdown_table_line(self.current_line()) {
+            return None;
+        }
+        let table = crate::editor_core::table_import::delimited_text_to_table(text)?;
+        (!self
+            .fence_state_before_line(self.editor.cursor_line)
+            .in_code_block)
+            .then_some(table)
+    }
+
+    /// Pastes CSV or TSV as a table: in place of a blank line, or on the
+    /// lines below the cursor's.
+    pub(super) fn try_paste_as_table(&mut self, text: &str) -> bool {
+        let Some(table) = self.pasted_table(text) else {
+            return false;
+        };
+        let mut block = table.join("\n");
+        if !self.current_line().trim().is_empty() {
+            self.editor.cursor_col = line_char_len(self.current_line());
+            block.insert(0, '\n');
+        }
+        self.insert_paste(&block);
+        self.status = "pasted as table".to_string();
+        true
+    }
+
     pub(super) fn insert_newline(&mut self) {
         let changed_from_line = self.editor.cursor_line;
         let col = self.editor.cursor_col;

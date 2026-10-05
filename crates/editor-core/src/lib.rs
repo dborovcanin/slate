@@ -12,6 +12,7 @@ pub mod operations;
 pub mod substitute;
 pub mod sum;
 pub mod table;
+pub mod table_import;
 pub mod text_rules;
 pub mod types;
 pub mod vim;

@@ -2369,3 +2369,84 @@ fn qualified_table_completion_never_falls_back_to_local_helpers() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+fn paste_into(body: &str, line: usize, col: usize, text: &str) -> Vec<String> {
+    let (db, mut app, path) = app_with_note(body);
+    app.mode = UiMode::Editor;
+    app.editor.cursor_line = line;
+    app.editor.cursor_col = col;
+    app.handle_editor_key(&db, Key::Paste(text.to_string()))
+        .expect("paste applies");
+    let lines = app.editor.lines.clone();
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+    lines
+}
+
+#[test]
+fn pasting_tsv_on_a_blank_line_makes_a_table_there() {
+    assert_eq!(
+        paste_into("Hours\n\nend", 1, 0, "Name\tHours\nAna\t7.5\n"),
+        vec![
+            "Hours",
+            "| Name | Hours |",
+            "| ---- | ----- |",
+            "| Ana  | 7.5   |",
+            "end",
+        ]
+    );
+}
+
+#[test]
+fn pasting_csv_after_text_puts_the_table_below_the_line() {
+    assert_eq!(
+        paste_into("Totals for May", 0, 6, "a,b\n1,2"),
+        vec![
+            "Totals for May",
+            "| a   | b   |",
+            "| --- | --- |",
+            "| 1   | 2   |"
+        ]
+    );
+}
+
+#[test]
+fn pasting_csv_stays_text_in_code_blocks_and_prose() {
+    assert_eq!(
+        paste_into("```csv\n\n```", 1, 0, "a,b\n1,2"),
+        vec!["```csv", "a,b", "1,2", "```"]
+    );
+    assert_eq!(
+        paste_into("", 0, 0, "Hello, world\nBye, moon"),
+        vec!["Hello, world", "Bye, moon"]
+    );
+}
+
+#[test]
+fn pasting_csv_stays_text_when_tables_are_off() {
+    let (db, mut app, path) = app_with_note_and_modules("", note_modules(true, false, true, true));
+    app.mode = UiMode::Editor;
+    app.handle_editor_key(&db, Key::Paste("a,b\n1,2".to_string()))
+        .expect("paste applies");
+    assert_eq!(app.editor.lines, vec!["a,b", "1,2"]);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn csv_on_a_table_line_is_left_to_fill_cells() {
+    let (db, mut app, path) = app_with_note("x");
+    assert!(app.pasted_table("a\tb\n1\t2").is_some());
+    app.editor.lines = vec!["| a | b |".to_string(), "| - | - |".to_string()];
+    app.editor.cursor_line = 0;
+    assert_eq!(
+        app.pasted_table("a\tb\n1\t2"),
+        None,
+        "a table line fills cells"
+    );
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

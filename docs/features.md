@@ -332,6 +332,7 @@ Markdown tables align as you type, and the cursor moves by cell.
 - Helpers: `sum_row()`, `sum_col()`, `avg_row()`, `avg_col()`. Typing a helper name in a formula cell (`sum`, `avg_`) offers them in the autocomplete popup, with matching variables after.
 - Reference errors render as `!ERROR#out_of_bounds`, `!ERROR#non_numeric`, `!ERROR#self_reference`, `!ERROR#cycle`.
 - Multiline cells use continuation rows starting with `|>`.
+- Pasting CSV or TSV (cells copied from a spreadsheet) makes a table, the first row its header: on a blank line in its place, otherwise below the cursor's line; `p` / `P` from the system clipboard paste it as whole lines. TSV needs the same number of tabs on every row; CSV (`,` or `;`, `"`-quoted fields) also needs no space after a delimiter, so prose like `Hello, world` stays text. Inside a code block or a table, or with the table module off, the paste stays text.
 
 | Key (Insert)                                | Action                                                          |
 | ------------------------------------------- | --------------------------------------------------------------- |

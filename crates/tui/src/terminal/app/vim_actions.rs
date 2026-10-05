@@ -254,6 +254,16 @@ impl TerminalApp {
         clipboard::read_clipboard_text()
     }
 
+    /// The system clipboard as a register: CSV or TSV becomes table rows,
+    /// pasted as whole lines; anything else is text.
+    fn read_system_clipboard_register(&mut self) -> Option<VimRegister> {
+        let text = self.read_system_clipboard_text()?;
+        Some(match self.pasted_table(&text) {
+            Some(table) => VimRegister::linewise(table.join("\n")),
+            None => VimRegister::charwise(text),
+        })
+    }
+
     /// Imports a clipboard image into the note and returns its markdown,
     /// or none with the failure in the status line.
     pub(super) fn import_clipboard_image(&mut self, db: &Db, image: &[u8]) -> Option<String> {
@@ -791,11 +801,13 @@ impl TerminalApp {
                         // An image is imported once; its markdown then pastes
                         // like clipboard text, so a count repeats the link.
                         let pasted = match clipboard::read_clipboard_image_via_commands(true) {
-                            Some(image) => self.import_clipboard_image(db, &image),
-                            None => self.read_system_clipboard_text(),
+                            Some(image) => self
+                                .import_clipboard_image(db, &image)
+                                .map(VimRegister::charwise),
+                            None => self.read_system_clipboard_register(),
                         };
-                        if let Some(text) = pasted {
-                            self.clipboard = VimRegister::charwise(text);
+                        if let Some(register) = pasted {
+                            self.clipboard = register;
                         }
                     }
                     if !self.clipboard.is_empty() {
@@ -853,11 +865,13 @@ impl TerminalApp {
                     // Reached only with an empty register: paste the system
                     // clipboard, like `p` does.
                     let pasted = match clipboard::read_clipboard_image_via_commands(true) {
-                        Some(image) => self.import_clipboard_image(db, &image),
-                        None => self.read_system_clipboard_text(),
+                        Some(image) => self
+                            .import_clipboard_image(db, &image)
+                            .map(VimRegister::charwise),
+                        None => self.read_system_clipboard_register(),
                     };
-                    if let Some(sys_clip_text) = pasted {
-                        self.clipboard = VimRegister::charwise(sys_clip_text);
+                    if let Some(register) = pasted {
+                        self.clipboard = register;
                         if let Some((shared, scope_start_offset)) =
                             self.try_execute_shared_vim_action(action.intent, count, None)
                         {

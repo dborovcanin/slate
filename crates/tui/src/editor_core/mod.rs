@@ -14,6 +14,7 @@ pub use editor_core::operations;
 pub use editor_core::substitute;
 pub use editor_core::sum;
 pub use editor_core::table;
+pub use editor_core::table_import;
 pub use editor_core::text_rules;
 pub use editor_core::types;
 pub use editor_core::vim;
