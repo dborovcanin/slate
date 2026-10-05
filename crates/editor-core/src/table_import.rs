@@ -58,8 +58,9 @@ fn parse_rows(text: &str, delimiter: char) -> Option<Vec<Vec<String>>> {
                 row.push(cell_text(&field));
                 field.clear();
                 field_start = true;
-                // `a, b` is prose, not CSV.
-                if delimiter != '\t' && chars.peek().is_some_and(|next| next.is_whitespace()) {
+                // `a, b` is prose, not CSV; a row may end in an empty field.
+                if delimiter != '\t' && chars.peek().is_some_and(|next| matches!(next, ' ' | '\t'))
+                {
                     return None;
                 }
                 continue;
@@ -84,8 +85,28 @@ fn parse_rows(text: &str, delimiter: char) -> Option<Vec<Vec<String>>> {
 }
 
 /// A field as a table cell: trimmed, with `|` escaped so it stays one cell.
+/// A pipe is escaped by an odd number of backslashes, so any already before
+/// it are doubled: `a\|b` becomes `a\\\|b`.
 fn cell_text(field: &str) -> String {
-    field.trim().replace('|', "\\|")
+    let mut out = String::with_capacity(field.len());
+    let mut backslashes = 0;
+    for ch in field.trim().chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '|' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                out.push('|');
+                backslashes = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push(ch);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes));
+    out
 }
 
 #[cfg(test)]
@@ -133,6 +154,30 @@ mod tests {
                 "| 1   |     | a\\|b |"
             ]
         );
+    }
+
+    #[test]
+    fn rows_may_end_in_an_empty_field() {
+        assert_eq!(
+            table("a,b,c\n1,2,\n3,4,5").unwrap(),
+            vec![
+                "| a   | b   | c   |",
+                "| --- | --- | --- |",
+                "| 1   | 2   |     |",
+                "| 3   | 4   | 5   |"
+            ]
+        );
+    }
+
+    #[test]
+    fn backslashes_before_a_pipe_keep_it_inside_the_cell() {
+        assert_eq!(cell_text(r"a\|b"), r"a\\\|b");
+        assert_eq!(cell_text(r"a\\|b"), r"a\\\\\|b");
+        assert_eq!(cell_text(r"C:\dir\"), r"C:\dir\");
+        let lines = table("name,note\nitem,a\\|b").unwrap();
+        for line in &lines {
+            assert_eq!(table_syntax::split_table_cells(line).len(), 2, "{line}");
+        }
     }
 
     #[test]

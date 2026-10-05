@@ -2417,6 +2417,11 @@ fn pasting_csv_stays_text_in_code_blocks_and_prose() {
         paste_into("```csv\n\n```", 1, 0, "a,b\n1,2"),
         vec!["```csv", "a,b", "1,2", "```"]
     );
+    // At the end of the opening fence the paste lands inside the block.
+    assert_eq!(
+        paste_into("```csv\n```", 0, 6, "a,b\n1,2"),
+        vec!["```csva,b", "1,2", "```"]
+    );
     assert_eq!(
         paste_into("", 0, 0, "Hello, world\nBye, moon"),
         vec!["Hello, world", "Bye, moon"]

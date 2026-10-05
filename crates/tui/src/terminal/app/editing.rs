@@ -2611,10 +2611,12 @@ impl TerminalApp {
             return None;
         }
         let table = crate::editor_core::table_import::delimited_text_to_table(text)?;
-        (!self
-            .fence_state_before_line(self.editor.cursor_line)
-            .in_code_block)
-            .then_some(table)
+        // The table lands on, above or below the cursor's line: none of it
+        // may be code, so an opening or closing fence line counts as code.
+        let mut fence = self.fence_state_before_line(self.editor.cursor_line);
+        let before = fence.in_code_block;
+        crate::editor_core::markdown_tokens::advance_fence_state(&mut fence, self.current_line());
+        (!before && !fence.in_code_block).then_some(table)
     }
 
     /// Pastes CSV or TSV as a table: in place of a blank line, or on the
