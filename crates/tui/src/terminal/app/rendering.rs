@@ -1794,6 +1794,14 @@ impl TerminalApp {
         self.draw_wiki_link_autocomplete_popup(buf, rows, cols);
         self.draw_wiki_link_preview_popup(buf, rows, cols);
         self.draw_image_preview_popup(buf, rows, cols, db);
+        if let Some((row, col)) = self.draw_help(buf, rows, cols) {
+            return CursorPlacement {
+                row: u16::try_from(row.saturating_sub(1)).unwrap_or(u16::MAX),
+                col: u16::try_from(col.saturating_sub(1)).unwrap_or(u16::MAX),
+                block: false,
+                visible: true,
+            };
+        }
 
         let cursor_block = !dialog_open
             && matches!(

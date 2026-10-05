@@ -32,6 +32,7 @@ Grouped by area, with the keys and commands for each. Commands run in the comman
 | Delete a note | `Delete` in the switcher |
 | Autosave (background, idle + on switch/quit), manual save | automatic, `Ctrl+S`, `:w`, `:w!` |
 | Quit | `Ctrl+Q`, `:q`, `:wq`; unsaved changes ask once (repeat or `:q!` to discard) |
+| Help: keys and commands, filtered as you type; `Enter` puts a command in the command bar | `F1`, `:help` |
 | Reload the note | `:e` (asks about unsaved changes), `:e!` (drops them) |
 | Open a markdown file as a note (saved back to the file) | `slate path/to/file.md` |
 | Collections and a session working collection | `Ctrl+G`, `:collection create/choose/join/leave/update/delete/purge` |

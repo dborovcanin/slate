@@ -44,6 +44,7 @@ pub enum Key {
     End,
     PageUp,
     PageDown,
+    F1,
     Ctrl(char),
 }
 
@@ -145,6 +146,7 @@ fn map_key_event(event: KeyEvent) -> Vec<Key> {
         KeyCode::End => Key::End,
         KeyCode::PageUp => Key::PageUp,
         KeyCode::PageDown => Key::PageDown,
+        KeyCode::F(1) => Key::F1,
         _ => return Vec::new(),
     };
     if alt {

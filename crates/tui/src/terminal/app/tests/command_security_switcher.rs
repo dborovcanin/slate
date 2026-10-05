@@ -3254,3 +3254,59 @@ fn a_locked_open_note_edited_elsewhere_stays_locked_quietly() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn f1_opens_help_that_filters_and_closes() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Normal;
+    run_keys(&mut app, &db, &[Key::F1]);
+    assert!(app.help.is_some());
+    assert!(screen_text(&mut app).contains("Help"));
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('u'),
+            Key::Char('n'),
+            Key::Char('d'),
+            Key::Char('o'),
+        ],
+    );
+    let text = screen_text(&mut app);
+    assert!(text.contains("Undo / redo"), "{text}");
+    assert!(!text.contains("Visual / visual-line"), "{text}");
+
+    run_keys(&mut app, &db, &[Key::Esc]);
+    assert!(app.help.is_none());
+    assert_eq!(app.mode, UiMode::Normal);
+    assert_eq!(
+        app.editor.lines,
+        vec!["one"],
+        "keys typed in help do not edit"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn help_command_opens_help_and_enter_prefills_a_command() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Normal;
+    app.execute_terminal_command(&db, "help");
+    assert!(app.help.is_some());
+
+    for ch in "paste-image".chars() {
+        run_keys(&mut app, &db, &[Key::Char(ch)]);
+    }
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert!(app.help.is_none());
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert_eq!(app.command_input, "paste-image");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

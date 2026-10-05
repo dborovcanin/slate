@@ -9,6 +9,7 @@ mod external_open;
 mod folding;
 mod folding_state;
 pub(crate) mod graphics;
+mod help;
 mod history;
 mod icons;
 mod input;

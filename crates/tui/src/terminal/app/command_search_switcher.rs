@@ -435,6 +435,7 @@ impl TerminalApp {
             | Key::End
             | Key::PageUp
             | Key::PageDown
+            | Key::F1
             | Key::Ctrl(_) => {}
         }
         Ok(())
@@ -1794,6 +1795,10 @@ impl TerminalApp {
                             }
                         }
                     }
+                    return;
+                }
+                crate::editor_core::engine::HostCommandPlan::Help => {
+                    self.open_help();
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::PasteImage => {

@@ -10,6 +10,12 @@ Every command-bar command with its aliases. For what each feature does and its k
 - Commands run from Visual mode apply to the selection.
 - `w`, `wq`, `q` (and their `!` forms) are available only when the bar was opened from Normal/Visual mode.
 
+## Help
+
+| Command | Aliases | Purpose |
+| --- | --- | --- |
+| `help` | `h` | Keys and commands, filtered as you type (also `F1`); `Enter` puts a command in the command bar |
+
 ## Calculation
 
 | Command | Purpose |

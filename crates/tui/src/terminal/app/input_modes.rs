@@ -50,6 +50,19 @@ impl TerminalApp {
     }
 
     fn handle_key_inner(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if self.help.is_some() {
+            self.handle_help_key(key);
+            return Ok(());
+        }
+        if key == Key::F1
+            && matches!(
+                self.mode,
+                UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+            )
+        {
+            self.open_help();
+            return Ok(());
+        }
         if self.image_preview.is_some() {
             match key {
                 Key::Esc => self.image_preview = None,
@@ -456,7 +469,7 @@ impl TerminalApp {
                     self.dismiss_variable_autocomplete_popup();
                 }
             }
-            Key::Ctrl(_) => {}
+            Key::Ctrl(_) | Key::F1 => {}
         }
 
         if preserve_table_column || cursor_after_row_end {

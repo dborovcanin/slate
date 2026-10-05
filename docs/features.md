@@ -61,6 +61,7 @@ The note switcher, its content search and the collection picker are popups style
 | `Ctrl+W`, `Ctrl+Backspace` in the switcher | Delete the last word of the query                                                         |
 | `Esc` / `Ctrl+P` in the switcher           | Close it                                                                                  |
 | `Ctrl+Q`                                   | Quit (from any mode)                                                                      |
+| `F1`, `:help` (`:h`)                       | Help: keys and commands; type to filter, `Enter` puts a command in the command bar        |
 
 Encrypted notes ask for their password (or their collection's) before opening. Content search only indexes unprotected notes.
 

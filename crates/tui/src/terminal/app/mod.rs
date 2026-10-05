@@ -803,6 +803,8 @@ struct TerminalApp {
     variable_autocomplete_popup: VariableAutocompletePopupState,
     wiki_link_preview: WikiLinkPreviewState,
     image_preview: Option<ImagePreviewState>,
+    /// The help popup (`:help`, `F1`), over any editing mode.
+    help: Option<help::HelpState>,
     note_password_dialog: Option<NotePasswordDialog>,
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
@@ -834,6 +836,7 @@ mod browser;
 mod calc_helpers;
 mod command_search_switcher;
 mod editing;
+mod help;
 mod input_modes;
 mod picker;
 mod reminder_helpers;
@@ -1275,6 +1278,7 @@ impl TerminalApp {
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             wiki_link_preview: WikiLinkPreviewState::default(),
             image_preview: None,
+            help: None,
             note_password_dialog: None,
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_note_suggestions_cache: Vec::new(),
