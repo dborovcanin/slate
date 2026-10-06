@@ -57,7 +57,25 @@ max_body_bytes = 524288
 [mcp]
 enabled = false
 allow_delete = false
+
+[startup]
+default_collection = ""
 ```
+
+## Default collection
+
+Set `[startup] default_collection = "Work"` to start with an existing collection
+as the working collection. Note browsing and search are scoped to it, and new
+notes (including `slate --new`) are created in it. Names use the same
+case-insensitive matching as collection commands.
+
+An empty or omitted value keeps all notes in scope. A missing collection shows a
+status message and falls back to all notes; it is not created automatically.
+The setting does not change which existing note opens at startup: an explicit
+note or the most recent note still opens as usual. You can change the working
+collection during the session with `:collection choose Work` or clear it with
+`:collection choose none`. Encrypted collections still require unlocking before
+new notes can be created in them.
 
 ## Theme settings
 

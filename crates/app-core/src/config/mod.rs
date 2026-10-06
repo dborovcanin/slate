@@ -241,6 +241,9 @@ enabled = false
 allow_delete = false
 
 [startup]
+# Working collection for note browsing and new notes (existing collection name).
+# Leave empty to browse all notes. A missing collection is ignored.
+default_collection = ""
 # Enable non-critical startup work asynchronously after first paint/edit
 # (prewarm/hydration/background sync loops).
 background_tasks_enabled = true
@@ -349,6 +352,8 @@ pub struct ThemeConfig {
     pub vim_mode: bool,
     pub wrap: bool,
     pub background_tasks_enabled: bool,
+    /// `[startup]`: existing collection to use as the initial working collection.
+    pub default_collection: Option<String>,
     pub date_format: String,
     pub date_time_format: String,
     pub variables_autocomplete_min_chars: u8,
@@ -586,6 +591,7 @@ impl Default for ThemeConfig {
             vim_mode: DEFAULT_VIM_MODE,
             wrap: DEFAULT_WRAP,
             background_tasks_enabled: DEFAULT_BACKGROUND_TASKS_ENABLED,
+            default_collection: None,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
             date_time_format: DEFAULT_DATE_TIME_FORMAT.to_string(),
             variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
@@ -753,6 +759,7 @@ struct PerfSection {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct StartupSection {
     background_tasks_enabled: Option<bool>,
+    default_collection: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1018,6 +1025,11 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
             .startup
             .background_tasks_enabled
             .unwrap_or(DEFAULT_BACKGROUND_TASKS_ENABLED),
+        default_collection: raw
+            .startup
+            .default_collection
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty()),
         date_time_format: normalize_date_time_format(raw.editor.date_time_format, &date_format),
         date_format,
         variables_autocomplete_min_chars: normalize_variable_autocomplete_min_chars(
@@ -1484,6 +1496,20 @@ mod tests {
         )
         .expect("config");
         assert!(!cfg.background_tasks_enabled);
+    }
+
+    #[test]
+    fn parses_default_collection() {
+        let cfg =
+            parse_theme_config("[startup]\ndefault_collection = '  Work Notes  '").expect("config");
+        assert_eq!(cfg.default_collection.as_deref(), Some("Work Notes"));
+        for text in ["", DEFAULT_CONFIG, "[startup]\ndefault_collection = '   '"] {
+            assert_eq!(
+                parse_theme_config(text).expect("config").default_collection,
+                None
+            );
+        }
+        assert_eq!(ThemeConfig::default().default_collection, None);
     }
 
     #[test]

@@ -1040,7 +1040,21 @@ impl TerminalApp {
         let startup_begin = Instant::now();
 
         let note_begin = Instant::now();
-        let mut active_note = select_note(db, opts, &note_creation_theme)?;
+        let default_collection = note_creation_theme
+            .default_collection
+            .as_deref()
+            .map(|name| db.get_collection_by_name(name))
+            .transpose()?;
+        let missing_collection = matches!(default_collection, Some(None));
+        let working_collection = default_collection.flatten();
+        let mut active_note = select_note(
+            db,
+            opts,
+            &note_creation_theme,
+            working_collection
+                .as_ref()
+                .map(|collection| collection.id.as_str()),
+        )?;
         let (render_plain_text_file, render_file_language) =
             file_render_syntax_for_note_id(&active_note.id);
         let loading_note = note_begin.elapsed();
@@ -1159,7 +1173,15 @@ impl TerminalApp {
             UiMode::Editor
         };
         let perf_enabled = crate::config::load_perf_config().enabled;
-        let initial_status = if vim_mode {
+        let initial_status = if missing_collection {
+            format!(
+                "default collection not found: {}",
+                note_creation_theme
+                    .default_collection
+                    .as_deref()
+                    .unwrap_or_default()
+            )
+        } else if vim_mode {
             "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P notes  Ctrl+G collections  Ctrl+Q quit".to_string()
         } else {
             format!("editing {}", active_note.id)
@@ -1187,8 +1209,10 @@ impl TerminalApp {
             browser_search_rx: None,
             browser_search_due: None,
             content_search: ContentSearchState::default(),
-            working_collection_id: None,
-            working_collection_name: None,
+            working_collection_id: working_collection
+                .as_ref()
+                .map(|collection| collection.id.clone()),
+            working_collection_name: working_collection.map(|collection| collection.name),
             search_index_prewarm_pending: background_tasks_enabled,
             search_index_prewarm_rx: None,
             search_index_prewarm_started_at: None,
@@ -1950,10 +1974,15 @@ fn format_startup_duration(duration: Duration) -> String {
     }
 }
 
-fn select_note(db: &Db, opts: &TerminalOptions, config: &ThemeConfig) -> Result<Note, String> {
+fn select_note(
+    db: &Db,
+    opts: &TerminalOptions,
+    config: &ThemeConfig,
+    working_collection_id: Option<&str>,
+) -> Result<Note, String> {
     let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
     if opts.create_new {
-        return new_note(db, config);
+        return new_note_with_context(db, config, working_collection_id);
     }
 
     if let Some(id) = &opts.note_id {
@@ -1971,11 +2000,7 @@ fn select_note(db: &Db, opts: &TerminalOptions, config: &ThemeConfig) -> Result<
         return Ok(note);
     }
 
-    new_note(db, config)
-}
-
-fn new_note(db: &Db, config: &ThemeConfig) -> Result<Note, String> {
-    new_note_with_context(db, config, None)
+    new_note_with_context(db, config, working_collection_id)
 }
 
 fn new_note_with_context(

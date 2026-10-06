@@ -1,6 +1,143 @@
 use super::*;
 use crate::terminal::app::{WebSearchResponse, WikiLinkSuggestion};
 
+fn app_with_default_collection(db: &Db, name: Option<&str>, opts: &TerminalOptions) -> TerminalApp {
+    let config = crate::config::ThemeConfig {
+        default_collection: name.map(str::to_string),
+        ..Default::default()
+    };
+    TerminalApp::new_with_startup_metrics(
+        db,
+        opts,
+        config,
+        true,
+        true,
+        false,
+        true,
+        true,
+        3,
+        crate::terminal::render::RenderPalette::default(),
+        "%Y-%m-%d".to_string(),
+        "%Y-%m-%d %H:%M".to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        )),
+    )
+    .expect("terminal app")
+    .0
+}
+
+#[test]
+fn startup_default_collection_scopes_browsing_and_new_notes() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db");
+    db.save_note("outside", "outside note").expect("note");
+    let collection = db.create_collection("Work", "").expect("collection");
+    let opts = TerminalOptions {
+        note_id: Some("outside".to_string()),
+        ..Default::default()
+    };
+    let mut app = app_with_default_collection(&db, Some("work"), &opts);
+    assert_eq!(app.active_note.id, "outside");
+    assert_eq!(
+        app.working_collection_id.as_deref(),
+        Some(collection.id.as_str())
+    );
+    assert_eq!(app.working_collection_name.as_deref(), Some("Work"));
+    app.open_switcher(&db).expect("switcher");
+    assert_eq!(
+        app.switcher.collection_filter_id.as_deref(),
+        Some(collection.id.as_str())
+    );
+    assert!(app.switcher.items.is_empty());
+    app.open_content_search(&db).expect("search");
+    assert_eq!(
+        app.content_search.collection_filter_id.as_deref(),
+        Some(collection.id.as_str())
+    );
+    app.mode = UiMode::Normal;
+    app.handle_editor_key(&db, Key::Ctrl('n'))
+        .expect("new note");
+    assert_eq!(
+        db.get_note_collection_ids(&app.active_note.id)
+            .expect("membership"),
+        vec![collection.id.clone()]
+    );
+
+    let opts = TerminalOptions {
+        create_new: true,
+        ..Default::default()
+    };
+    let app = app_with_default_collection(&db, Some("Work"), &opts);
+    assert_eq!(
+        db.get_note_collection_ids(&app.active_note.id)
+            .expect("membership"),
+        vec![collection.id]
+    );
+    drop((app, db));
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn startup_default_collection_missing_or_unset_keeps_all_notes() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db");
+    db.save_note("n1", "existing note").expect("note");
+    for name in [None, Some("Missing")] {
+        let mut app = app_with_default_collection(&db, name, &TerminalOptions::default());
+        assert_eq!(app.active_note.id, "n1");
+        assert!(app.working_collection_id.is_none());
+        assert!(app.working_collection_name.is_none());
+        if name.is_some() {
+            assert_eq!(app.status, "default collection not found: Missing");
+        }
+        app.open_switcher(&db).expect("switcher");
+        assert!(app.switcher.collection_filter_id.is_none());
+        assert!(app.switcher.items.iter().any(|note| note.id == "n1"));
+    }
+    assert!(db
+        .get_collection_by_name("Missing")
+        .expect("lookup")
+        .is_none());
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn startup_default_collection_is_used_when_creating_first_note() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db");
+    for note in db.list_notes().expect("notes") {
+        db.delete_note(&note.id, None).expect("remove seeded note");
+    }
+    let collection = db.create_collection("Work", "").expect("collection");
+    let app = app_with_default_collection(&db, Some("Work"), &TerminalOptions::default());
+    assert_eq!(
+        db.get_note_collection_ids(&app.active_note.id)
+            .expect("membership"),
+        vec![collection.id]
+    );
+    drop((app, db));
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn startup_default_collection_preserves_encrypted_collection_lock() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db");
+    db.save_note("n1", "existing note").expect("note");
+    let vault = db.create_collection("Vault", "").expect("collection");
+    let other = Db::open(path.clone()).expect("other handle");
+    other.encrypt_collection(&vault.id, "pw").expect("encrypt");
+    let mut app = app_with_default_collection(&db, Some("Vault"), &TerminalOptions::default());
+    app.mode = UiMode::Editor;
+    app.handle_key(&db, Key::Ctrl('n')).expect("not fatal");
+    assert!(app.status.contains("unlock it first"), "{}", app.status);
+    assert_eq!(app.active_note.id, "n1");
+    drop((app, other, db));
+    cleanup_db_files(&path);
+}
+
 #[test]
 fn apply_edit_operation_single_line_change_updates_in_place() {
     let (_db, mut app, path) = app_with_note("alpha\nbeta");
