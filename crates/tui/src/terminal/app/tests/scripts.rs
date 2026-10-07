@@ -265,3 +265,59 @@ fn selection_script_copies_selected_lines_without_joining_whole_note() {
     assert_eq!(app.editor.lines[0], "unselected line");
     let _ = fs::remove_file(path);
 }
+
+#[test]
+fn mixed_case_script_names_complete_from_lowercase_prefix() {
+    let (_db, mut app, path) = app_with_note("original");
+    let config = ScriptConfig::parse("[scripts.MyScript]\nargv=['true']").unwrap();
+    app.scripts = super::super::scripts::ScriptState::new(Ok(config));
+    app.command_input = "run my".into();
+    assert!(app.open_command_completion_menu());
+    assert_eq!(app.command_input, "run MyScript");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn normal_bindings_preserve_pending_fold_prefix() {
+    let (db, mut app, path) = app_with_note("one two");
+    let config = ScriptConfig::parse("[keybindings.normal]\na='help'").unwrap();
+    app.scripts = super::super::scripts::ScriptState::new(Ok(config));
+    app.mode = UiMode::Normal;
+    app.handle_key(&db, Key::Char('z')).unwrap();
+    app.handle_key(&db, Key::Char('a')).unwrap();
+    assert!(app.help.is_none());
+    assert!(app.folds.pending_prefix_until.is_none());
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn key_breaking_a_sequence_can_start_another_binding() {
+    let (db, mut app, path) = app_with_note("original");
+    let config = ScriptConfig::parse("[keybindings.editor]\nxy='format italic'\nz='help'").unwrap();
+    app.scripts = super::super::scripts::ScriptState::new(Ok(config));
+    app.handle_key(&db, Key::Char('x')).unwrap();
+    app.handle_key(&db, Key::Char('z')).unwrap();
+    assert_eq!(app.editor.lines, vec!["xoriginal"]);
+    assert!(app.help.is_some());
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+#[cfg(unix)]
+fn charwise_visual_on_empty_line_replaces_nothing_but_inserts_result() {
+    let (db, mut app, path) = app_with_note("a\n\nb");
+    configure(
+        &mut app,
+        "cat >/dev/null; printf '{\"text\":\"X\"}'",
+        ScriptInput::Selection,
+        ScriptOutput::ReplaceSelection,
+    );
+    app.mode = UiMode::Visual;
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 0;
+    app.editor.selection_anchor = Some((1, 0));
+    app.execute_terminal_command(&db, "run example");
+    wait_for_result(&mut app);
+    assert_eq!(app.editor.lines, vec!["a", "X", "b"]);
+    let _ = fs::remove_file(path);
+}

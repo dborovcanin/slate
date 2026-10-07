@@ -49,7 +49,7 @@ impl TerminalApp {
         result
     }
 
-    pub(super) fn handle_key_inner(&mut self, db: &Db, key: Key) -> Result<(), String> {
+    fn handle_key_inner(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if self.help.is_some() {
             self.handle_help_key(key);
             return Ok(());

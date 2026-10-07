@@ -1,8 +1,9 @@
 //! Script result planning uses the same byte ranges and operations as commands.
 use crate::types::{EditOperation, OperationSelection, SelectionSnapshot, TextChange, TextRange};
 
-/// Vim visual endpoints include the character under the farther cursor.
-/// Linewise snapshots already span complete lines and can select an empty line.
+/// Vim visual endpoints include the character under the farther cursor, but
+/// not a line break, matching visual yank/delete. A charwise selection on an
+/// empty line is therefore empty. Linewise snapshots already span complete lines.
 pub fn visual_selection_range(
     text: &str,
     selection: SelectionSnapshot,
@@ -14,10 +15,11 @@ pub fn visual_selection_range(
         return Err("invalid script selection".into());
     }
     if !linewise {
-        to += text[to..].chars().next().map_or(0, char::len_utf8);
-        if from == to {
-            return Err("script requires a selection".into());
-        }
+        to += text[to..]
+            .chars()
+            .next()
+            .filter(|&ch| ch != '\n')
+            .map_or(0, char::len_utf8);
     }
     Ok(TextRange { from, to })
 }
@@ -68,8 +70,15 @@ mod tests {
         assert!(
             visual_selection_range("é", SelectionSnapshot { anchor: 0, head: 1 }, false).is_err()
         );
-        assert!(
-            visual_selection_range("", SelectionSnapshot { anchor: 0, head: 0 }, false).is_err()
+        assert_eq!(
+            visual_selection_range("", SelectionSnapshot { anchor: 0, head: 0 }, false).unwrap(),
+            TextRange { from: 0, to: 0 }
+        );
+        // Charwise visual on an empty line selects nothing, not the line break.
+        assert_eq!(
+            visual_selection_range("a\n\nb", SelectionSnapshot { anchor: 2, head: 2 }, false)
+                .unwrap(),
+            TextRange { from: 2, to: 2 }
         );
     }
 }

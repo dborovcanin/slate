@@ -145,11 +145,16 @@ impl TerminalApp {
         {
             return Ok(false);
         }
-        // Normal-mode bindings start between Vim commands. A pending operator
-        // or count must still receive its motion/text-object keys unchanged.
+        // Normal-mode bindings start between Vim commands. A pending operator,
+        // count or `z` fold prefix must still receive its next key unchanged.
         if self.mode == UiMode::Normal
             && self.scripts.pending.is_empty()
-            && (self.vim_state.pending.is_some() || !self.vim_state.count_buffer.is_empty())
+            && (self.vim_state.pending.is_some()
+                || !self.vim_state.count_buffer.is_empty()
+                || self
+                    .folds
+                    .pending_prefix_until
+                    .is_some_and(|until| Instant::now() <= until))
         {
             return Ok(false);
         }
@@ -189,7 +194,11 @@ impl TerminalApp {
                 self.history.break_coalescing();
             }
         } else {
+            // Replay the prefix as ordinary input, then handle the breaking key
+            // afresh so that it can still start a binding of its own.
+            self.scripts.pending.pop();
             self.replay_pending_binding(db)?;
+            self.handle_key(db, key.clone())?;
         }
         Ok(true)
     }
@@ -199,7 +208,7 @@ impl TerminalApp {
         self.scripts.replaying = true;
         let result = keys
             .into_iter()
-            .try_for_each(|key| self.handle_key_inner(db, key));
+            .try_for_each(|key| self.handle_key(db, key));
         self.scripts.replaying = false;
         self.render_state.dirty = true;
         result

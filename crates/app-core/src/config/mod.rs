@@ -77,7 +77,6 @@ const DEFAULT_CONFIG: &str = r##"# Slate configuration
 # Date format tokens:
 #   %Y, %y, %m, %d, %b, %B, %H, %M
 
-
 # Registered scripts and shortcuts (explicit invocation only; no hooks).
 # Uncomment a script and its bindings to enable it. argv is passed directly;
 # paths must be absolute or relative to the process working directory (no ~).

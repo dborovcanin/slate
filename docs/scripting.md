@@ -77,7 +77,8 @@ Protected notes cannot be read by CLI scripts.
 
 ## JSON protocol v1
 
-Slate writes one UTF-8 JSON object to stdin and closes it:
+Slate writes one UTF-8 JSON object to stdin and closes it. A script may
+exit without reading it:
 
 ```json
 {"version":1,"args":["Project X"],"text":"selected or note text","note_id":"n1"}

@@ -1,7 +1,7 @@
 //! Explicitly invoked external scripts. No shell interpolation or automatic hooks.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -148,18 +148,90 @@ fn terminate(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
-fn read_bounded(mut reader: impl Read, overflow: Arc<AtomicBool>) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    reader
-        .by_ref()
-        .take((MAX_OUTPUT_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() > MAX_OUTPUT_BYTES {
-        overflow.store(true, Ordering::Release);
-        return Err("script output exceeds 4 MiB".into());
+#[cfg(unix)]
+use std::os::fd::AsRawFd as Pipe;
+#[cfg(not(unix))]
+trait Pipe {}
+#[cfg(not(unix))]
+impl<T> Pipe for T {}
+
+/// Waits until `pipe` is ready, polling so that `stop` also ends a wait on a
+/// pipe that a detached descendant keeps open.
+#[cfg(unix)]
+fn wait_ready(pipe: &impl Pipe, write: bool, stop: &AtomicBool) -> std::io::Result<()> {
+    let events = if write { libc::POLLOUT } else { libc::POLLIN };
+    let mut fd = libc::pollfd {
+        fd: pipe.as_raw_fd(),
+        events,
+        revents: 0,
+    };
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("script I/O stopped"));
+        }
+        // SAFETY: `fd` is one valid pollfd for the duration of the call.
+        match unsafe { libc::poll(&mut fd, 1, 20) } {
+            0 => {}
+            n if n > 0 => return Ok(()),
+            _ => {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+        }
     }
-    Ok(bytes)
+}
+#[cfg(not(unix))]
+fn wait_ready(_: &impl Pipe, _: bool, _: &AtomicBool) -> std::io::Result<()> {
+    Ok(())
+}
+fn write_input(
+    mut stdin: std::process::ChildStdin,
+    input: &[u8],
+    stop: &AtomicBool,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    // SAFETY: fcntl on a pipe fd owned by `stdin`. Non-blocking writes keep a
+    // full pipe from blocking past `stop`.
+    unsafe {
+        let fd = stdin.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+    let mut written = 0;
+    while written < input.len() {
+        wait_ready(&stdin, true, stop)?;
+        match stdin.write(&input[written..]) {
+            Ok(n) => written += n,
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+fn read_bounded(
+    mut reader: impl Read + Pipe,
+    overflow: &AtomicBool,
+    stop: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 8192];
+    loop {
+        wait_ready(&reader, false, stop).map_err(|e| e.to_string())?;
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(bytes),
+            Ok(n) => bytes.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        if bytes.len() > MAX_OUTPUT_BYTES {
+            overflow.store(true, Ordering::Release);
+            return Err("script output exceeds 4 MiB".into());
+        }
+    }
 }
 
 /// Blocking worker entry. Call on a background thread in interactive hosts.
@@ -191,15 +263,23 @@ pub fn run_script(
     let mut child = command
         .spawn()
         .map_err(|e| format!("cannot start {executable}: {e}"))?;
-    let mut stdin = child.stdin.take().unwrap();
+    let stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let overflow = Arc::new(AtomicBool::new(false));
-    let out_overflow = overflow.clone();
-    let err_overflow = overflow.clone();
-    let writer = std::thread::spawn(move || stdin.write_all(&input));
-    let out = std::thread::spawn(move || read_bounded(stdout, out_overflow));
-    let err = std::thread::spawn(move || read_bounded(stderr, err_overflow));
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let stop = stop.clone();
+        std::thread::spawn(move || write_input(stdin, &input, &stop))
+    };
+    let out = {
+        let (overflow, stop) = (overflow.clone(), stop.clone());
+        std::thread::spawn(move || read_bounded(stdout, &overflow, &stop))
+    };
+    let err = {
+        let (overflow, stop) = (overflow.clone(), stop.clone());
+        std::thread::spawn(move || read_bounded(stderr, &overflow, &stop))
+    };
     let started = Instant::now();
     let result = loop {
         if cancel.load(Ordering::Acquire) {
@@ -219,18 +299,25 @@ pub fn run_script(
             Err(e) => break Err(e.to_string()),
         }
     };
-    if let Err(error) = &result {
+    if result.is_err() {
         terminate(&mut child);
         // Detached descendants can retain pipes even after the process group
-        // dies. Never let those prevent cancellation from returning.
-        let cleanup_started = Instant::now();
-        while !(writer.is_finished() && out.is_finished() && err.is_finished())
-            && cleanup_started.elapsed() < Duration::from_millis(100)
+        // dies. On Unix the workers poll and stop; elsewhere they may block in
+        // pipe I/O, so never let those prevent cancellation from returning.
+        stop.store(true, Ordering::Release);
+        #[cfg(not(unix))]
         {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        if !(writer.is_finished() && out.is_finished() && err.is_finished()) {
-            return Err(error.clone());
+            let cleanup_started = Instant::now();
+            while !(writer.is_finished() && out.is_finished() && err.is_finished())
+                && cleanup_started.elapsed() < Duration::from_millis(100)
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if !(writer.is_finished() && out.is_finished() && err.is_finished()) {
+                if let Err(error) = result {
+                    return Err(error);
+                }
+            }
         }
     }
     let written = writer.join().map_err(|_| "script input worker failed")?;
@@ -244,7 +331,13 @@ pub fn run_script(
             String::from_utf8_lossy(&stderr).trim()
         ));
     }
-    written.map_err(|e| format!("script did not read its input: {e}"))?;
+    match written {
+        // A successful script may answer without consuming its input.
+        Err(e) if e.kind() != ErrorKind::BrokenPipe => {
+            return Err(format!("cannot write script input: {e}"))
+        }
+        _ => {}
+    }
     serde_json::from_slice(&stdout?).map_err(|e| format!("invalid script response: {e}"))
 }
 
@@ -309,6 +402,36 @@ mod tests {
                 .unwrap_err()
                 .contains("invalid script response")
         );
+    }
+    #[test]
+    #[cfg(unix)]
+    fn script_may_answer_without_reading_large_input() {
+        let mut request = request();
+        request.text = "a".repeat(1024 * 1024);
+        let response = run_script(
+            &shell("printf '{\"text\":\"ok\"}'", 2),
+            &request,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert_eq!(response.text, "ok");
+    }
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn detached_descendant_holding_pipes_does_not_block_workers() {
+        // setsid leaves the process group, so only the poll-based workers can
+        // stop waiting on the pipes it inherited; joining them must not hang.
+        let mut request = request();
+        request.text = "a".repeat(1024 * 1024);
+        let start = Instant::now();
+        assert!(run_script(
+            &shell("setsid sleep 3 & exit 0", 1),
+            &request,
+            Arc::new(AtomicBool::new(false))
+        )
+        .unwrap_err()
+        .contains("timed out"));
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
     #[test]
     #[cfg(unix)]

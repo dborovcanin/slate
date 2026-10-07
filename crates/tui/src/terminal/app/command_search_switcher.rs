@@ -1103,12 +1103,16 @@ impl TerminalApp {
             if !prefix_tokens.iter().enumerate().all(|(idx, token)| {
                 suggestion_tokens
                     .get(idx)
-                    .is_some_and(|candidate| *candidate == token.as_str())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(token))
             }) {
                 continue;
             }
+            // Typed input is lowercased; registered script names keep their case.
             let token = suggestion_tokens[token_index];
-            if !token.starts_with(&token_prefix) {
+            if !token
+                .get(..token_prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(&token_prefix))
+            {
                 continue;
             }
             let has_more = suggestion_tokens.len() > token_index + 1;
