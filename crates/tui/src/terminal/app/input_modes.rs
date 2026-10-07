@@ -49,7 +49,7 @@ impl TerminalApp {
         result
     }
 
-    fn handle_key_inner(&mut self, db: &Db, key: Key) -> Result<(), String> {
+    pub(super) fn handle_key_inner(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if self.help.is_some() {
             self.handle_help_key(key);
             return Ok(());
@@ -78,6 +78,9 @@ impl TerminalApp {
         }
         if self.note_password_dialog.is_some() {
             return self.handle_note_password_key(db, key);
+        }
+        if self.try_script_keybinding(db, &key)? {
+            return Ok(());
         }
         if self.mode != UiMode::Normal {
             self.folds.pending_prefix_until = None;

@@ -195,7 +195,7 @@ fn map_offset_through_changes(
     offset
 }
 
-fn document_text_len(lines: &[String]) -> usize {
+pub(super) fn document_text_len(lines: &[String]) -> usize {
     if lines.len() == 1 && lines.first().is_some_and(String::is_empty) {
         0
     } else {
@@ -204,7 +204,7 @@ fn document_text_len(lines: &[String]) -> usize {
     }
 }
 
-fn line_and_byte_for_offset(lines: &[String], target: usize) -> (usize, usize) {
+pub(super) fn line_and_byte_for_offset(lines: &[String], target: usize) -> (usize, usize) {
     if lines.is_empty() {
         return (0, 0);
     }

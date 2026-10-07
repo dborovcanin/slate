@@ -573,3 +573,6 @@ mod large_note_perf;
 #[cfg(test)]
 #[path = "tests/browser.rs"]
 mod browser;
+
+#[path = "tests/scripts.rs"]
+mod scripts;

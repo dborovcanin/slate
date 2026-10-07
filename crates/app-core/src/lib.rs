@@ -5,6 +5,7 @@ pub mod daily;
 pub mod history;
 pub mod note_sources;
 pub mod reminders;
+pub mod scripts;
 pub mod storage;
 pub mod web_search;
 

@@ -144,6 +144,10 @@ pub enum HostCommandPlan {
     },
     PasteImage,
     Help,
+    Run {
+        arguments: String,
+    },
+    RunCancel,
     NoteSecurity {
         action: NoteSecurityAction,
     },
@@ -182,6 +186,16 @@ impl EditorEngine {
     }
 
     pub fn plan_host_command(mode: CommandMode, raw_input: &str) -> Option<HostCommandPlan> {
+        let raw = raw_input.trim().trim_start_matches(':').trim();
+        if raw.eq_ignore_ascii_case("run-cancel") {
+            return Some(HostCommandPlan::RunCancel);
+        }
+        let (root, arguments) = raw.split_once(char::is_whitespace).unwrap_or((raw, ""));
+        if root.eq_ignore_ascii_case("run") {
+            return Some(HostCommandPlan::Run {
+                arguments: arguments.trim().to_owned(),
+            });
+        }
         if let Some(parsed) = command_catalog::parse_web_search_command(raw_input) {
             return Some(HostCommandPlan::WebSearch {
                 query: parsed.query,
@@ -425,6 +439,23 @@ fn apply_module_mutation(current: ModuleState, mutation: ModuleMutation) -> Modu
 mod tests {
     use super::*;
 
+    #[test]
+    fn script_commands_preserve_argument_case_and_quotes() {
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Vim, ":RUN MyScript 'Project X'"),
+            Some(HostCommandPlan::Run {
+                arguments: "MyScript 'Project X'".into()
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "run-cancel"),
+            Some(HostCommandPlan::RunCancel)
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Vim, "runner"),
+            None
+        );
+    }
     #[test]
     fn module_plan_is_idempotent_for_set_operations() {
         let current = ModuleState {

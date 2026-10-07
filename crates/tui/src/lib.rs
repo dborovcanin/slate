@@ -35,6 +35,10 @@ enum Mode {
     Capture(Option<String>),
     /// Serve notes to MCP clients over stdio.
     Mcp,
+    Run {
+        name: String,
+        args: Vec<String>,
+    },
 }
 
 pub(crate) fn note_id_for_file(path: &Path) -> String {
@@ -65,8 +69,11 @@ fn print_help() {
   slate append [--id <note-id>]
   slate imap-sync
   slate mcp
+  slate run [--id <note-id> | --file <path>] <name> [args]
 
 Modes:
+  run         Run a registered script; input from stdin or an explicit note/file,
+              result text to stdout (does not save notes)
   <file>      Open a text/code file
   today       Open today's daily note (created from [daily] template)
   capture     Add a timestamped entry to today's daily note and exit
@@ -88,6 +95,37 @@ Append mode:
 }
 
 fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions), String> {
+    if args.first().is_some_and(|s| s == "run") {
+        let mut index = 1;
+        let mut opts = TerminalOptions::default();
+        if args.get(index).is_some_and(|s| s == "--id") {
+            opts.note_id = Some(
+                args.get(index + 1)
+                    .ok_or("run --id requires a note id")?
+                    .clone(),
+            );
+            index += 2;
+        } else if args.get(index).is_some_and(|s| s == "--file") {
+            let path =
+                resolve_text_file_path(args.get(index + 1).ok_or("run --file requires a path")?)?;
+            opts.note_id = Some(note_id_for_file(&path));
+            index += 2;
+        }
+        let name = args
+            .get(index)
+            .ok_or("usage: slate run [--id <id> | --file <path>] <name> [args]")?
+            .clone();
+        if name.starts_with('-') {
+            return Err("run expects a registered script name".into());
+        }
+        return Ok((
+            Mode::Run {
+                name,
+                args: args[index + 1..].to_vec(),
+            },
+            opts,
+        ));
+    }
     let mut force_imap = false;
     let mut force_append = false;
     let mut force_today = false;
@@ -409,10 +447,75 @@ fn run_imap_sync() -> Result<(), String> {
     Err("IMAP support not compiled in (missing 'imap' feature)".to_string())
 }
 
+fn run_registered_script(
+    name: &str,
+    args: Vec<String>,
+    note_id: Option<&str>,
+) -> Result<(), String> {
+    use app_core::scripts::{ScriptInput, ScriptRequest, MAX_INPUT_BYTES};
+    let config = app_core::config::load_script_config()?;
+    let script = config
+        .scripts
+        .get(name)
+        .ok_or_else(|| format!("unknown script: {name}"))?;
+    if note_id.is_some() && script.input == ScriptInput::None {
+        return Err("this script has input=none; omit --id/--file".into());
+    }
+    let text = if script.input == ScriptInput::None {
+        String::new()
+    } else if let Some(id) = note_id {
+        let core = AppCore::open_default()?;
+        let note = core
+            .note_sources()
+            .open_note_by_id(id)?
+            .ok_or("note not found")?;
+        if note.access_mode != app_core::storage::NoteAccessMode::None {
+            return Err("CLI scripts cannot read protected notes".into());
+        }
+        if note.body.len() > MAX_INPUT_BYTES {
+            return Err("script input exceeds 16 MiB".into());
+        }
+        note.body
+    } else if !stdin_is_tty() {
+        let mut input = String::new();
+        std::io::stdin()
+            .take((MAX_INPUT_BYTES + 1) as u64)
+            .read_to_string(&mut input)
+            .map_err(|e| format!("cannot read script input: {e}"))?;
+        if input.len() > MAX_INPUT_BYTES {
+            return Err("script input exceeds 16 MiB".into());
+        }
+        input
+    } else {
+        return Err("script requires input: pipe text or specify --id/--file".into());
+    };
+    let request = ScriptRequest {
+        version: 1,
+        args,
+        text,
+        note_id: note_id.map(str::to_owned),
+    };
+    let response = app_core::scripts::run_script(
+        script,
+        &request,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )?;
+    if let Some(message) = response.message {
+        eprintln!("{message}");
+    }
+    use std::io::Write;
+    std::io::stdout()
+        .write_all(response.text.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
 pub fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cfg = config::load_theme_config();
     let result = match parse_args(&args, stdin_is_tty()) {
+        Ok((Mode::Run { name, args }, opts)) => {
+            run_registered_script(&name, args, opts.note_id.as_deref())
+        }
         Ok((Mode::ImapSync, _)) => run_imap_sync(),
         Ok((Mode::Append, opts)) => run_append(opts.note_id.as_deref()),
         Ok((Mode::Capture(text), _)) => run_capture(text, &cfg),
@@ -446,6 +549,25 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|v| v.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_script_cli_keeps_arguments_and_explicit_target() {
+        let (mode, opts) = parse_args(
+            &args(&["run", "--id", "n1", "example", "two words", "--new", ""]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            mode,
+            Mode::Run {
+                name: "example".into(),
+                args: args(&["two words", "--new", ""])
+            }
+        );
+        assert_eq!(opts.note_id.as_deref(), Some("n1"));
+        assert!(parse_args(&args(&["run"]), true).is_err());
+        assert!(parse_args(&args(&["run", "--id"]), true).is_err());
     }
 
     #[test]

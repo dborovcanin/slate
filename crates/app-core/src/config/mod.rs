@@ -77,6 +77,31 @@ const DEFAULT_CONFIG: &str = r##"# Slate configuration
 # Date format tokens:
 #   %Y, %y, %m, %d, %b, %B, %H, %M
 
+
+# Registered scripts and shortcuts (explicit invocation only; no hooks).
+# Uncomment a script and its bindings to enable it. argv is passed directly;
+# paths must be absolute or relative to the process working directory (no ~).
+# JSON protocol and examples: /absolute/path/to/slate/docs/scripting.md
+# [scripts.uppercase]
+# argv = ["python3", "/absolute/path/to/slate/scripts/examples/uppercase.py"]
+# input = "selection"
+# output = "replace-selection"
+# timeout_seconds = 30
+#
+# [scripts.meeting]
+# argv = ["python3", "/absolute/path/to/slate/scripts/examples/meeting.py"]
+# input = "none"
+# output = "insert"
+#
+# [keybindings.visual]
+# "<C-r>" = "run uppercase"
+#
+# [keybindings.normal]
+# "<Space>m" = "run meeting 'Project X'"
+#
+# [keybindings.editor]
+# "<C-r>" = "run meeting 'Project X'"
+
 [theme]
 # Visual theme palette.
 color_scheme = "gruvbox-light"
@@ -956,6 +981,14 @@ pub fn load_mcp_config() -> Result<(McpConfig, PathBuf), String> {
     let config =
         parse_mcp_config(&text).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
     Ok((config, path))
+}
+
+pub fn load_script_config() -> Result<crate::scripts::ScriptConfig, String> {
+    let path = ensure_config_file()?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    crate::scripts::ScriptConfig::parse(&text)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
 pub fn load_terminal_images_config() -> TerminalImagesConfig {
