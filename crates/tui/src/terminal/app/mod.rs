@@ -1,3 +1,4 @@
+mod scripts;
 use super::adapter::TerminalVimAdapter;
 use super::calc_cache::CalcCache;
 use super::canvas::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, TextStyle};
@@ -701,6 +702,7 @@ struct TerminalApp {
     // Editable document model: line buffer + joined-text cache, cursor, viewport
     // scroll, selection anchor, and the markdown-formatting boundary-exit marker.
     editor: EditorModel,
+    scripts: scripts::ScriptState,
     mode: UiMode,
     vim_enabled: bool,
     /// Keys being handled (nested for macro replay). While above zero, edits
@@ -1190,6 +1192,7 @@ impl TerminalApp {
         let mut app = Self {
             active_note,
             active_note_key_collection: None,
+            scripts: scripts::ScriptState::new(app_core::config::load_script_config()),
             editor: EditorModel {
                 lines,
                 ..Default::default()
@@ -1341,6 +1344,9 @@ impl TerminalApp {
             open_image_temp_paths: Vec::new(),
         };
 
+        if let Err(error) = &app.scripts.config {
+            app.status = format!("script/keybinding config: {error}");
+        }
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();
@@ -1382,6 +1388,8 @@ impl TerminalApp {
                 self.render_state.dirty = true;
             }
 
+            self.poll_script_result();
+            self.poll_script_binding_timeout(db)?;
             match input::read_key()? {
                 Some(key) => {
                     let handle_start = Instant::now();

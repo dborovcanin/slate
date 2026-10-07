@@ -73,6 +73,14 @@ Grouped by area, with the keys and commands for each. Commands run in the comman
 | Edit, paste, undo | `x`, `dd`, `yy`, `cc`, `C`, `p`, `u`, `Ctrl+R` |
 | Macros: record, stop, replay, counted replay | `q{r}`, `q`, `@{r}`, `3@{r}` |
 
+### Scripts and shortcuts
+
+Register external scripts and mode-specific keybindings in the config. Invoke
+with `:run <name> [args]` or `slate run <name> [args]`; scripts can transform a
+selection, insert generated text, or report a result. Execution runs in the
+background, and editor changes are undoable. See [scripting](docs/scripting.md)
+for the JSON protocol, CLI input, examples and shortcut syntax.
+
 ### Links and images
 
 | Feature | Keys / commands |

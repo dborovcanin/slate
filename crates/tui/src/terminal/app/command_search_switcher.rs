@@ -1047,8 +1047,24 @@ impl TerminalApp {
     }
 
     pub(super) fn build_command_completion_menu(&self) -> Option<CommandCompletionMenuState> {
-        let suggestions =
+        let mut suggestions =
             list_terminal_command_suggestions(self.command_mode(), &self.command_input);
+        if let Ok(config) = &self.scripts.config {
+            let query = self
+                .command_input
+                .trim()
+                .trim_start_matches(':')
+                .to_lowercase();
+            for name in config.scripts.keys() {
+                let value = format!("run {name}");
+                if value.to_lowercase().starts_with(&query) {
+                    suggestions.push(crate::editor_core::types::CommandSuggestion {
+                        value,
+                        description: "run registered script".into(),
+                    });
+                }
+            }
+        }
         if suggestions.is_empty() {
             return None;
         }
@@ -1087,12 +1103,16 @@ impl TerminalApp {
             if !prefix_tokens.iter().enumerate().all(|(idx, token)| {
                 suggestion_tokens
                     .get(idx)
-                    .is_some_and(|candidate| *candidate == token.as_str())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(token))
             }) {
                 continue;
             }
+            // Typed input is lowercased; registered script names keep their case.
             let token = suggestion_tokens[token_index];
-            if !token.starts_with(&token_prefix) {
+            if !token
+                .get(..token_prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(&token_prefix))
+            {
                 continue;
             }
             let has_more = suggestion_tokens.len() > token_index + 1;
@@ -1797,6 +1817,14 @@ impl TerminalApp {
                     }
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::Run { arguments } => {
+                    self.start_script(&arguments);
+                    return;
+                }
+                crate::editor_core::engine::HostCommandPlan::RunCancel => {
+                    self.cancel_script();
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::Help => {
                     self.open_help();
                     return;
@@ -2001,7 +2029,7 @@ impl TerminalApp {
         self.editor.text_generation = self.editor.text_generation.wrapping_add(1);
     }
 
-    fn joined_text_cached_ref(&mut self) -> &str {
+    pub(super) fn joined_text_cached_ref(&mut self) -> &str {
         if self.editor.joined_text_cache.is_none() {
             self.editor.joined_text_cache = Some(join_lines(&self.editor.lines));
         }
@@ -3030,6 +3058,7 @@ impl TerminalApp {
     }
 
     pub(super) fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
+        self.cancel_script_on_note_change();
         self.active_note_key_collection = if note.access_mode == NoteAccessMode::None {
             None
         } else {

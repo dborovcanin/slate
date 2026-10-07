@@ -56,6 +56,8 @@ pub enum CommandId {
     ClipWatchStop,
     PasteImage,
     Help,
+    Run,
+    RunCancel,
     Fold,
     Unfold,
     FoldToggle,
@@ -357,7 +359,21 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 69] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 71] = [
+    CommandDefinition {
+        id: CommandId::Run,
+        value: "run",
+        aliases: &[],
+        description: "run a registered script: run <name> [args]",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::RunCancel,
+        value: "run-cancel",
+        aliases: &[],
+        description: "cancel the running script",
+        modes: &MODES_BOTH,
+    },
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -913,6 +929,13 @@ pub fn normalize_command(input: &str) -> String {
 fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
     let matches_exact =
         def.value == normalized_input || def.aliases.iter().any(|alias| *alias == normalized_input);
+    if def.id == CommandId::Run
+        && normalized_input
+            .strip_prefix("run")
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+    {
+        return true;
+    }
     if matches_exact {
         return true;
     }

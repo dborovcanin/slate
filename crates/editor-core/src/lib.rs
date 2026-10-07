@@ -9,6 +9,7 @@ pub mod format;
 pub mod markdown_tokens;
 pub mod math_commands;
 pub mod operations;
+pub mod scripts;
 pub mod substitute;
 pub mod sum;
 pub mod table;

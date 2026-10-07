@@ -19,6 +19,8 @@ Full knowledge-base apps (for example ZenNotes TUI: vault of Markdown files, pan
 
 Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`, the yazi-style collection browser (`Ctrl+B`, `-`, `:browse`) with configurable icons (`[theme] icons`), note history (`:history`), an MCP server for AI assistants and bots (`slate mcp`, off by default) with the open note reloading changes made outside it.
 
+Explicit scripting added: registered external executables with a versioned JSON protocol, `:run` / `slate run`, and mode-specific command keybindings. Scripts run only on request; there are no hooks or plugin runtime. See `docs/scripting.md`.
+
 ### Next steps (ordered)
 
 1. **Editing papercuts** - done: hand-typed tables keep their cells, variable autocomplete falls back to the last word on prose lines, titles drop heading markers.
