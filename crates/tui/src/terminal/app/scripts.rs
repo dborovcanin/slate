@@ -378,7 +378,13 @@ impl TerminalApp {
                     self.apply_edit_operation(&op);
                     self.editor.selection_anchor = None;
                     if matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
+                        // Leave Visual as Escape does: the Vim state machine
+                        // must agree with the UI mode, or `i`/`u` stay inert.
                         self.mode = UiMode::Normal;
+                        self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
+                        self.vim_state.pending = None;
+                        self.vim_state.pending_count = None;
+                        self.vim_state.count_buffer.clear();
                     }
                     self.history.break_coalescing();
                     self.adjust_cursor();

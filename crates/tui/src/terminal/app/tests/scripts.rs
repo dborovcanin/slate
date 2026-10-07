@@ -321,3 +321,40 @@ fn charwise_visual_on_empty_line_replaces_nothing_but_inserts_result() {
     assert_eq!(app.editor.lines, vec!["a", "X", "b"]);
     let _ = fs::remove_file(path);
 }
+
+#[test]
+#[cfg(unix)]
+fn visual_shortcut_result_returns_vim_to_normal_mode() {
+    let (db, mut app, path) = app_with_note("one two");
+    configure(
+        &mut app,
+        "cat >/dev/null; printf '{\"text\":\"ONE\"}'",
+        ScriptInput::Selection,
+        ScriptOutput::ReplaceSelection,
+    );
+    let mut config = app.scripts.config.as_ref().unwrap().clone();
+    config
+        .keybindings
+        .entry("visual".into())
+        .or_default()
+        .insert("<C-r>".into(), "run example".into());
+    app.scripts = super::super::scripts::ScriptState::new(Ok(config));
+    app.mode = UiMode::Normal;
+    for key in [
+        Key::Char('v'),
+        Key::Char('l'),
+        Key::Char('l'),
+        Key::Ctrl('r'),
+    ] {
+        app.handle_key(&db, key).unwrap();
+    }
+    wait_for_result(&mut app);
+    assert_eq!(app.editor.lines, vec!["ONE two"]);
+    assert_eq!(app.mode, UiMode::Normal);
+    // Undo and insert must work at once, without an Escape first.
+    app.handle_key(&db, Key::Char('u')).unwrap();
+    assert_eq!(app.editor.lines, vec!["one two"]);
+    app.handle_key(&db, Key::Char('i')).unwrap();
+    assert_eq!(app.mode, UiMode::Editor);
+    let _ = fs::remove_file(path);
+}
