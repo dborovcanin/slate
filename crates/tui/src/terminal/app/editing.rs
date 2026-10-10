@@ -23,7 +23,7 @@ use crate::editor_core::buffer::primitives::{
 };
 use crate::editor_core::buffer::{
     apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
-    map_offset_through_changes, prepare_text_change,
+    map_offset_through_changes, prepare_text_change, EditDelta,
 };
 use crate::terminal::text_utils::{
     byte_index, char_col_at_byte, cursor_render_char_col, remove_char_at,
@@ -245,9 +245,11 @@ impl TerminalApp {
                     &self.editor.lines,
                     self.editor.cursor_line,
                     self.editor.cursor_col,
-                    start_line,
-                    old_line_span,
-                    new_line_span,
+                    EditDelta {
+                        start_line,
+                        old_span: old_line_span,
+                        new_span: new_line_span,
+                    },
                 );
                 if history_changed {
                     let undo_depth_after = self.history.undo_depth();

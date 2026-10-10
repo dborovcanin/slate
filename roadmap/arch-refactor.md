@@ -256,7 +256,7 @@ them when a second consumer or a test needs them, not before.
 | Phase | Status | Notes |
 | --- | --- | --- |
 | 1. Buffer primitives | Complete | Offset helpers, text changes, typing and plain/table paste delegate to core; word deletion remains in phase 3 |
-| 2. Undo store and policy | In progress | Store and tests relocated to core; span contract adaptation, grouping and text/reminder action policy remain |
+| 2. Undo store and policy | In progress | Store and tests relocated to core; span recording uses EditDelta; grouping and text/reminder action policy remain |
 | 3. Word motions | Planned | |
 | 4. Vim intent execution | Planned | Same as plan.md Commands/Vim action point 1 |
 | 5. Post-edit planning | Planned | |

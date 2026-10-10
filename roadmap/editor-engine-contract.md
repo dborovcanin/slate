@@ -63,9 +63,11 @@ This document defines the canonical shared-core contract for editor semantics.
   - `LineHistory<M>` stores text, character-column cursors and opaque attached
     marks together. Recording, undo and redo retain the existing span storage,
     coalescing, redo truncation and bounded entry eviction behavior.
-  - `record_edit_span` currently takes separate start/old/new line spans;
-    adaptation to `EditDelta` is a separate step. `take_last_delta` returns
-    the removed and inserted lines for host metadata updates.
+  - `record_edit_span` takes an `EditDelta` describing the replacement of
+    pre-edit lines in the stored snapshot by lines in the current buffer.
+    It retains the existing span clamping and changed-line storage.
+    `take_last_delta` returns the removed and inserted lines for host metadata
+    updates; the invalidation summary does not replace this exact text delta.
   - `COALESCE_ANCHOR_MAX_LINES` retains the 5,000-line anchor limit. The host
     still selects the recording path and decides grouping and text/reminder
     action order; moving the store alone does not complete undo extraction.
