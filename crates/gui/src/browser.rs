@@ -30,7 +30,23 @@ pub enum Column {
     Notes,
 }
 
+/// What the keyboard is doing in the browser.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Browse,
+    /// `/`: narrow the note list by title.
+    Filter,
+    /// `Ctrl+F`: search the text of the notes.
+    Search,
+}
+
 pub struct Browser {
+    pub mode: Mode,
+    pub query: String,
+    /// The open collection's notes before filtering or searching.
+    scope_notes: Vec<NoteSummary>,
+    /// Text found by a search, by note.
+    pub snippets: std::collections::HashMap<String, String>,
     pub entries: Vec<Entry>,
     pub scope: usize,
     pub notes: Vec<NoteSummary>,
@@ -70,6 +86,10 @@ impl Browser {
             });
         }
         let mut browser = Self {
+            mode: Mode::Browse,
+            query: String::new(),
+            scope_notes: Vec::new(),
+            snippets: Default::default(),
             entries,
             scope: 0,
             notes: Vec::new(),
@@ -95,12 +115,62 @@ impl Browser {
             Scope::Collection(id) if entry.unlocked => host.db.list_notes_meta_filtered(Some(id)),
             Scope::Collection(_) => Ok(Vec::new()),
         };
-        self.notes = notes
+        self.scope_notes = notes
             .unwrap_or_default()
             .into_iter()
             .take(NOTE_ROWS)
             .collect();
+        self.mode = Mode::Browse;
+        self.query.clear();
+        self.snippets.clear();
+        self.notes = self.scope_notes.clone();
         self.note = 0;
+    }
+
+    /// Recompute the note list for the current mode and query.
+    fn apply_query(&mut self, host: &NoteHost) {
+        self.snippets.clear();
+        let query = self.query.trim().to_string();
+        self.notes = match self.mode {
+            _ if query.is_empty() => self.scope_notes.clone(),
+            Mode::Browse => self.scope_notes.clone(),
+            Mode::Filter => {
+                let mut scored: Vec<_> = self
+                    .scope_notes
+                    .iter()
+                    .filter_map(|n| {
+                        let title = if n.title.is_empty() {
+                            "Untitled"
+                        } else {
+                            &n.title
+                        };
+                        crate::switcher::fuzzy(&query, title).map(|score| (score, n.clone()))
+                    })
+                    .collect();
+                scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+                scored.into_iter().map(|(_, n)| n).collect()
+            }
+            Mode::Search => {
+                let collection = match &self.entries[self.scope].scope {
+                    Scope::Collection(id) => Some(id.as_str()),
+                    _ => None,
+                };
+                let hits =
+                    crate::sidebar_search::search_in(host, &self.scope_notes, collection, &query);
+                let mut notes = Vec::new();
+                for hit in hits {
+                    if let Ok(Some(meta)) = host.db.get_note_meta(&hit.id) {
+                        if let Some(snippet) = hit.snippet {
+                            self.snippets.insert(hit.id.clone(), snippet);
+                        }
+                        notes.push(meta);
+                    }
+                }
+                notes
+            }
+        };
+        self.note = 0;
+        self.refresh_preview(host);
     }
 
     fn refresh_preview(&mut self, host: &NoteHost) {
@@ -203,11 +273,67 @@ pub fn on_key(win: &mut SlateWindow, ev: &KeyDownEvent, cx: &mut Context<SlateWi
     let Overlay::Browser(b) = &mut win.overlay else {
         return false;
     };
+    let host = &win.host;
+    // Typing a filter or a search: keys edit the query, `Up`/`Down` move.
+    if b.mode != Mode::Browse && !k.modifiers.control && !k.modifiers.platform {
+        match key {
+            "escape" => {
+                b.mode = Mode::Browse;
+                b.query.clear();
+                b.apply_query(host);
+            }
+            "enter" => return open_and_notify(win, cx),
+            "down" => b.pick_note(host, b.note + 1),
+            "up" => b.pick_note(host, b.note.saturating_sub(1)),
+            "backspace" => {
+                b.query.pop();
+                b.apply_query(host);
+            }
+            _ => {
+                if let Some(ch) = k
+                    .key_char
+                    .as_deref()
+                    .filter(|c| !c.chars().any(char::is_control))
+                {
+                    b.query.push_str(ch);
+                    b.apply_query(host);
+                }
+            }
+        }
+        cx.notify();
+        return true;
+    }
+    if (key == "f" || key == "/") && k.modifiers.control {
+        b.mode = Mode::Search;
+        b.query.clear();
+        b.column = Column::Notes;
+        cx.notify();
+        return true;
+    }
+    if key == "/" && !k.modifiers.control {
+        b.mode = Mode::Filter;
+        b.query.clear();
+        b.column = Column::Notes;
+        cx.notify();
+        return true;
+    }
     // `Shift+H` or `Ctrl+R` on a note: its history, as in the terminal.
     if wants_history(k) {
         return open_selected_history(win, cx);
     }
-    let host = &win.host;
+    if key == "w" && !k.modifiers.control {
+        let working = match &b.entries[b.scope].scope {
+            Scope::Collection(id) => Some((id.clone(), b.entries[b.scope].name.clone())),
+            _ => None,
+        };
+        let label = working
+            .as_ref()
+            .map_or("All notes".to_string(), |(_, n)| n.clone());
+        win.host.set_working(working);
+        win.set_status(format!("working collection: {label}"));
+        cx.notify();
+        return true;
+    }
     match key {
         "escape" | "q" => win.overlay = Overlay::None,
         "down" | "j" => match b.column {
@@ -341,24 +467,45 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
             .child(
                 div()
                     .flex_1()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_color(if on { t.heading } else { t.text })
-                    .child(format!(
-                        "{}{}",
-                        if locked { "🔒 " } else { "" },
-                        if n.title.is_empty() {
-                            "Untitled"
-                        } else {
-                            &n.title
-                        }
-                    )),
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(if on { t.heading } else { t.text })
+                            .child(format!(
+                                "{}{}",
+                                if locked { "🔒 " } else { "" },
+                                if n.title.is_empty() {
+                                    "Untitled"
+                                } else {
+                                    &n.title
+                                }
+                            )),
+                    )
+                    .when_some(b.snippets.get(&n.id).cloned(), |d, snippet| {
+                        d.child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(t.faint)
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(snippet),
+                        )
+                    }),
             )
     });
     let hints = [
         ("h j k l", "move"),
         ("Enter", "open"),
+        ("/", "filter"),
+        ("Ctrl+F", "search text"),
+        ("H", "history"),
+        ("w", "working collection"),
         ("n", "new note"),
         ("c", "new collection"),
         ("Esc", "close"),
@@ -371,22 +518,14 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
         .left_0()
         .right_0()
         .flex()
-        .justify_center()
-        .items_center()
-        .bg(t.bg.opacity(0.6))
+        .flex_col()
+        .bg(t.bg)
         .child(
             div()
-                .w(px(1040.0))
-                .max_w_full()
+                .w_full()
                 .h_full()
-                .max_h(px(640.0))
                 .flex()
                 .flex_col()
-                .bg(t.panel)
-                .border_1()
-                .border_color(t.border)
-                .rounded(px(10.0))
-                .shadow_lg()
                 .overflow_hidden()
                 .child(
                     div()
@@ -406,7 +545,29 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                                 .text_color(t.heading)
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(b.entries[b.scope].name.clone()),
-                        ),
+                        )
+                        .when(b.mode != Mode::Browse, |d| {
+                            d.child(div().flex_1()).child(
+                                div()
+                                    .w(px(320.0))
+                                    .px(px(10.0))
+                                    .py(px(4.0))
+                                    .rounded(px(6.0))
+                                    .bg(t.bg)
+                                    .border_1()
+                                    .border_color(t.blue)
+                                    .text_color(t.text)
+                                    .child(format!(
+                                        "{} {}▏",
+                                        if b.mode == Mode::Filter {
+                                            "Filter"
+                                        } else {
+                                            "Search text"
+                                        },
+                                        b.query
+                                    )),
+                            )
+                        }),
                 )
                 .child(
                     div()
@@ -427,7 +588,7 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                         .child(
                             div()
                                 .id("browser-notes")
-                                .w(px(300.0))
+                                .w(px(380.0))
                                 .flex_none()
                                 .overflow_y_scroll()
                                 .p(px(8.0))
@@ -492,6 +653,41 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_and_text_search_narrow_the_note_list() {
+        let dir = std::env::temp_dir().join(format!("slate-gui-browser-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = app_core::storage::Db::open(dir.join("notes.db")).unwrap();
+        for (id, body) in [
+            ("a", "# Lisbon trip\nflights"),
+            ("b", "# Budget\nthe lisbon hotel costs 300"),
+            ("c", "# Garden\nroses"),
+        ] {
+            db.create_note_with_context(id, Default::default(), None, None)
+                .unwrap();
+            db.save_note(id, body).unwrap();
+        }
+        let host = NoteHost::open(db, Some("c")).unwrap();
+        let mut b = Browser::open(&host).unwrap();
+        let all = b.notes.len();
+        assert!(all >= 3);
+        b.mode = Mode::Filter;
+        b.query = "gard".into();
+        b.apply_query(&host);
+        assert_eq!(b.notes.len(), 1);
+        assert_eq!(b.notes[0].id, "c");
+        b.mode = Mode::Search;
+        b.query = "lisbon".into();
+        b.apply_query(&host);
+        let ids: Vec<&str> = b.notes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        assert!(b.snippets.contains_key("b"));
+        b.query.clear();
+        b.apply_query(&host);
+        assert_eq!(b.notes.len(), all);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn history_keys() {

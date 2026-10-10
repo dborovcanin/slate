@@ -16,12 +16,22 @@ pub struct Hit {
 /// Hits for `query` among the notes of the working collection; empty for a
 /// blank query.
 pub fn search(host: &NoteHost, query: &str) -> Vec<Hit> {
+    let collection = host.working.as_ref().map(|(id, _)| id.as_str());
+    search_in(host, &host.notes, collection, query)
+}
+
+/// Hits among `notes`; the text search is limited to `collection`.
+pub fn search_in(
+    host: &NoteHost,
+    notes: &[app_core::storage::NoteSummary],
+    collection: Option<&str>,
+    query: &str,
+) -> Vec<Hit> {
     let query = query.trim();
     if query.is_empty() {
         return Vec::new();
     }
-    let mut titled: Vec<(i64, Hit)> = host
-        .notes
+    let mut titled: Vec<(i64, Hit)> = notes
         .iter()
         .filter_map(|n| {
             let title = if n.title.is_empty() {
@@ -43,7 +53,6 @@ pub fn search(host: &NoteHost, query: &str) -> Vec<Hit> {
         .collect();
     titled.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     let mut hits: Vec<Hit> = titled.into_iter().map(|(_, hit)| hit).collect();
-    let collection = host.working.as_ref().map(|(id, _)| id.as_str());
     if let Ok(found) = host
         .db
         .search_notes_content_filtered(query, CONTENT_HITS, collection)
