@@ -42,7 +42,9 @@ This document defines the canonical shared-core contract for editor semantics.
     calls. Insertion text is borrowed; mutation retains the existing in-place
     insert, remove, split and join paths.
   - Table-specific handling runs first. Calc/history bookkeeping, autoformat
-    and transaction boundaries remain in the host. Literal text insertion
+    and transaction boundaries remain in the host. Empty buffers are initialized
+    by insertion/newline application; their deltas report zero replaced lines.
+    Literal text insertion
     stays within one stored line; newline and paste are distinct operations.
 - Paste contract (`editor_core::buffer::paste`):
   - Normalize CRLF and CR to LF before selecting table-cell or plain paste.
@@ -109,7 +111,10 @@ This document defines the canonical shared-core contract for editor semantics.
 - Vim buffer plans (`vim_actions::buffer`) own inclusive visual ranges,
   register contents/modes, cursor placement and line-buffer replacement. Hosts
   record returned reminder mappings before applying a plan to its unchanged
-  buffer. Viewport/fold visibility and clipboard I/O remain host concerns.
+  buffer. Visual deltas include the retained empty line after whole-buffer
+  deletion; yanks retain the selected span length and report no text change.
+  Changed visual selections use the host's span history path. Viewport/fold
+  visibility and clipboard I/O remain host concerns.
 - Post-edit calc plans (`calc_plan::plan_after_edit`) read cached signal flags,
   line counts, stale/viewport state and host thresholds without scanning text.
   Hosts execute skip, defer, viewport refresh, remap/recompute or idle work.

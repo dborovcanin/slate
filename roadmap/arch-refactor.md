@@ -29,11 +29,12 @@ Why now, independent of any future front end:
   phases improve editing ownership; they do not yet make those workflows
   reusable by another front end. A future extraction should share their
   correctness policy rather than copy it into each front end.
-- No behavior changes. Every step is a move plus seam, with existing replay
-  fixtures and perf gates unchanged.
+- The six phase commits preserve behavior. Separately committed, reproduced
+  bugs from the follow-up audit are listed below. Replay fixtures and performance
+  limits remain unchanged, with added regressions and coverage.
 - No new dependencies.
 
-## Current state
+## Baseline inventory before the refactor
 
 `crates/tui/src` is about 36.4k lines (tests excluded). About 11.9k import
 ratatui or crossterm; the other 24.5k do not. Import counts are descriptive,
@@ -322,3 +323,47 @@ matching into core. Popup visibility, current search match and DB/background
 export loading remain host state/effects. Existing popup integration and replay
 tests continue to exercise the terminal calls; core tests cover Unicode ranges,
 qualified names, suffix candidates, disabled modules and suggestion order.
+
+## Follow-up audit
+
+After the six extraction phases, the requested architecture/correctness pass:
+
+- Tracks new history entries and eviction explicitly, so bounded text history
+  stays in chronological order with reminder actions. Small-note and large-note
+  span recording are covered through undo and redo.
+- Converts fixed-padding table byte bounds to character columns before backward
+  word deletion; Unicode in preceding cells no longer leaves a partial word.
+- Keeps horizontal left movement within a line constant-time, without a new
+  full-line character count.
+- Initializes an empty buffer before newline application and reports zero
+  old lines for empty-buffer primitive/paste edits.
+- Corrects visual-plan deltas for unchanged yanks and the retained empty line
+  after whole-document deletion. Changed visual selections use the history span
+  fast path; empty no-op selections retain their previous history behavior.
+
+The startup probe source and app-core startup/config paths are unchanged against
+`main`. The unified checker exceeded its April startup baseline on this machine;
+a clean `main` worktree also exceeded it. Limits were not increased to hide the
+failure. Final validation results and the remaining startup qualification gate
+are recorded with the completion report below.
+
+## Completion checks (2026-10-10)
+
+- Workspace tests: 1,294 passed, six ignored benchmarks; full doctest pass.
+- `cargo fmt --all -- --check` and diff whitespace checks passed.
+- `cargo clippy --workspace --all-targets --locked` passed with existing warnings;
+  new completion/search re-exports were moved before the shim's test module.
+- Final unified performance check: table and large-note gates passed. Startup
+  remained above the existing baseline on both this branch and clean `main`.
+  Five clean-main runs had median config load 0.850 ms (limit 0.255 ms) and
+  app-core open 2.215 ms (limit 0.742 ms), using the same active config/database.
+- Startup qualification is deferred at the user's request. Performance limits
+  were kept unchanged. Review can proceed; this is not a claim that every merge
+  qualification gate is green.
+- A PTY smoke attempt timed out before producing a screen and is not counted as
+  successful live-terminal verification. Vim golden replays and integration
+  tests passed; live-terminal verification remains unqualified.
+
+Generated build artifacts were moved to a private local disk cache after shared
+cache interference and temporary-filesystem quota failures. Those failed builds
+are not recorded as code failures or successful checks.

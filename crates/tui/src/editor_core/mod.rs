@@ -5,6 +5,7 @@ pub use editor_core::calc_plan;
 pub use editor_core::command_catalog;
 pub use editor_core::command_history;
 pub use editor_core::commands;
+pub use editor_core::completion;
 pub use editor_core::context;
 pub use editor_core::engine;
 pub use editor_core::folding;
@@ -14,6 +15,7 @@ pub use editor_core::markdown_tokens;
 pub use editor_core::math_commands;
 pub use editor_core::operations;
 pub use editor_core::scripts;
+pub use editor_core::search;
 pub use editor_core::substitute;
 pub use editor_core::sum;
 pub use editor_core::table;
@@ -47,5 +49,3 @@ mod tests {
         assert_eq!(operation.changes[0].insert, "3");
     }
 }
-pub use editor_core::completion;
-pub use editor_core::search;
