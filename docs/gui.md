@@ -38,6 +38,8 @@ unaffected.
   with diff preview and restore.
 - **Encrypted notes:** locked notes show a placeholder and ask for the
   password; `:encrypt` / `:decrypt` prompt for it.
+- **Wiki links:** `[[id]]` shows the target note's title away from the cursor
+  (via `note_session::display::wiki`); `Ctrl+]` and `gd` follow them.
 - **Tables:** hover shows + bars to add a row or column.
 - **Clipboard:** yanks go to the system clipboard; `p` with an empty register
   and Ctrl+V paste from it.
@@ -76,8 +78,6 @@ These are reported in the status bar when invoked:
 
 - PDF export, `:backup`, `:web-search`, `:currency refresh`, clip-watch,
   `:paste-image` and inline images, folding, in-note search (`/`), macros.
-- Wiki links show their raw `[[...]]` text instead of the target's title
-  (following them works).
 - Vertical motion follows logical lines, not wrapped rows (`gj`/`gk` too).
 - IME composition and accessibility are untested.
 

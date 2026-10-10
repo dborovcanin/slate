@@ -27,6 +27,7 @@ use note_session::display::semantic::{
     LineDecorations, SemanticContext, SemanticLine, SemanticStyle,
 };
 use note_session::display::table::{format_formula_display_value, is_markdown_table_line};
+use note_session::display::wiki::render_wiki_links;
 use note_session::input::{InputContext, InputOptions, InputOutcome, InputState};
 use note_session::save::{run_save, SaveCompletion, SaveContext};
 use note_session::{Document, NoteSession};
@@ -113,6 +114,8 @@ pub struct NoteHost {
     /// The working collection `(id, name)`: the sidebar lists its notes and
     /// new notes join it. `None` shows every note.
     pub working: Option<(String, String)>,
+    /// Titles of all notes by id, for wiki-link display.
+    titles: std::collections::HashMap<String, String>,
     last_edit: Option<Instant>,
 }
 
@@ -173,8 +176,10 @@ impl NoteHost {
             modules: NoteModules::default(),
             notes,
             working: None,
+            titles: Default::default(),
             last_edit: None,
         };
+        host.reload_titles();
         host.switch_to(&id)?;
         Ok(host)
     }
@@ -650,7 +655,15 @@ impl NoteHost {
         self.session.dirty() && self.last_edit.is_some_and(|t| t.elapsed() >= delay)
     }
 
+    /// Rebuild the id to title lookup from every note.
+    fn reload_titles(&mut self) {
+        if let Ok(all) = self.db.list_notes_meta() {
+            self.titles = all.into_iter().map(|n| (n.id, n.title)).collect();
+        }
+    }
+
     fn refresh_titles(&mut self) {
+        self.reload_titles();
         let id = self.working.as_ref().map(|(id, _)| id.as_str());
         if let Ok(notes) = self.db.list_notes_meta_filtered(id) {
             self.notes = notes;
@@ -750,13 +763,25 @@ impl NoteHost {
             render_as_plain_code: false,
             forced_code_lang: None,
         };
+        // Away from the cursor, wiki links show the target note's title.
+        let wiki = (!in_code && !is_cursor)
+            .then(|| render_wiki_links(text, &mut |id| self.titles.get(id).cloned()))
+            .flatten();
+        let underline = wiki.as_ref().map(|w| w.underline.as_slice()).unwrap_or(&[]);
         let deco = LineDecorations {
             calc_ghost: result,
             variable_names: variables,
             active_cursor_col: is_cursor.then_some(self.doc.cursor_col),
+            underline_ranges: underline,
             ..Default::default()
         };
-        let styled = ctx.style_line(text, &deco);
+        let styled = ctx.style_line(wiki.as_ref().map_or(text, |w| w.text.as_str()), &deco);
+        // Source columns to what is painted: markers hidden after the links
+        // were replaced.
+        let map: Arc<note_session::display::mapping::SourceDisplayMap> = match &wiki {
+            Some(w) => Arc::new(styled.source_map.compose(&w.map)),
+            None => styled.source_map.clone(),
+        };
         let info = (!in_code).then(|| markdown_tokens::classify_markdown_line(text));
         let mut kind = LineKind::Text;
         let mut start = 0;
@@ -772,7 +797,7 @@ impl NoteHost {
         }
         // Source columns to positions in the runs, which drop hidden
         // markers and anything before `start`.
-        let map = &styled.source_map;
+        let map = &map;
         let shown = |col: usize, affinity| {
             let skipped = map.source_to_display(start, Affinity::After).unwrap_or(0);
             map.source_to_display(col, affinity)
@@ -797,7 +822,7 @@ impl NoteHost {
                 .flatten(),
             selection,
             line_selected,
-            map: Some(styled.source_map.clone()),
+            map: Some(map.clone()),
             display_skip: map.source_to_display(start, Affinity::After).unwrap_or(0),
         }
     }
@@ -1134,6 +1159,31 @@ mod tests {
         assert_eq!(f.host.selected_text().as_deref(), Some("abc"));
         keys(&mut f, "⎋");
         assert_eq!(f.host.selected_text(), None);
+    }
+
+    #[test]
+    fn wiki_links_show_titles_away_from_the_cursor() {
+        let mut f = fixture("first\nsee [[other]] and [[gone]]");
+        f.host
+            .db
+            .create_note_with_context("other", Default::default(), None, None)
+            .unwrap();
+        f.host
+            .db
+            .save_note("other", "# Target title\nbody")
+            .unwrap();
+        f.host.reload_titles();
+        let line = &f.host.lines(1, 2)[0];
+        assert_eq!(text(line), "see Target title and ?");
+        // A click on the title maps back to the whole link in the source.
+        let map = line.map.as_ref().expect("map");
+        let hit = map
+            .display_to_source(6, Affinity::After)
+            .expect("hit inside the title");
+        assert_eq!(hit.owner, Some(4..13));
+        // With the cursor on the line the source is shown for editing.
+        f.host.set_cursor_line(1);
+        assert!(text(&f.host.lines(1, 2)[0]).contains("other"));
     }
 
     #[test]
