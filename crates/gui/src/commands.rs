@@ -231,7 +231,7 @@ fn set_module(win: &mut SlateWindow, id: CommandId, cx: &mut Context<SlateWindow
         Ok(_) => {
             win.host.modules = m;
             win.host.recompute_calc();
-            win.reload_lines();
+            win.restyle();
             notify_status(win, message, cx);
         }
         Err(err) => notify_status(win, err, cx),

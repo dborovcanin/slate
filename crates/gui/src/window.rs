@@ -40,6 +40,8 @@ pub struct SlateWindow {
     pub(crate) overlay: crate::overlays::Overlay,
     /// Lines of the table under the mouse, which shows its add row/column bars.
     hover_table: Option<(usize, usize)>,
+    /// Window size in pixels from the last paint, to reveal far jumps and fit the status bar.
+    viewport: std::cell::Cell<(f32, f32)>,
     fences: Vec<FenceState>,
     cache: Vec<Option<LineView>>,
     list: ListState,
@@ -59,6 +61,7 @@ impl SlateWindow {
             status: None,
             overlay: Default::default(),
             hover_table: None,
+            viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
             cache: Vec::new(),
             list: ListState::new(count, ListAlignment::Top, px(600.0)),
@@ -85,16 +88,60 @@ impl SlateWindow {
         &self.focus
     }
 
-    /// Restyle every line on the next paint; the list keeps its scroll.
+    /// The note was replaced: rebuild every line and start at the top.
     pub(crate) fn reload_lines(&mut self) {
-        let old = self.cache.len();
         self.fences = self.host.fence_starts();
         let count = self.fences.len();
         self.cache = vec![None; count];
-        if old == 0 {
-            self.list.reset(count);
+        self.list.reset(count);
+    }
+
+    /// Same lines, new look (theme, mode, calc results): restyle on the next
+    /// paint without touching the list, so the scroll position stays.
+    pub(crate) fn restyle(&mut self) {
+        self.fences = self.host.fence_starts();
+        self.cache = vec![None; self.fences.len()];
+    }
+
+    /// Text changed from line `first` on. Only the lines that were replaced
+    /// are remeasured, so the scroll position stays; items are remeasured
+    /// whenever they are painted, so edits that keep the line count need no
+    /// list update at all.
+    pub(crate) fn resync_items(&mut self, first: usize) {
+        let old = self.cache.len();
+        self.restyle();
+        let count = self.cache.len();
+        if count == old {
+            return;
+        }
+        let first = first.min(old).min(count);
+        let delta = count as isize - old as isize;
+        let removed_end = (first + 1 + (-delta).max(0) as usize).min(old);
+        let added = count - first - (old - removed_end);
+        self.list.splice(first..removed_end, added);
+    }
+
+    /// First line of the list that is on screen (or near it).
+    fn top_line(&self) -> usize {
+        self.list.logical_scroll_top().item_ix
+    }
+
+    /// Scroll so the cursor line is visible. Lines that were never painted
+    /// have no height yet, so a far jump lands the cursor mid-screen and a
+    /// second pass, once those lines are measured, makes it exact.
+    pub(crate) fn reveal_cursor(&self) {
+        let ix = self.host.doc.cursor_line;
+        let rows = ((self.viewport.get().1 / 26.0) as usize).max(8);
+        let top = self.top_line();
+        if ix >= top && ix + 2 < top + rows {
+            self.list.scroll_to_reveal_item(ix);
+        } else if ix < top && top - ix < rows {
+            self.list.scroll_to_reveal_item(ix);
         } else {
-            self.list.splice(0..old, count);
+            self.list.scroll_to(gpui::ListOffset {
+                item_ix: ix.saturating_sub(rows / 2),
+                offset_in_item: px(0.0),
+            });
         }
     }
 
@@ -153,7 +200,7 @@ impl SlateWindow {
             self.host.input.vim.mode = VimMode::Insert;
         }
         self.host.doc.selection_anchor = None;
-        self.reload_lines();
+        self.restyle();
         self.set_status(match mode {
             EditingMode::Vim => "vim editing",
             EditingMode::Standard => "standard editing",
@@ -168,7 +215,7 @@ impl SlateWindow {
         } else {
             Theme::dark()
         };
-        self.reload_lines();
+        self.restyle();
         cx.notify();
     }
 
@@ -181,7 +228,10 @@ impl SlateWindow {
     ) {
         let (old_cursor, old_anchor) = before;
         if outcome.text_changed {
-            self.reload_lines();
+            let first = outcome
+                .first_changed_line
+                .unwrap_or_else(|| self.top_line());
+            self.resync_items(first);
         } else {
             let cursor = self.host.doc.cursor_line;
             self.invalidate(old_cursor, old_cursor);
@@ -197,7 +247,18 @@ impl SlateWindow {
         for request in outcome.requests {
             self.handle_request(request, cx);
         }
-        self.list.scroll_to_reveal_item(self.host.doc.cursor_line);
+        self.reveal_cursor();
+        // Lines near the cursor were just remeasured: reveal once more.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(32))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.list.scroll_to_reveal_item(this.host.doc.cursor_line);
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
     }
 
@@ -314,7 +375,8 @@ impl SlateWindow {
                 if !message.is_empty() {
                     self.set_status(message);
                 }
-                self.reload_lines();
+                let top = self.top_line();
+                self.resync_items(top);
                 self.after_input(before, InputOutcome::default(), cx);
                 if quit {
                     self.quit(cx);
@@ -536,7 +598,6 @@ impl SlateWindow {
             .flex()
             .items_center()
             .w_full()
-            .max_w(px(900.0))
             .map(|d| {
                 if delimiter {
                     d.h(px(0.0)).overflow_hidden()
@@ -620,7 +681,6 @@ impl SlateWindow {
             });
         div()
             .w_full()
-            .max_w(px(900.0))
             .child(row)
             .when(table_last, |d| {
                 d.child(
@@ -769,6 +829,7 @@ impl SlateWindow {
     fn status_bar(&self) -> impl IntoElement {
         let t = &self.theme;
         let m = self.host.modules;
+        let (width, _) = self.viewport.get();
         let line = self.host.doc.cursor_line;
         let ghost = self
             .cache
@@ -776,7 +837,16 @@ impl SlateWindow {
             .and_then(|l| l.as_ref())
             .and_then(|l| l.ghost.as_deref())
             .map(|g| g.trim().trim_start_matches(['=', '→']).trim().to_string());
-        let chip = |label: &'static str| div().px(px(7.0)).rounded(px(9.0)).bg(t.chip).child(label);
+        // Every segment stays on one line; the title and message give way first.
+        let chip = |label: &'static str| {
+            div()
+                .flex_none()
+                .whitespace_nowrap()
+                .px(px(7.0))
+                .rounded(px(9.0))
+                .bg(t.chip)
+                .child(label)
+        };
         let (pill, pill_bg) = match self.host.input.mode() {
             VimMode::Normal => ("NORMAL", t.blue),
             VimMode::Insert => ("INSERT", t.amber),
@@ -790,9 +860,20 @@ impl SlateWindow {
         } else {
             format!("Ln {}, Col {}", line + 1, self.host.doc.cursor_col + 1)
         };
+        let wide = width >= 900.0;
+        let divider = || {
+            div()
+                .flex_none()
+                .whitespace_nowrap()
+                .px(px(10.0))
+                .border_l_1()
+                .border_color(t.border)
+        };
         div()
             .h(px(28.0))
+            .w_full()
             .flex_none()
+            .overflow_hidden()
             .flex()
             .items_center()
             .gap(px(6.0))
@@ -805,6 +886,8 @@ impl SlateWindow {
             .when(vim, |d| {
                 d.child(
                     div()
+                        .flex_none()
+                        .whitespace_nowrap()
                         .px(px(9.0))
                         .rounded(px(4.0))
                         .bg(pill_bg)
@@ -815,50 +898,65 @@ impl SlateWindow {
             })
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .max_w(px(260.0))
                     .px(px(6.0))
                     .text_color(t.text)
-                    .child(self.host.title.clone())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(self.host.title.clone()),
+                    )
                     .when(self.host.session.dirty(), |d| {
-                        d.child(div().text_color(t.amber).child(" ●"))
+                        d.child(div().flex_none().pl(px(4.0)).text_color(t.amber).child("●"))
                     }),
             )
-            .when(m.math, |d| d.child(chip("math")))
-            .when(m.variables, |d| d.child(chip("variables")))
-            .when(m.table, |d| d.child(chip("table")))
+            .when(wide && m.math, |d| d.child(chip("math")))
+            .when(wide && m.variables, |d| d.child(chip("variables")))
+            .when(wide && m.table, |d| d.child(chip("table")))
             .when(!pending.is_empty(), |d| {
                 d.child(
                     div()
+                        .flex_none()
+                        .whitespace_nowrap()
                         .px(px(8.0))
                         .font_family(self.fonts.mono.clone())
                         .text_color(t.faint)
                         .child(pending),
                 )
             })
-            .when_some(self.status.clone(), |d, s| {
-                d.child(div().px(px(8.0)).text_color(t.text).child(s))
-            })
-            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .px(px(8.0))
+                    .text_color(t.text)
+                    .children(self.status.clone()),
+            )
             .when_some(ghost, |d, g| {
                 d.child(
                     div()
+                        .flex_none()
+                        .whitespace_nowrap()
                         .px(px(10.0))
                         .font_family(self.fonts.mono.clone())
                         .text_color(t.amber)
                         .child(format!("= {g}")),
                 )
             })
+            .when(wide, |d| {
+                d.child(divider().child(if vim { "Vim" } else { "Standard" }))
+            })
             .child(
-                div()
-                    .px(px(10.0))
-                    .border_l_1()
-                    .border_color(t.border)
-                    .child(if vim { "Vim" } else { "Standard" }),
-            )
-            .child(
-                div()
-                    .px(px(10.0))
-                    .border_l_1()
-                    .border_color(t.border)
+                divider()
                     .font_family(self.fonts.mono.clone())
                     .child(position),
             )
@@ -912,6 +1010,9 @@ impl SlateWindow {
 impl Render for SlateWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
+        let size = window.viewport_size();
+        self.viewport
+            .set((f32::from(size.width), f32::from(size.height)));
         let editor = div()
             .flex_1()
             .min_w_0()
