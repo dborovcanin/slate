@@ -5,3 +5,10 @@ pub mod session;
 pub use document::Document;
 pub use reminders::*;
 pub use session::NoteSession;
+
+pub mod edit;
+pub use edit::{EditContext, EditOutcome, SessionEdit};
+
+mod operations;
+
+mod undo;

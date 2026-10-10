@@ -541,7 +541,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 4: core line insertion/removal plans.
 - [x] Step 5: document crate and terminal view separation.
 - [x] Step 6: undo, dirty and reminder session state.
-- [ ] Step 7: session edit pipeline and undo/redo.
+- [x] Step 7: session edit pipeline and undo/redo.
 - [ ] Step 8: private document text.
 - [ ] Step 9: shared calc state.
 - [ ] Step 10: session calc upkeep.
@@ -594,6 +594,26 @@ Step 6: undo/dirty/reminder state and pure mapping moved into `NoteSession`.
 Save/leave/render identity uses `edit_seq()`; terminal Instants remain for
 debounce. Existing save-race, reminder and workspace tests passed; no new
 Clippy warnings. Failed-save pause semantics remain unchanged until step 14.
+
+Step 7: session requests prepare/apply primitives, replacements, word deletion,
+pastes/imports, visual edits and compound operations; text undo/redo restores
+reminders in the crate. Empty-buffer initialization is also session-owned. The
+terminal consumes outcomes and retains presentation/calc upkeep. Compound edits
+rebuild final calc metadata once rather than inspecting intermediate buffers
+after mutation. Direct-versus-keyboard history ordering is preserved through
+`defer_history`/`finish_edit`, still due for removal in step 10.
+
+Review fixes preserve the previous table cursor column and empty-line reminder
+bookkeeping. `O`, Escape now immediately records its inserted empty line, fixing
+an existing unsaved-edit gap; a focused save/undo/redo test covers it. Existing
+golden fixtures are unchanged. Workspace checks: 1,317 passed, six ignored, no
+new warnings. Latest large-note capture passed all limits and crossed no
+investigation thresholds; 30k paste is 5.07 ms versus 5.05 ms lower baseline.
+
+Step 7 unified checker: table and large-note gates passed with isolated config
+and data. Startup ran successfully but exceeded the stored April baseline;
+final startup acceptance is the required five-run comparison against main.
+No performance baselines were edited.
 
 Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
 could not create a private runtime image; the approved rerun passed. Baseline

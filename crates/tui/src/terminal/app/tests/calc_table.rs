@@ -2455,3 +2455,23 @@ fn csv_on_a_table_line_is_left_to_fill_cells() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn pruning_empty_continuation_preserves_the_previous_table_column() {
+    let (db, mut app, path) =
+        app_with_note("| a    | b     |\n| ---- | ----- |\n| base | value |\n|>     | x     |");
+    app.editor.cursor_line = 3;
+    app.editor.cursor_col = app.editor.lines[3].find('x').unwrap() + 1;
+    run_keys(&mut app, &db, &[Key::Backspace]);
+    assert_eq!(app.editor.cursor_line, 2);
+    let cell = table_cell_info_at_char(
+        &app.editor.lines,
+        app.editor.cursor_line,
+        app.editor.cursor_col,
+    )
+    .unwrap();
+    assert_eq!(cell.column_index, 1);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

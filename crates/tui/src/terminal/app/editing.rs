@@ -14,22 +14,15 @@ use super::{
     VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
 use crate::editor_core::buffer::paste::{
-    apply_plain_paste, apply_table_cell_paste, normalize_paste, parse_table_paste,
-    prepare_plain_paste, prepare_table_cell_paste, prepare_table_import, table_paste_outside_code,
+    normalize_paste, parse_table_paste, table_paste_outside_code,
 };
-use crate::editor_core::buffer::primitives::{
-    apply_primitive_edit, prepare_primitive_edit, PrimitiveEdit,
-};
-use crate::editor_core::buffer::words::{self, BackwardWordDelete};
-use crate::editor_core::buffer::{
-    apply_line_replace, apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
-    map_offset_through_changes, prepare_line_replace, prepare_text_change, EditDelta,
-};
+use crate::editor_core::buffer::primitives::PrimitiveEdit;
+use crate::editor_core::buffer::words;
+use crate::editor_core::buffer::EditDelta;
 use crate::editor_core::history::policy::{UndoGrouping, UndoSession};
 use crate::editor_core::history::HistoryCursor;
 use crate::terminal::text_utils::{
-    byte_index, char_col_at_byte, cursor_render_char_col, remove_char_at,
-    viewport_col_for_display_col,
+    byte_index, char_col_at_byte, cursor_render_char_col, viewport_col_for_display_col,
 };
 use crate::terminal::{folding, input};
 use app_core::calc::ExternVar;
@@ -262,13 +255,6 @@ impl TerminalApp {
             .get(self.editor.cursor_line)
             .map(|s| s.as_str())
             .unwrap_or("")
-    }
-
-    pub(super) fn current_line_mut(&mut self) -> &mut String {
-        if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
-        }
-        &mut self.editor.lines[self.editor.cursor_line]
     }
 
     pub(super) fn rescan_calc_flags(&mut self) {
@@ -1057,7 +1043,10 @@ impl TerminalApp {
             session: self.undo_session(),
             elapsed: self.last_edit.elapsed(),
         };
-        self.invalidate_joined_text_cache();
+        let session_edit = std::mem::take(&mut self.pending_session_edit);
+        if !session_edit {
+            self.invalidate_joined_text_cache();
+        }
         self.render_caches.table_formula_segment_cache.clear();
         self.session.dirty = true;
         if changed_from_line == 0 {
@@ -1132,8 +1121,19 @@ impl TerminalApp {
         }
         // Splices are only meaningful for the edit that recorded them.
         self.calc.pending_result_splices.clear();
-        self.record_history_after_edit(grouping, delta);
-        self.session.note_changed();
+        if session_edit {
+            self.session.finish_edit(
+                &self.editor,
+                note_session::EditContext {
+                    grouping,
+                    defer_history: true,
+                },
+                delta.expect("session edit span"),
+            );
+        } else {
+            self.record_history_after_edit(grouping, delta);
+            self.session.note_changed();
+        }
         self.last_edit = Instant::now();
     }
 
@@ -1161,6 +1161,7 @@ impl TerminalApp {
         self.mark_edited_from_line_with_span(delta.start_line, Some(delta));
     }
 
+    #[cfg(test)]
     pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {
         self.mark_edited_from_line_with_span(changed_from_line, None);
     }
@@ -1201,25 +1202,8 @@ impl TerminalApp {
     }
 
     fn undo_text_action(&mut self) {
-        let keep_cursor_on_exhaust = self.session.history.undo_depth() == 1;
-        let cursor_before_undo = (self.editor.cursor_line, self.editor.cursor_col);
-        if let Some(cursor) = self.session.history.undo(&mut self.editor.lines) {
-            self.invalidate_joined_text_cache();
-            if keep_cursor_on_exhaust {
-                self.editor.cursor_line = cursor_before_undo
-                    .0
-                    .min(self.editor.lines.len().saturating_sub(1));
-                self.editor.cursor_col = cursor_before_undo.1;
-            } else {
-                self.editor.cursor_line =
-                    cursor.line.min(self.editor.lines.len().saturating_sub(1));
-                self.editor.cursor_col = cursor.col;
-            }
-            self.session.dirty = true;
-            self.session.note_changed();
+        if self.session.undo(&mut self.editor).is_some() {
             self.last_edit = Instant::now();
-            // The step's reminders come back with its text.
-            self.restore_reminders_from_history();
             // Full lines replacement: invalidate all caches.
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
@@ -1257,15 +1241,8 @@ impl TerminalApp {
     }
 
     fn redo_text_action(&mut self) {
-        if let Some(cursor) = self.session.history.redo(&mut self.editor.lines) {
-            self.invalidate_joined_text_cache();
-            self.editor.cursor_line = cursor.line.min(self.editor.lines.len().saturating_sub(1));
-            self.editor.cursor_col = cursor.col;
-            self.session.dirty = true;
-            self.session.note_changed();
+        if self.session.redo(&mut self.editor).is_some() {
             self.last_edit = Instant::now();
-            // The step's reminders come back with its text.
-            self.restore_reminders_from_history();
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
             if self.calc_runtime.viewport_only {
@@ -1732,7 +1709,16 @@ impl TerminalApp {
                     // Calling mark_edited here would recursively start calc.
                     let from_col = char_col_at_byte(&self.editor.lines[i], eq_idx);
                     let to_col = line_char_len(&self.editor.lines[i]);
-                    self.replace_line_chars(i, from_col..to_col, &new_tail);
+                    let ctx = self.session_edit_context();
+                    self.session.apply(
+                        &mut self.editor,
+                        note_session::SessionEdit::DerivedLineReplace {
+                            line: i,
+                            range: from_col..to_col,
+                            text: &new_tail,
+                        },
+                        ctx,
+                    );
                     // Line is back in sync with the backend, reflect it in
                     // the cached result so the ghost widget disappears and
                     // the next eligibility round still sees prev-None here.
@@ -1862,41 +1848,49 @@ impl TerminalApp {
     }
 
     pub(super) fn delete_word_backward(&mut self) -> bool {
-        let Some(plan) = words::prepare_backward_word_delete(
-            &self.editor.lines,
-            self.editor.cursor(),
-            self.note_table_module_enabled(),
-        ) else {
+        if self.editor.cursor_col == 0 {
+            if self.editor.cursor_line == 0 {
+                return false;
+            }
+            self.backspace();
+            return true;
+        }
+        let Some(outcome) =
+            self.apply_session_edit(note_session::SessionEdit::BackwardWordDelete {
+                tables: self.note_table_module_enabled(),
+            })
+        else {
             return false;
         };
-        match plan {
-            BackwardWordDelete::JoinPreviousLine => self.backspace(),
-            BackwardWordDelete::WithinLine(range) => {
-                let delta = range.delta;
-                self.editor.cursor_col = words::apply_word_delete(self.current_line_mut(), range);
-                self.refresh_calc_line_metadata_at(delta.start_line);
-                self.mark_edited_with_delta(delta);
-                self.prune_empty_table_continuation_row_at_cursor();
-            }
-        }
+        self.refresh_calc_line_metadata_at(outcome.delta.start_line);
+        self.mark_edited_with_delta(outcome.delta);
+        self.prune_empty_table_continuation_row_at_cursor();
         true
     }
 
-    fn apply_buffer_primitive(
-        &mut self,
-        primitive: PrimitiveEdit<'_>,
-    ) -> Option<crate::editor_core::buffer::EditDelta> {
-        let prepared = prepare_primitive_edit(&self.editor.lines, self.editor.cursor(), primitive)?;
-        let delta = prepared.delta;
-        // Preserve the existing structural reminder callbacks before mutation.
-        // Same-line character edits leave line-attached marks in place.
-        if delta.old_span != delta.new_span {
-            let edit = prepared.edit;
-            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+    fn session_edit_context(&self) -> note_session::EditContext {
+        note_session::EditContext {
+            grouping: UndoGrouping {
+                session: UndoSession::Other,
+                elapsed: Duration::ZERO,
+            },
+            defer_history: true,
         }
-        let cursor = apply_primitive_edit(&mut self.editor.lines, prepared);
-        self.editor.set_cursor(cursor);
-        Some(delta)
+    }
+
+    pub(super) fn apply_session_edit(
+        &mut self,
+        edit: note_session::SessionEdit<'_>,
+    ) -> Option<note_session::EditOutcome> {
+        let ctx = self.session_edit_context();
+        let outcome = self.session.apply(&mut self.editor, edit, ctx)?;
+        self.pending_session_edit = outcome.text_changed;
+        Some(outcome)
+    }
+
+    fn apply_buffer_primitive(&mut self, primitive: PrimitiveEdit<'_>) -> Option<EditDelta> {
+        self.apply_session_edit(note_session::SessionEdit::Primitive(primitive))
+            .map(|outcome| outcome.delta)
     }
 
     pub(super) fn insert_char(&mut self, ch: char) {
@@ -1922,23 +1916,23 @@ impl TerminalApp {
     }
 
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
-        let Some(edit) = prepare_table_cell_paste(
-            &self.editor.lines,
-            self.editor.cursor(),
-            normalized,
-            self.note_table_module_enabled(),
-            &mut self.table_format_cache,
+        let ctx = self.session_edit_context();
+        let tables = self.note_table_module_enabled();
+        let Some(outcome) = self.session.apply(
+            &mut self.editor,
+            note_session::SessionEdit::TableCellPaste {
+                text: normalized,
+                tables,
+                cache: &mut self.table_format_cache,
+            },
+            ctx,
         ) else {
             return false;
         };
-        let replaced_count = edit.end - edit.start + 1;
-        let inserted_count = edit.lines.len();
-        let start = edit.start;
-        self.note_block_replace(start, replaced_count, &edit.lines);
-        let cursor = apply_table_cell_paste(&mut self.editor.lines, edit);
-        self.editor.set_cursor(cursor);
-        self.splice_calc_line_metadata(start, replaced_count, inserted_count);
-        self.mark_edited_from_line(start);
+        self.pending_session_edit = true;
+        let delta = outcome.delta;
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_with_delta(delta);
         true
     }
 
@@ -1950,20 +1944,14 @@ impl TerminalApp {
         if self.try_insert_table_cell_multiline_paste(&normalized) {
             return;
         }
-        let Some(prepared) =
-            prepare_plain_paste(&self.editor.lines, self.editor.cursor(), &normalized)
+        let Some(outcome) =
+            self.apply_session_edit(note_session::SessionEdit::PlainPaste(&normalized))
         else {
             return;
         };
-        let delta = prepared.delta;
-        if prepared.edit.inserted_breaks > 0 {
-            let edit = prepared.edit;
-            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
-        }
-        let cursor = apply_plain_paste(&mut self.editor.lines, prepared);
-        self.editor.set_cursor(cursor);
+        let delta = outcome.delta;
         self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
-        self.mark_edited_from_line(delta.start_line);
+        self.mark_edited_with_delta(delta);
     }
 
     pub(super) fn try_import_image_paste(
@@ -2039,10 +2027,13 @@ impl TerminalApp {
         let Some(table) = self.pasted_table(text) else {
             return false;
         };
-        let (block, cursor) =
-            prepare_table_import(&table, self.current_line(), self.editor.cursor());
-        self.editor.set_cursor(cursor);
-        self.insert_paste(&block);
+        let Some(outcome) = self.apply_session_edit(note_session::SessionEdit::TableImport(&table))
+        else {
+            return false;
+        };
+        let delta = outcome.delta;
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_with_delta(delta);
         self.status = "pasted as table".to_string();
         true
     }
@@ -2052,7 +2043,7 @@ impl TerminalApp {
             return;
         };
         self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
-        self.mark_edited_from_line(delta.start_line);
+        self.mark_edited_with_delta(delta);
     }
 
     pub(super) fn variable_autocomplete_state(&self) -> Option<VariableAutocompleteState> {
@@ -2222,10 +2213,13 @@ impl TerminalApp {
         range: std::ops::Range<usize>,
         text: &str,
     ) -> Option<EditDelta> {
-        let prepared = prepare_line_replace(&self.editor.lines, line, range, text)?;
-        let delta = prepared.delta;
-        apply_line_replace(&mut self.editor.lines, prepared);
-        Some(delta)
+        self.apply_session_edit(note_session::SessionEdit::LineReplace {
+            line,
+            range,
+            text,
+            preserve_cursor: true,
+        })
+        .map(|outcome| outcome.delta)
     }
 
     pub(super) fn apply_variable_autocomplete_pick(
@@ -2646,148 +2640,19 @@ impl TerminalApp {
             self.set_locked_note_status();
             return;
         }
-        if op.changes.is_empty() {
-            if let Some(sel) = &op.selection {
-                let target = sel.anchor.min(document_text_len(&self.editor.lines));
-                let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, target);
-                if let Some(line) = self.editor.lines.get(line_idx) {
-                    self.editor.cursor_line = line_idx;
-                    self.editor.cursor_col = char_col_at_byte(line, line_byte);
-                }
-                self.adjust_cursor_after_operation(op);
-                self.adjust_scroll();
+        let outcome = self.apply_session_edit(note_session::SessionEdit::Operation(op));
+        if let Some(outcome) = outcome {
+            let delta = outcome.delta;
+            if outcome.calc_splices.is_empty() {
+                self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+            } else {
+                // Compound changes already own an allocated plan; derive final metadata
+                // once rather than reading intermediate buffers after the transaction.
+                self.rebuild_calc_line_metadata();
             }
-            return;
+            self.folds.rescan_pending |= outcome.fold_rescan;
+            self.mark_edited_with_delta(delta);
         }
-
-        if op.changes.len() == 1 {
-            let change = &op.changes[0];
-            let doc_len = document_text_len(&self.editor.lines);
-            let from = change.from.min(doc_len);
-            let to = change.to.min(doc_len);
-            let prepared = prepare_text_change(&self.editor.lines, change, doc_len);
-            let edit = prepared.edit;
-            let from_line = edit.from.0;
-
-            let mut mapped_anchor =
-                self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
-            if from <= mapped_anchor {
-                if to <= mapped_anchor {
-                    let removed = to.saturating_sub(from);
-                    let added = change.insert.len();
-                    mapped_anchor = mapped_anchor.saturating_add(added).saturating_sub(removed);
-                } else {
-                    let inside = mapped_anchor.saturating_sub(from);
-                    mapped_anchor = from.saturating_add(inside.min(change.insert.len()));
-                }
-            }
-
-            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
-            let delta = apply_text_change_in_place(&mut self.editor.lines, prepared);
-            let old_line_span = delta.old_span;
-            let new_line_span = delta.new_span;
-
-            self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
-
-            let new_doc_len = doc_len
-                .saturating_add(change.insert.len())
-                .saturating_sub(to.saturating_sub(from));
-            let final_anchor = op
-                .selection
-                .as_ref()
-                .map_or(mapped_anchor, |selection| selection.anchor)
-                .min(new_doc_len);
-            let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, final_anchor);
-            if let Some(line) = self.editor.lines.get(line_idx) {
-                self.editor.cursor_line = line_idx;
-                self.editor.cursor_col = char_col_at_byte(line, line_byte);
-            }
-            // A rewrite of the cursor line alone (e.g. a table row reformatted
-            // after a keystroke) is covered by the incremental fold update in
-            // `mark_edited_*`; anything wider needs the O(N) rescan.
-            if !(old_line_span == 1 && new_line_span == 1 && from_line == self.editor.cursor_line) {
-                self.folds.rescan_pending = true;
-            }
-            self.mark_edited_with_delta(EditDelta {
-                start_line: from_line,
-                old_span: old_line_span,
-                new_span: new_line_span,
-            });
-            self.adjust_cursor_after_operation(op);
-            self.adjust_scroll();
-            return;
-        }
-
-        let old_doc_len = document_text_len(&self.editor.lines);
-        let changed_from_offset = op
-            .changes
-            .iter()
-            .map(|change| change.from.min(old_doc_len))
-            .min()
-            .unwrap_or(0);
-        let changed_to_offset_old = op
-            .changes
-            .iter()
-            .map(|change| change.to.min(old_doc_len))
-            .max()
-            .unwrap_or(changed_from_offset);
-        let changed_from_line = line_and_byte_for_offset(&self.editor.lines, changed_from_offset).0;
-        let old_changed_to_line_exclusive =
-            line_and_byte_for_offset(&self.editor.lines, changed_to_offset_old).0 + 1;
-
-        let original_anchor =
-            self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
-        let mut changes = op.changes.clone();
-        changes.sort_by(|a, b| b.from.cmp(&a.from));
-        let mapped_anchor = map_offset_through_changes(original_anchor, &changes);
-
-        let mut current_doc_len = old_doc_len;
-        for change in &changes {
-            let from = change.from.min(current_doc_len);
-            let to = change.to.min(current_doc_len);
-            let removed = to.saturating_sub(from);
-            let prepared = prepare_text_change(&self.editor.lines, change, current_doc_len);
-            let edit = prepared.edit;
-            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
-            let delta = apply_text_change_in_place(&mut self.editor.lines, prepared);
-            self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
-            current_doc_len = current_doc_len
-                .saturating_add(change.insert.len())
-                .saturating_sub(removed);
-        }
-
-        let mapped_from =
-            map_offset_through_changes(changed_from_offset, &changes).min(current_doc_len);
-        let mapped_to =
-            map_offset_through_changes(changed_to_offset_old, &changes).min(current_doc_len);
-        let mapped_changed_to = mapped_from.max(mapped_to);
-        let new_changed_to_line_exclusive =
-            line_and_byte_for_offset(&self.editor.lines, mapped_changed_to).0 + 1;
-        let old_line_span = old_changed_to_line_exclusive
-            .saturating_sub(changed_from_line)
-            .max(1);
-        let new_line_span = new_changed_to_line_exclusive
-            .saturating_sub(changed_from_line)
-            .max(1);
-        self.splice_calc_line_metadata(changed_from_line, old_line_span, new_line_span);
-
-        let final_anchor = if let Some(sel) = &op.selection {
-            sel.anchor
-        } else {
-            mapped_anchor
-        }
-        .min(current_doc_len);
-        let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, final_anchor);
-        if let Some(line) = self.editor.lines.get(line_idx) {
-            self.editor.cursor_line = line_idx;
-            self.editor.cursor_col = char_col_at_byte(line, line_byte);
-        }
-        self.folds.rescan_pending = true;
-        self.mark_edited_with_delta(EditDelta {
-            start_line: changed_from_line,
-            old_span: old_line_span,
-            new_span: new_line_span,
-        });
         self.adjust_cursor_after_operation(op);
         self.adjust_scroll();
     }
@@ -2804,15 +2669,14 @@ impl TerminalApp {
         }
 
         let remove_line = self.editor.cursor_line;
-        self.note_deleted_lines(remove_line, remove_line);
-        let plan = crate::editor_core::buffer::lines::prepare_remove_lines(
-            &self.editor.lines,
-            remove_line,
-            remove_line + 1,
-        )
-        .expect("existing continuation row");
-        let delta = plan.delta;
-        crate::editor_core::buffer::lines::apply_remove_lines(&mut self.editor.lines, plan);
+        let previous_col = self.editor.cursor_col;
+        let delta = self
+            .apply_session_edit(note_session::SessionEdit::RemoveLines {
+                start: remove_line,
+                end: remove_line + 1,
+            })
+            .expect("existing continuation row")
+            .delta;
         if delta.new_span == 1 {
             self.editor.cursor_line = 0;
             self.editor.cursor_col = 0;
@@ -2820,10 +2684,7 @@ impl TerminalApp {
             self.editor.cursor_line = remove_line
                 .saturating_sub(1)
                 .min(self.editor.lines.len() - 1);
-            self.editor.cursor_col = self
-                .editor
-                .cursor_col
-                .min(line_char_len(self.current_line()));
+            self.editor.cursor_col = previous_col.min(line_char_len(self.current_line()));
             if self.note_table_module_enabled() {
                 if let Some(cell) = table_cell_info_at_char(
                     &self.editor.lines,
@@ -2856,7 +2717,7 @@ impl TerminalApp {
         match plan {
             TableCharDelete::Stay { cursor } => self.editor.cursor_col = cursor,
             TableCharDelete::Remove { at, cursor } => {
-                remove_char_at(&mut self.editor.lines[self.editor.cursor_line], at);
+                self.replace_line_chars(self.editor.cursor_line, at..at + 1, "");
                 self.editor.cursor_col = cursor;
                 self.refresh_calc_line_metadata_at(self.editor.cursor_line);
                 self.mark_edited_current_line();
@@ -3176,7 +3037,7 @@ impl TerminalApp {
 
     fn adjust_cursor_line_and_col_bounds(&mut self) {
         if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
+            self.apply_session_edit(note_session::SessionEdit::EnsureBuffer);
         }
         if self.editor.cursor_line >= self.editor.lines.len() {
             self.editor.cursor_line = self.editor.lines.len() - 1;

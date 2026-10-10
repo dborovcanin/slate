@@ -3,7 +3,6 @@ use super::{
     line_char_len, Db, Key, TerminalApp, TerminalVimAdapter, UiMode, VimMacroStep,
     VimPipelineResult, VimRegister, VimRegisterMode,
 };
-use crate::editor_core::buffer::lines::{apply_insert_lines, prepare_insert_lines};
 use crate::terminal::text_utils::join_lines;
 
 const VIM_MACRO_REPLAY_STEP_BUDGET: usize = 10_000;
@@ -262,35 +261,14 @@ impl TerminalApp {
         if !matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
             return false;
         }
-        if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
-        }
-        use crate::editor_core::buffer::primitives::BufferCursor;
-        let anchor = self
-            .editor
-            .selection_anchor
-            .unwrap_or((self.editor.cursor_line, self.editor.cursor_col));
-        let Some(plan) = crate::editor_core::vim_actions::buffer::prepare_visual_selection(
-            &self.editor.lines,
-            self.editor.cursor(),
-            BufferCursor {
-                line: anchor.0,
-                column: anchor.1,
-            },
-            self.mode == UiMode::VisualLine,
+        let Some(outcome) = self.apply_session_edit(note_session::SessionEdit::Visual {
+            linewise: self.mode == UiMode::VisualLine,
             delete,
-        ) else {
+        }) else {
             return false;
         };
-        let history_delta = plan.text_changed.then_some(plan.delta);
-        if let Some((start, end)) = plan.deleted_lines {
-            self.note_deleted_lines(start, end);
-        }
-        if let Some(edit) = plan.exact_edit {
-            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
-        }
-        let (register, cursor) = plan.apply(&mut self.editor.lines);
-        self.editor.set_cursor(cursor);
+        let history_delta = outcome.text_changed.then_some(outcome.delta);
+        let register = outcome.register.expect("visual register");
         if delete {
             let _ = self.set_vim_register(register);
         } else {
@@ -709,11 +687,18 @@ impl TerminalApp {
                             action.intent,
                         );
                     let current = self.editor.cursor_line;
-                    self.note_lines_inserted(current, 1);
-                    let plan =
-                        prepare_insert_lines(&self.editor.lines, current, vec![String::new()])
-                            .expect("one inserted line");
-                    apply_insert_lines(&mut self.editor.lines, plan);
+                    let outcome = self
+                        .apply_session_edit(note_session::SessionEdit::InsertLines {
+                            at: current,
+                            lines: vec![String::new()].into(),
+                        })
+                        .expect("inserted line");
+                    self.splice_calc_line_metadata(
+                        outcome.delta.start_line,
+                        outcome.delta.old_span,
+                        outcome.delta.new_span,
+                    );
+                    self.mark_edited_with_delta(outcome.delta);
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
@@ -760,15 +745,15 @@ impl TerminalApp {
                                     );
                                 if !repeated.is_empty() {
                                     let insert_at = self.editor.cursor_line + 1;
-                                    self.note_lines_inserted(insert_at, repeated.len());
-                                    let plan = prepare_insert_lines(
-                                        &self.editor.lines,
-                                        insert_at,
-                                        repeated,
-                                    )
-                                    .expect("nonempty linewise register");
-                                    let delta = plan.delta;
-                                    apply_insert_lines(&mut self.editor.lines, plan);
+                                    let delta = self
+                                        .apply_session_edit(
+                                            note_session::SessionEdit::InsertLines {
+                                                at: insert_at,
+                                                lines: repeated.into(),
+                                            },
+                                        )
+                                        .expect("linewise register")
+                                        .delta;
                                     self.editor.cursor_line = insert_at;
                                     self.editor.cursor_col = 0;
                                     self.splice_calc_line_metadata(

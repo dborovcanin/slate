@@ -186,3 +186,23 @@ Terminal behavior is frozen by replay tests in `crates/tui/src/terminal/app/test
 - `crates/tui/src/terminal/tests/golden/vim_replay.json`
 - `crates/tui/src/terminal/tests/golden/markdown_replay.json`
 - `crates/tui/src/terminal/tests/golden/calc_replay.json`
+
+## Note session extraction
+
+`note_session::Document` carries source lines, character cursor/selection, joined
+text cache and text generation. Terminal viewport state lives separately.
+`NoteSession::apply` prepares and consumes a `SessionEdit` against that document;
+requests cover in-place primitives, character replacements, paste/import,
+whole-line edits, visual ranges, word deletion and byte-offset operations.
+Outcomes describe source-line deltas, calc invalidation and register effects.
+Typing outcomes use empty vectors and do not allocate. Boundary primitives and
+unchanged replacements do not advance dirty state, generation or edit identity.
+
+The session owns text history, dirty state, edit counters and reminder mapping.
+The host still orders text/reminder undo actions and presents cursor clamps while
+lifecycle extraction is in progress. Direct synchronous calc can rewrite trailers
+before history records; keyboard calc may defer until afterwards. During this
+transition the terminal requests `defer_history` and calls `finish_edit` once
+after upkeep. Calc-derived replacements stay inside that transaction. This
+continuation and the public derived-edit request must disappear when calc moves
+in step 10; they are not the final front-end contract.

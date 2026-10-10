@@ -603,6 +603,7 @@ pub(super) struct WebSearchResponse {
 
 struct TerminalApp {
     session: note_session::NoteSession,
+    pending_session_edit: bool,
     active_note: Note,
     /// Encrypted collection whose password unlocks the open note.
     active_note_key_collection: Option<String>,
@@ -1091,6 +1092,7 @@ impl TerminalApp {
 
         let mut app = Self {
             session: note_session::NoteSession::new(history, reminder_ghosts),
+            pending_session_edit: false,
             active_note,
             active_note_key_collection: None,
             scripts: scripts::ScriptState::new(app_core::config::load_script_config()),

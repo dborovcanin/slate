@@ -1503,3 +1503,46 @@ fn large_note_visual_deletes_roundtrip_including_last_empty_line() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn open_above_then_escape_records_the_empty_line_for_save_and_undo() {
+    let (db, mut app, path) = app_with_note("original");
+    app.mode = UiMode::Normal;
+    let seq = app.session.edit_seq();
+    run_keys(&mut app, &db, &[Key::Char('O'), Key::Esc]);
+    assert_eq!(app.editor.lines, vec!["", "original"]);
+    assert!(app.session.dirty);
+    assert!(app.session.edit_seq() > seq);
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert_eq!(app.editor.lines, vec!["original"]);
+    run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+    assert_eq!(app.editor.lines, vec!["", "original"]);
+    app.save(&db).expect("save inserted line");
+    assert_eq!(
+        db.get_note(&app.active_note.id).unwrap().unwrap().body,
+        "\noriginal"
+    );
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn deleting_the_sole_empty_line_finalizes_reminder_ownership() {
+    let (db, mut app, path) = app_with_note("");
+    db.upsert_reminder("n1", 1, 1_900_000_000_000, "2030-03-10 09:00", "")
+        .unwrap();
+    app.load_reminders(&db).unwrap();
+    app.session.history.set_marks(app.reminder_marks());
+    app.mode = UiMode::Normal;
+    run_keys(&mut app, &db, &[Key::Char('V'), Key::Char('d')]);
+    assert!(app.session.reminder_ghosts.is_empty());
+    assert!(app.session.history.current_marks().is_empty());
+    assert!(app.session.pending_line_edits.is_empty());
+    assert!(app.session.dirty);
+    app.save(&db).unwrap();
+    assert!(db.list_reminders("n1").unwrap().is_empty());
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

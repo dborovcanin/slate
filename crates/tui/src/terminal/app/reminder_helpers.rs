@@ -1,8 +1,6 @@
 use super::{LineReminderGhost, ReminderMarks, TerminalApp};
 use crate::storage::{Db, Note};
-use app_core::reminders::{block_line_fates, LineEdit};
 use app_core::storage::{NoteAccessMode, ReminderLine};
-pub(super) use note_session::PendingLineChange;
 use note_session::{move_lines, reminder_marks_of};
 use rustc_hash::FxHashMap;
 
@@ -142,88 +140,12 @@ impl TerminalApp {
         }
     }
 
-    /// Lines `start..=end` are about to be removed directly from the buffer
-    /// (a linewise visual delete, the delete-line command), without a text
-    /// change to describe it: drops their reminders and records where the
-    /// remaining lines go, so equal lines elsewhere cannot be mistaken for
-    /// the deleted ones. Call before the lines change.
-    pub(super) fn note_deleted_lines(&mut self, start: usize, end: usize) {
-        self.drop_reminders_on_deleted_lines(start, end);
-        let last = self.editor.lines.len().saturating_sub(1);
-        let len = |line: usize| self.editor.lines.get(line).map_or(0, String::len);
-        let (from, to) = if end < last {
-            ((start, 0), (end + 1, 0))
-        } else if start > 0 {
-            ((start - 1, len(start - 1)), (end, len(end)))
-        } else {
-            ((0, 0), (end, len(end)))
-        };
-        self.note_line_edit(from, to, 0);
-    }
-
     /// The reminders to store with a save of the text: always while there
     /// are any (their line text follows edits), and after any change.
     pub(super) fn reminders_for_save(&self, saving_text: bool) -> Option<Vec<ReminderLine>> {
         let needed =
             self.reminders_unsaved() || (saving_text && !self.session.reminder_ghosts.is_empty());
         (needed && self.active_note_holds_reminders()).then(|| self.reminder_lines())
-    }
-
-    /// Records the coordinates of an edit about to change the buffer's lines,
-    /// so reminders follow it exactly (see [`LineEdit::line_after`]). Call
-    /// before the lines change; columns are bytes.
-    pub(super) fn note_line_edit(
-        &mut self,
-        from: (usize, usize),
-        to: (usize, usize),
-        inserted_breaks: usize,
-    ) {
-        if self.session.reminder_ghosts.is_empty() {
-            return;
-        }
-        let len = |line: usize| self.editor.lines.get(line).map_or(0, String::len);
-        self.session
-            .pending_line_edits
-            .push(PendingLineChange::Edit(LineEdit {
-                from_line: from.0,
-                from_col: from.1,
-                from_line_len: len(from.0),
-                to_line: to.0,
-                to_col: to.1,
-                to_line_len: len(to.0),
-                inserted_breaks,
-            }));
-    }
-
-    /// Lines `start..start + old_len` are about to be replaced as a block by
-    /// `new` (a structured rewrite such as a table paste): lines outside it
-    /// move exactly, lines inside are matched ([`block_line_fates`]). Call
-    /// before the lines change.
-    pub(super) fn note_block_replace(&mut self, start: usize, old_len: usize, new: &[String]) {
-        if self.session.reminder_ghosts.is_empty() {
-            return;
-        }
-        let end = (start + old_len).min(self.editor.lines.len());
-        let fates = block_line_fates(&self.editor.lines[start..end], new);
-        self.session
-            .pending_line_edits
-            .push(PendingLineChange::Block {
-                start,
-                old_len: end - start,
-                new_len: new.len(),
-                fates,
-            });
-    }
-
-    /// `count` lines are about to be inserted before line `at`.
-    pub(super) fn note_lines_inserted(&mut self, at: usize, count: usize) {
-        if at > 0 {
-            let above = at - 1;
-            let len = self.editor.lines.get(above).map_or(0, String::len);
-            self.note_line_edit((above, len), (above, len), count);
-        } else {
-            self.note_line_edit((0, 0), (0, 0), count);
-        }
     }
 
     /// Moves reminders through the edit history just recorded, and attaches
@@ -252,15 +174,5 @@ impl TerminalApp {
             self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
         }
         self.session.history.record_marks(self.reminder_marks());
-    }
-
-    /// After undo or redo: the reminders the history step holds.
-    pub(super) fn restore_reminders_from_history(&mut self) {
-        self.session.pending_line_edits.clear();
-        let marks = self.session.history.current_marks().clone();
-        if *marks != *self.reminder_marks() {
-            self.session.reminder_ghosts = marks.iter().cloned().collect();
-            self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
-        }
     }
 }
