@@ -204,10 +204,7 @@ pub fn on_key(win: &mut SlateWindow, ev: &KeyDownEvent, cx: &mut Context<SlateWi
         return false;
     };
     // `Shift+H` or `Ctrl+R` on a note: its history, as in the terminal.
-    if b.column == Column::Notes
-        && ((key == "h" && k.modifiers.shift && !k.modifiers.control)
-            || (key == "r" && k.modifiers.control))
-    {
+    if wants_history(k) {
         return open_selected_history(win, cx);
     }
     let host = &win.host;
@@ -236,6 +233,12 @@ pub fn on_key(win: &mut SlateWindow, ev: &KeyDownEvent, cx: &mut Context<SlateWi
     }
     cx.notify();
     true
+}
+
+/// `Shift+H` or `Ctrl+R`: the history of the highlighted note.
+fn wants_history(k: &gpui::Keystroke) -> bool {
+    let m = k.modifiers;
+    (k.key == "h" && m.shift && !m.control && !m.alt) || (k.key == "r" && m.control && !m.shift)
 }
 
 /// History of the highlighted note: it becomes the open note first, since
@@ -484,4 +487,23 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                 ),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_keys() {
+        for (spec, yes) in [
+            ("shift-h", true),
+            ("ctrl-r", true),
+            ("h", false),
+            ("shift-j", false),
+            ("ctrl-shift-r", false),
+        ] {
+            let k = gpui::Keystroke::parse(spec).unwrap();
+            assert_eq!(wants_history(&k), yes, "{spec}");
+        }
+    }
 }
