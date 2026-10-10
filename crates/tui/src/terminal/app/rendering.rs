@@ -1955,114 +1955,22 @@ impl TerminalApp {
                     .get(line_idx)
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
-                let mut cell_result_by_index: Vec<Option<&app_core::calc::TableCellEvaluation>> =
-                    Vec::new();
-                for entry in cell_results {
-                    if entry.cell_index >= cell_result_by_index.len() {
-                        cell_result_by_index.resize(entry.cell_index + 1, None);
-                    }
-                    cell_result_by_index[entry.cell_index] = Some(entry);
+                let prepared = note_session::display::formula::prepare_formula_row(
+                    &line_text,
+                    &formula_segments,
+                    cell_results,
+                    line_cursor_col,
+                );
+                source_map = prepared.map;
+                ghost_dim_ranges = prepared.dim_ranges;
+                resting_formula_markers = prepared.resting_marker_cells;
+                formula_segment_char_delta_prefix = prepared.delta_prefixes;
+                calc_ghost_override = Some(prepared.ghost_trailer);
+                line_cursor_col = prepared.mapped_cursor;
+                if let Some(cursor) = prepared.mapped_cursor {
+                    cursor_line_override = Some((prepared.text.clone(), cursor));
                 }
-                let value_for_cell = |cell_index: usize| {
-                    cell_result_by_index
-                        .get(cell_index)
-                        .and_then(|entry| *entry)
-                };
-
-                let mut replacements: Vec<(std::ops::Range<usize>, String)> = Vec::new();
-                let mut char_delta: isize = 0;
-                let mut trailer_parts: Vec<String> = Vec::new();
-                formula_segment_char_delta_prefix.clear();
-                formula_segment_char_delta_prefix.push(0);
-                // Char position of the cursor in the rendered line; we
-                // collect this only when the cursor sits inside a
-                // focused (un-masked) formula cell.
-                let mut focused_cursor_col: Option<usize> = None;
-
-                for (fi, seg) in formula_segments.iter().enumerate() {
-                    let marker = formula_marker_token(fi);
-                    let eval = value_for_cell(seg.cell_index);
-                    let value = note_session::display::formula::formula_cell_value(eval);
-                    let has_error = eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
-                    let source_text = line_text[seg.from_byte..seg.to_byte].trim().to_string();
-
-                    let is_focused = is_cursor_line
-                        && self.editor.cursor_col >= seg.cell_from_char
-                        && self.editor.cursor_col < seg.cell_to_char;
-
-                    // Ghost trailer: focused cell shows the value
-                    // (so the user can see the result while editing),
-                    // resting cells show the formula source.
-                    let trailer_text = if let Some(err) =
-                        note_session::display::formula::table_error_text(
-                            eval.and_then(|entry| entry.error_kind.as_ref()),
-                            eval.map(|entry| entry.value.as_str()).unwrap_or(""),
-                        ) {
-                        err
-                    } else if is_focused && !has_error {
-                        value.clone()
-                    } else {
-                        source_text
-                    };
-                    if !trailer_text.is_empty() {
-                        trailer_parts.push(format!("{marker} ➜ {trailer_text}"));
-                    }
-
-                    if is_focused {
-                        let mapped = (self.editor.cursor_col as isize + char_delta).max(0) as usize;
-                        focused_cursor_col = Some(mapped);
-                        formula_segment_char_delta_prefix.push(char_delta);
-                    } else {
-                        let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                        let replacement = note_session::display::formula::resting_formula_cell_text(
-                            eval, &marker,
-                        );
-                        let rendered_chars = replacement.chars().count();
-                        let value_chars = rendered_chars - marker.len();
-                        let marker_char =
-                            ((seg.from_char as isize) + char_delta) as usize + value_chars;
-                        ghost_dim_ranges.push((marker_char, marker_char + marker.len()));
-                        resting_formula_markers.push((seg.cell_index, value_chars, marker.len()));
-                        char_delta += rendered_chars as isize - old_chars as isize;
-                        formula_segment_char_delta_prefix.push(char_delta);
-                        replacements.push((seg.from_char..seg.to_char, replacement));
-                    }
-                }
-                let replacements: Vec<_> = replacements
-                    .iter()
-                    .map(
-                        |(source, text)| note_session::display::transform::Replacement {
-                            source: source.clone(),
-                            text,
-                        },
-                    )
-                    .collect();
-                let mapped =
-                    note_session::display::transform::substitute(&line_text, &replacements);
-                source_map = mapped.map;
-                rendered_line = Cow::Owned(mapped.text);
-
-                calc_ghost_override = Some(trailer_parts.join("  "));
-
-                if is_cursor_line {
-                    let mapped_col = focused_cursor_col.unwrap_or_else(|| {
-                        // Cursor is outside every formula cell. Walk
-                        // the segments that lie entirely before the
-                        // cursor and accumulate their rendered-vs-
-                        // source char delta.
-                        let seg_count = formula_segments
-                            .iter()
-                            .take_while(|seg| seg.cell_to_char <= self.editor.cursor_col)
-                            .count();
-                        let delta = formula_segment_char_delta_prefix
-                            .get(seg_count)
-                            .copied()
-                            .unwrap_or(0);
-                        ((self.editor.cursor_col as isize) + delta).max(0) as usize
-                    });
-                    line_cursor_col = Some(mapped_col);
-                    cursor_line_override = Some((rendered_line.as_ref().to_string(), mapped_col));
-                }
+                rendered_line = Cow::Owned(prepared.text);
             }
         }
 

@@ -1188,3 +1188,10 @@ evaluation provider panicked after mutation and before history. The new
 regression failed before the fix; missing IO now clears stale results, returns
 Idle work and finalizes the edit once. Undo remains coherent. Workspace checks
 pass without new warnings.
+
+Phase 8 final ownership audit: formula row masking, focused-cell results,
+error/pending trailers and source-cursor mappings now belong to the shared
+display model. A bounded 32-row cache keys source, segment coordinates,
+evaluation values/errors and cursor; oversized rows bypass it. Shared Unicode
+and error/pending regressions pass; fresh workspace and runtime qualification
+follow this extraction.
