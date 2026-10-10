@@ -1052,3 +1052,12 @@ to the session crate. CalcWorkers owns both receivers in the terminal;
 CalcRuntime remains host scheduling state. All workspace checks pass with
 no new warnings; read-only extraction review found no initialization or
 receiver-ownership change.
+
+Step 10a: metadata maintenance, structural result remapping, viewport result
+refresh and range evaluation now run in CalcState; clocks, scheduling and
+geometry remain terminal-owned. Cross-note scans retain take/restore ownership
+and generation reuse; extern variables are acquired only after evaluation
+guards. Two shared tests cover suffix remapping and absolute range slots.
+Workspace checks pass with no new warnings. Release large-note gates pass
+(13.23 s), with no 30k/100k investigation thresholds crossed. Full recompute
+and edit-upkeep coordination remain for Step 10b; Step 10 stays unchecked.

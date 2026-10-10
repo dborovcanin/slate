@@ -1,5 +1,3 @@
-pub use note_session::calc::ResultSplice;
-
 /// Whole-note calc preparation built off the input thread when a large
 /// viewport note opens.
 pub struct RangeContextBuild {

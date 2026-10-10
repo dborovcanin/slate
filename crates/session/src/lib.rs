@@ -15,3 +15,5 @@ mod undo;
 
 pub mod calc;
 pub mod variables;
+
+pub mod calc_eval;
