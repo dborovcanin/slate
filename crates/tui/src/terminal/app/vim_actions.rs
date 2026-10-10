@@ -1,6 +1,6 @@
 use super::{clipboard, ClipboardWriteBackend};
 use super::{
-    line_char_len, min, Db, Key, TerminalApp, TerminalVimAdapter, UiMode, VimMacroStep,
+    line_char_len, Db, Key, TerminalApp, TerminalVimAdapter, UiMode, VimMacroStep,
     VimPipelineResult, VimRegister, VimRegisterMode,
 };
 use crate::terminal::text_utils::join_lines;

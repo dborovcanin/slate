@@ -104,6 +104,20 @@ This document defines the canonical shared-core contract for editor semantics.
     table padding bounds. Out-of-range character columns keep their behavior.
   - The host preserves calc/history/reminder bookkeeping and continuation-row
     cleanup. No document copy or eager neighbor collection is added.
+- Vim buffer plans (`vim_actions::buffer`) own inclusive visual ranges,
+  register contents/modes, cursor placement and line-buffer replacement. Hosts
+  record returned reminder mappings before applying a plan to its unchanged
+  buffer. Viewport/fold visibility and clipboard I/O remain host concerns.
+- Post-edit calc plans (`calc_plan::plan_after_edit`) read cached signal flags,
+  line counts, stale/viewport state and host thresholds without scanning text.
+  Hosts execute skip, defer, viewport refresh, remap/recompute or idle work.
+  `plan_result_remap` checks unchanged metadata prefix/suffix and affected text;
+  it borrows metadata rather than copying hash arrays. Worker fencing and timing
+  remain host-owned.
+- Fold upkeep (`folding::upkeep::plan_fold_upkeep`) updates affected structure
+  and text-cache entries and returns view effects, mapped ranges or a rescan
+  decision. It defers expensive analysis when no collapsed ranges are visible;
+  the host applies the decision and owns viewport maps and the idle tick.
 - Command contract:
   - input: `CommandMode`, `raw_input`
   - output: canonical command definition (or none), suggestions, normalized input

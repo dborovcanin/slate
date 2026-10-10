@@ -394,12 +394,7 @@ impl TerminalApp {
     }
 
     pub(super) fn line_has_fold_structure(text: &str) -> bool {
-        let trimmed = text.trim_start();
-        trimmed.starts_with('#')
-            || trimmed.starts_with("```")
-            || trimmed.starts_with("~~~")
-            || (trimmed.starts_with('|') && trimmed.ends_with('|'))
-            || crate::editor_core::markdown_tokens::list_marker_end(text).is_some()
+        crate::editor_core::folding::upkeep::line_has_fold_structure(text)
     }
 
     pub(super) fn note_math_module_enabled(&self) -> bool {
@@ -452,24 +447,20 @@ impl TerminalApp {
         self.note_math_module_enabled() && self.note_cross_note_module_enabled()
     }
 
+    fn calc_signal_flags(&self) -> crate::editor_core::calc_plan::CalcSignalFlags {
+        crate::editor_core::calc_plan::CalcSignalFlags {
+            has_builtin_formula: self.calc.cached_has_builtin_formula,
+            has_variable_assignment: self.active_has_variable_assignments(),
+            has_expression: self.calc.cached_has_expression,
+        }
+    }
     pub(super) fn should_defer_calc_recompute(&self) -> bool {
-        self.editor.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
-            && !self.calc.cached_has_builtin_formula
-            && !self.active_has_variable_assignments()
+        crate::editor_core::calc_plan::should_defer_after_edit(
+            self.editor.lines.len(),
+            self.calc_signal_flags(),
+            LARGE_DOC_CALC_DEFER_LINES,
+        )
     }
-
-    pub(super) fn can_skip_calc_recompute(&self) -> bool {
-        // If no line holds a formula, an assignment, or anything that looks
-        // like a calculation, `compute_calc_data` would produce all-None
-        // results — matching the current state. Safe to skip regardless of
-        // doc size, which is the biggest input-latency win for notes that
-        // don't use calc at all.
-        !self.calc.cached_has_builtin_formula
-            && !self.active_has_variable_assignments()
-            && !self.calc.cached_has_expression
-            && !self.calc.stale
-    }
-
     fn calc_recompute_debounce_duration(&self) -> Duration {
         Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS)
     }
@@ -477,16 +468,7 @@ impl TerminalApp {
     /// Whether any of `lines` takes part in calc: tables, assignments,
     /// builtin formulas or calc expressions.
     fn lines_affect_calc(&self, lines: &[String]) -> bool {
-        let mask = self.calc_feature_mask();
-        (mask.table_enabled && lines.iter().any(|line| is_markdown_table_line(line)))
-            || crate::editor_core::calc_plan::contains_variable_assignment_with_mask(lines, mask)
-            || crate::editor_core::calc_plan::contains_builtin_formula_with_mask(lines, mask)
-            || lines.iter().any(|line| {
-                let eval_target =
-                    crate::editor_core::calc_plan::line_for_calc_evaluation_with_mask(line, mask);
-                let trimmed = eval_target.trim();
-                !trimmed.is_empty() && crate::editor_core::calc_plan::has_calc_signal(trimmed)
-            })
+        crate::editor_core::calc_plan::lines_affect_calc(lines, self.calc_feature_mask())
     }
 
     /// Viewport-only notes after an edit that may insert, delete or replace
@@ -586,33 +568,6 @@ impl TerminalApp {
         self.calc_runtime.recompute_due_at = None;
     }
 
-    fn shared_prefix_len_hashes(prev_hashes: &[u64], next_hashes: &[u64]) -> usize {
-        let max = prev_hashes.len().min(next_hashes.len());
-        let mut idx = 0usize;
-        while idx < max && prev_hashes[idx] == next_hashes[idx] {
-            idx += 1;
-        }
-        idx
-    }
-
-    fn shared_suffix_len_hashes(
-        prev_hashes: &[u64],
-        next_hashes: &[u64],
-        prefix_len: usize,
-    ) -> usize {
-        let max = prev_hashes
-            .len()
-            .min(next_hashes.len())
-            .saturating_sub(prefix_len);
-        let mut idx = 0usize;
-        while idx < max
-            && prev_hashes[prev_hashes.len() - 1 - idx] == next_hashes[next_hashes.len() - 1 - idx]
-        {
-            idx += 1;
-        }
-        idx
-    }
-
     fn try_remap_calc_results_after_structural_edit(&mut self) -> bool {
         if !self.note_math_module_enabled() || self.calc.stale {
             return false;
@@ -629,49 +584,16 @@ impl TerminalApp {
             return false;
         }
 
-        let prev_hashes = self
-            .calc
-            .prev_line_metadata
-            .iter()
-            .map(|entry| entry.hash)
-            .collect::<Vec<_>>();
-        let next_hashes = self
-            .calc
-            .line_metadata
-            .iter()
-            .map(|entry| entry.hash)
-            .collect::<Vec<_>>();
-        let prefix = Self::shared_prefix_len_hashes(&prev_hashes, &next_hashes);
-        let suffix = Self::shared_suffix_len_hashes(&prev_hashes, &next_hashes, prefix);
-        let changed_from = prefix.min(next_len);
-        let changed_to_next = next_len.saturating_sub(suffix).max(changed_from);
-        let prev_changed_from = prefix.min(prev_len);
-        let prev_changed_to = prev_len.saturating_sub(suffix).max(prev_changed_from);
-        let prev_changed_slice = self
-            .calc
-            .prev_line_metadata
-            .get(prev_changed_from..prev_changed_to)
-            .unwrap_or(&[]);
-
-        let prev_changed_had_assignment =
-            prev_changed_slice.iter().any(|entry| entry.has_assignment);
-        let prev_changed_had_builtin_formula = prev_changed_slice
-            .iter()
-            .any(|entry| entry.has_builtin_formula);
-        let changed_lines = self
-            .editor
-            .lines
-            .get(changed_from..changed_to_next)
-            .unwrap_or(&[]);
-
-        // Safe remap-only path: only line index shifting happened, and changed
-        // lines don't participate in calc semantics.
-        if prev_changed_had_assignment
-            || prev_changed_had_builtin_formula
-            || self.lines_affect_calc(changed_lines)
-        {
+        let Some(plan) = crate::editor_core::calc_plan::plan_result_remap(
+            &self.calc.prev_line_metadata,
+            &self.calc.line_metadata,
+            &self.editor.lines,
+            self.calc_feature_mask(),
+        ) else {
             return false;
-        }
+        };
+        let prefix = plan.prefix;
+        let suffix = plan.suffix;
 
         let mut remapped_results = vec![None; next_len];
         let mut remapped_cell_results = vec![Vec::new(); next_len];
@@ -763,237 +685,69 @@ impl TerminalApp {
     }
 
     pub(super) fn recompute_folding_if_needed(&mut self) {
-        if self.large_note_reduced_features() {
-            if !self.folds.ranges.is_empty() {
-                self.folds.ranges.clear();
+        use crate::editor_core::folding::upkeep::{FoldUpkeep, FoldUpkeepFlags};
+        let flags = FoldUpkeepFlags {
+            reduced_features: self.large_note_reduced_features(),
+            rescan_pending: self.folds.rescan_pending,
+            has_collapsed: !self.folds.collapsed_starts.is_empty(),
+            view_line_count: self.folds.real_to_visible.len(),
+        };
+        let plan = crate::editor_core::folding::upkeep::plan_fold_upkeep(
+            &self.editor.lines,
+            self.editor.cursor_line,
+            &mut self.folds.line_has_structure,
+            &mut self.folds.line_text_snapshot,
+            &self.folds.ranges,
+            flags,
+        );
+        match plan {
+            FoldUpkeep::Disabled => {
+                if !self.folds.ranges.is_empty() {
+                    self.folds.ranges.clear();
+                }
+                if self.folds.range_by_start.len() != self.editor.lines.len() {
+                    self.folds.range_by_start = vec![None; self.editor.lines.len()];
+                }
+                if !self.folds.collapsed_starts.is_empty() {
+                    self.folds.collapsed_starts.clear();
+                }
+                if self.folds.visible_to_real.len() != self.editor.lines.len()
+                    || self.folds.real_to_visible.len() != self.editor.lines.len()
+                    || self.folds.hidden_owner.len() != self.editor.lines.len()
+                    || self.folds.placeholder_hidden_lines.len() != self.editor.lines.len()
+                {
+                    self.rebuild_fold_view_map();
+                }
+                if self.folds.line_has_structure.len() != self.editor.lines.len() {
+                    self.folds.line_has_structure = vec![false; self.editor.lines.len()];
+                }
+                self.folds.line_text_snapshot.clear();
+                self.folds.rescan_pending = false;
+                self.folds.analysis_ready = false;
             }
-            if self.folds.range_by_start.len() != self.editor.lines.len() {
-                self.folds.range_by_start = vec![None; self.editor.lines.len()];
-            }
-            if !self.folds.collapsed_starts.is_empty() {
-                self.folds.collapsed_starts.clear();
-            }
-            if self.folds.visible_to_real.len() != self.editor.lines.len()
-                || self.folds.real_to_visible.len() != self.editor.lines.len()
-                || self.folds.hidden_owner.len() != self.editor.lines.len()
-                || self.folds.placeholder_hidden_lines.len() != self.editor.lines.len()
-            {
-                self.rebuild_fold_view_map();
-            }
-            if self.folds.line_has_structure.len() != self.editor.lines.len() {
-                self.folds.line_has_structure = vec![false; self.editor.lines.len()];
-            }
-            self.folds.line_text_snapshot.clear();
-            self.folds.rescan_pending = false;
-            self.folds.analysis_ready = false;
-            return;
-        }
-        // Process any pending deferred recompute first.
-        if self.folds.rescan_pending {
-            if self.folds.collapsed_starts.is_empty() {
-                // Nothing is hidden, so stale ranges do not change what is
-                // shown: keep the view map sized to the note and leave the
-                // O(N) rescan to the idle tick (fold commands force it).
-                if self.folds.real_to_visible.len() != self.editor.lines.len() {
+            FoldUpkeep::PendingVisible { reset_map } | FoldUpkeep::Defer { reset_map } => {
+                if reset_map {
                     self.folds.ranges.clear();
                     self.folds.range_by_start = vec![None; self.editor.lines.len()];
                     self.rebuild_fold_view_map();
                 }
-                self.folds.analysis_ready = false;
-                return;
-            }
-            self.folds.rescan_pending = false;
-            self.recompute_folding();
-            return;
-        }
-
-        if self.editor.lines.is_empty() {
-            self.folds.line_has_structure.clear();
-            self.folds.line_text_snapshot.clear();
-            self.apply_fold_ranges(Vec::new());
-            self.folds.analysis_ready = true;
-            return;
-        }
-
-        let cl = self
-            .editor
-            .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
-        let line_count_changed = self.editor.lines.len() != self.folds.line_has_structure.len();
-
-        if line_count_changed {
-            let next_len = self.editor.lines.len();
-            let prev_len = self.folds.line_has_structure.len();
-            // Safety guard: incremental insert/remove remap assumes snapshot and
-            // structure vectors are aligned. If a prior mode change/reset left
-            // them out of sync, use full recompute instead of risking panic on
-            // Vec::insert/remove indexes during Enter/Delete edits.
-            if self.folds.line_text_snapshot.len() != prev_len {
-                self.recompute_folding();
-                return;
-            }
-            let mut remap_edits: Vec<crate::editor_core::folding::FoldLineEdit> = Vec::new();
-            if next_len == prev_len + 1 {
-                // One line inserted near cursor.
-                let insert_at = cl.min(prev_len);
-                let old_line_text = self
-                    .folds
-                    .line_text_snapshot
-                    .get(insert_at)
-                    .cloned()
-                    .unwrap_or_default();
-                let new_line_text = self
-                    .editor
-                    .lines
-                    .get(insert_at)
-                    .cloned()
-                    .unwrap_or_default();
-                remap_edits.push(crate::editor_core::folding::FoldLineEdit {
-                    old_start_line: insert_at,
-                    old_line_span: 1,
-                    new_line_span: 2,
-                    old_line_text,
-                    new_line_text: new_line_text.clone(),
-                });
-
-                if cl > 0 {
-                    if let Some(flag) = self.folds.line_has_structure.get_mut(cl - 1) {
-                        *flag = self
-                            .editor
-                            .lines
-                            .get(cl - 1)
-                            .map(|l| Self::line_has_fold_structure(l))
-                            .unwrap_or(false);
-                    }
-                    if let Some(text) = self.folds.line_text_snapshot.get_mut(cl - 1) {
-                        *text = self.editor.lines.get(cl - 1).cloned().unwrap_or_default();
-                    }
-                }
-                let new_flag = self
-                    .editor
-                    .lines
-                    .get(insert_at)
-                    .map(|l| Self::line_has_fold_structure(l))
-                    .unwrap_or(false);
-                self.folds.line_has_structure.insert(insert_at, new_flag);
-                self.folds
-                    .line_text_snapshot
-                    .insert(insert_at, new_line_text);
-            } else if next_len + 1 == prev_len {
-                // One line deleted near cursor.
-                let remove_at = cl.min(prev_len.saturating_sub(1));
-                let old_start_line = remove_at.min(prev_len.saturating_sub(2));
-                let old_line_text = self
-                    .folds
-                    .line_text_snapshot
-                    .get(old_start_line)
-                    .cloned()
-                    .unwrap_or_default();
-                let new_line_text = self
-                    .editor
-                    .lines
-                    .get(old_start_line)
-                    .cloned()
-                    .unwrap_or_default();
-                remap_edits.push(crate::editor_core::folding::FoldLineEdit {
-                    old_start_line,
-                    old_line_span: 2,
-                    new_line_span: 1,
-                    old_line_text,
-                    new_line_text: new_line_text.clone(),
-                });
-
-                if remove_at < prev_len {
-                    self.folds.line_has_structure.remove(remove_at);
-                }
-                if remove_at < self.folds.line_text_snapshot.len() {
-                    self.folds.line_text_snapshot.remove(remove_at);
-                }
-                let update_at = remove_at.min(next_len.saturating_sub(1));
-                if let Some(flag) = self.folds.line_has_structure.get_mut(update_at) {
-                    *flag = self
-                        .editor
-                        .lines
-                        .get(update_at)
-                        .map(|l| Self::line_has_fold_structure(l))
-                        .unwrap_or(false);
-                }
-                if let Some(text) = self.folds.line_text_snapshot.get_mut(update_at) {
-                    *text = self
-                        .editor
-                        .lines
-                        .get(update_at)
-                        .cloned()
-                        .unwrap_or_default();
-                }
-            } else {
-                // Bulk change (paste, format, etc.): rebuild entirely.
-                self.recompute_folding();
-                return;
-            }
-
-            if self.try_incremental_fold_remap(&remap_edits) {
-                return;
-            }
-
-            if self.folds.collapsed_starts.is_empty() {
-                self.folds.ranges.clear();
-                self.folds.range_by_start = vec![None; self.editor.lines.len()];
-                self.rebuild_fold_view_map();
                 self.folds.rescan_pending = true;
                 self.folds.analysis_ready = false;
-            } else {
+            }
+            FoldUpkeep::Recompute => {
+                self.folds.rescan_pending = false;
                 self.recompute_folding();
             }
-            return;
-        }
-
-        // Same-line edit: check whether the current line touches fold structure.
-        let old_text = self
-            .folds
-            .line_text_snapshot
-            .get(cl)
-            .cloned()
-            .unwrap_or_default();
-        let current_text = self.editor.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
-        let new_text = current_text.to_string();
-        let next_flag = Self::line_has_fold_structure(current_text);
-        let prev_flag = self
-            .folds
-            .line_has_structure
-            .get(cl)
-            .copied()
-            .unwrap_or(false);
-
-        if next_flag != prev_flag {
-            if let Some(flag) = self.folds.line_has_structure.get_mut(cl) {
-                *flag = next_flag;
+            FoldUpkeep::Empty => {
+                self.apply_fold_ranges(Vec::new());
+                self.folds.analysis_ready = true;
             }
-        }
-        if let Some(text) = self.folds.line_text_snapshot.get_mut(cl) {
-            *text = new_text.clone();
-        }
-
-        let remap_edits = [crate::editor_core::folding::FoldLineEdit {
-            old_start_line: cl,
-            old_line_span: 1,
-            new_line_span: 1,
-            old_line_text: old_text,
-            new_line_text: new_text,
-        }];
-        if self.try_incremental_fold_remap(&remap_edits) {
-            return;
-        }
-
-        if next_flag || prev_flag {
-            if self.folds.collapsed_starts.is_empty() {
-                // Defer: fold analysis is O(N) and doesn't need to block typing.
-                // The idle tick (100 ms with no keypress) will run recompute_folding.
-                self.folds.rescan_pending = true;
-                self.folds.analysis_ready = false;
-            } else {
-                self.recompute_folding();
+            FoldUpkeep::Mapped(ranges) => {
+                self.folds.rescan_pending = false;
+                self.apply_fold_ranges(ranges);
+                self.folds.analysis_ready = true;
             }
+            FoldUpkeep::Unchanged => {}
         }
     }
 
@@ -1013,27 +767,6 @@ impl TerminalApp {
         let ranges = folding::build_fold_ranges(&self.editor.lines);
         self.apply_fold_ranges(ranges);
         self.folds.analysis_ready = true;
-    }
-
-    fn try_incremental_fold_remap(
-        &mut self,
-        edits: &[crate::editor_core::folding::FoldLineEdit],
-    ) -> bool {
-        if edits.is_empty() {
-            return false;
-        }
-        if crate::editor_core::folding::edits_require_rebuild(edits) {
-            return false;
-        }
-        let mapped = crate::editor_core::folding::map_ranges_through_line_edits(
-            &self.folds.ranges,
-            edits,
-            self.editor.lines.len().max(1),
-        );
-        self.folds.rescan_pending = false;
-        self.apply_fold_ranges(mapped);
-        self.folds.analysis_ready = true;
-        true
     }
 
     fn apply_fold_ranges(&mut self, ranges: Vec<crate::editor_core::folding::FoldRange>) {
@@ -1332,8 +1065,6 @@ impl TerminalApp {
             session: self.undo_session(),
             elapsed: self.last_edit.elapsed(),
         };
-        let line_count_changed = self.editor.lines.len() != self.calc.results.len();
-        let viewport_structural = line_count_changed && self.calc_runtime.viewport_only;
         self.invalidate_joined_text_cache();
         self.render_caches.table_formula_segment_cache.clear();
         self.dirty = true;
@@ -1348,66 +1079,61 @@ impl TerminalApp {
         self.invalidate_fence_checkpoints_from_line(clamped_changed_line);
         self.update_calc_flags_incremental();
         self.recompute_folding_if_needed();
-        if self.can_skip_calc_recompute() {
-            // No calc syntax anywhere in the doc and this edit didn't add any —
-            // calc_results are already correct (all None). Skip the scan.
-            // prev_line_metadata may drift from `lines` until the next real
-            // recompute, but the planner falls back to full eval safely when
-            // the diff looks large, so correctness holds.
-            self.calc_runtime.recompute_pending = false;
-            self.calc_runtime.recompute_due_at = None;
-            self.calc_runtime.pending_viewport_pass = false;
-            self.calc_runtime.pending_full_pass = false;
-        } else if self.should_defer_calc_recompute() {
-            self.defer_calc_state_after_edit();
-            self.calc_runtime.recompute_pending = false;
-            self.calc_runtime.recompute_due_at = None;
-            self.calc_runtime.pending_viewport_pass = false;
-            self.calc_runtime.pending_full_pass = false;
-        } else {
-            if self.editor.lines.len() >= CALC_ASYNC_MIN_LINES {
-                if viewport_structural {
-                    self.refresh_viewport_calc_after_edit();
-                } else if line_count_changed {
-                    // Structural edits (Enter/join/delete-at-boundary): try a
-                    // cheap remap-only path first, and recompute only when
-                    // changed lines may affect calc semantics.
-                    if !self.try_remap_calc_results_after_structural_edit() {
-                        self.recompute_calc_after_edit(history_span);
-                    }
-                } else {
-                    // Keep large-note typing non-blocking: schedule calc for
-                    // the next idle tick and clear only the edited line's
-                    // cached result so we don't show stale ghosts while
-                    // pending.
-                    if let Some(slot) = self.calc.results.get_mut(self.editor.cursor_line) {
-                        *slot = None;
-                    }
-                    if let Some(slot) = self.calc.cell_results.get_mut(self.editor.cursor_line) {
-                        slot.clear();
-                    }
-                    // Keep the edited lines' metadata current so a later
-                    // structural edit diffs against what is actually there.
-                    let (start, span) = match history_span {
-                        Some((start, old_span, new_span)) if old_span == new_span => {
-                            (start, new_span)
-                        }
-                        _ => (self.editor.cursor_line, 1),
-                    };
-                    // Without metadata yet (viewport notes build it at idle),
-                    // there is nothing to keep current.
-                    if !self.calc.line_metadata.is_empty() {
-                        for line_idx in start..start + span {
-                            self.refresh_calc_line_metadata_at(line_idx);
-                        }
-                        if !(start..start + span).contains(&self.editor.cursor_line) {
-                            self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                        }
-                    }
-                    self.schedule_calc_recompute(true, true);
+        use crate::editor_core::calc_plan::{AfterEditFlags, CalcAfterEdit};
+        let plan = crate::editor_core::calc_plan::plan_after_edit(AfterEditFlags {
+            line_count: self.editor.lines.len(),
+            previous_line_count: self.calc.results.len(),
+            signals: self.calc_signal_flags(),
+            stale: self.calc.stale,
+            viewport_only: self.calc_runtime.viewport_only,
+            async_min_lines: CALC_ASYNC_MIN_LINES,
+            defer_min_lines: LARGE_DOC_CALC_DEFER_LINES,
+        });
+        match plan {
+            CalcAfterEdit::Skip | CalcAfterEdit::Defer => {
+                if plan == CalcAfterEdit::Defer {
+                    self.defer_calc_state_after_edit();
                 }
-            } else {
-                self.recompute_calc_after_edit(history_span);
+                self.calc_runtime.recompute_pending = false;
+                self.calc_runtime.recompute_due_at = None;
+                self.calc_runtime.pending_viewport_pass = false;
+                self.calc_runtime.pending_full_pass = false;
+            }
+            CalcAfterEdit::ViewportRefresh => self.refresh_viewport_calc_after_edit(),
+            CalcAfterEdit::RemapOrRecompute => {
+                if !self.try_remap_calc_results_after_structural_edit() {
+                    self.recompute_calc_after_edit(history_span);
+                }
+            }
+            CalcAfterEdit::RecomputeRange => self.recompute_calc_after_edit(history_span),
+            CalcAfterEdit::ScheduleIdle => {
+                // Keep large-note typing non-blocking: schedule calc for
+                // the next idle tick and clear only the edited line's
+                // cached result so we don't show stale ghosts while
+                // pending.
+                if let Some(slot) = self.calc.results.get_mut(self.editor.cursor_line) {
+                    *slot = None;
+                }
+                if let Some(slot) = self.calc.cell_results.get_mut(self.editor.cursor_line) {
+                    slot.clear();
+                }
+                // Keep the edited lines' metadata current so a later
+                // structural edit diffs against what is actually there.
+                let (start, span) = match history_span {
+                    Some((start, old_span, new_span)) if old_span == new_span => (start, new_span),
+                    _ => (self.editor.cursor_line, 1),
+                };
+                // Without metadata yet (viewport notes build it at idle),
+                // there is nothing to keep current.
+                if !self.calc.line_metadata.is_empty() {
+                    for line_idx in start..start + span {
+                        self.refresh_calc_line_metadata_at(line_idx);
+                    }
+                    if !(start..start + span).contains(&self.editor.cursor_line) {
+                        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
+                    }
+                }
+                self.schedule_calc_recompute(true, true);
             }
         }
         // Splices are only meaningful for the edit that recorded them.

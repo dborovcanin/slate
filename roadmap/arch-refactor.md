@@ -208,7 +208,7 @@ and status are host effects. The existing operator/text-object plans stay scoped
 Unicode visual deletion, reverse multiline selection and counted EOF paste
 fixtures were added and passed before the move.
 
-### Phase 5: post-edit planning
+### Phase 5: post-edit planning (complete)
 
 1. Add `editor_core::calc_plan::plan_after_edit(delta, flags) -> CalcAfterEdit`
    covering skip, defer, remap-only, recompute-range, schedule-idle and
@@ -219,6 +219,11 @@ fixtures were added and passed before the move.
 Done when `mark_edited_from_line_with_span` and the fold upkeep only carry out
 core decisions, and the PR records `perf-check` large-note p50/p95 before and
 after.
+
+Phase 5's calc dispatch uses cached flags and line counts; structural remap
+eligibility reads borrowed metadata and affected lines. Fold upkeep moved with
+its existing incremental cache updates and deferred-rescan rules. Scheduling,
+worker results, persistence and viewport application stay in the terminal.
 
 ### Phase 6: completion and search
 
@@ -294,3 +299,19 @@ end.
 | Script and currency cancellation | `scripts.rs`, `currency.rs` | process-group termination lives in `app_core::scripts` |
 | Clock for undo coalescing | `mark_edited_from_line_with_span` | elapsed time supplied to core; grouping decisions are core-owned |
 | Calc scheduling (debounce, idle ticks, `key_depth`) | `editing.rs` | timing only; decisions move in phase 5 |
+
+## Phase 5 performance comparison (2026-10-10)
+
+Release `large_note_perf`, same machine and unchanged latency limits; values are
+p50/p95 milliseconds for key handling plus repaint. Both runs passed every gate.
+400k lines remain report-only. These samples show preservation, not a guaranteed
+speedup across machines or runs.
+
+| Action | Lines | Before | After |
+|---|---:|---:|---:|
+| Enter | 30k | 0.80 / 1.86 | 0.68 / 1.69 |
+| Open line | 30k | 0.89 / 0.92 | 0.81 / 0.83 |
+| Paste | 30k | 6.01 / 6.37 | 5.09 / 5.41 |
+| Enter | 100k | 3.27 / 6.99 | 2.85 / 6.98 |
+| Open line | 100k | 3.83 / 4.06 | 3.40 / 3.91 |
+| Paste | 100k | 10.25 / 10.40 | 9.84 / 10.10 |
