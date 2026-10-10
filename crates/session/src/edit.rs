@@ -96,6 +96,14 @@ impl NoteSession {
         inputs: Option<crate::calc_upkeep::CalcEditInputs>,
         provider: Option<&dyn crate::calc_upkeep::CalcProvider>,
     ) -> Option<EditOutcome> {
+        if !self.editable()
+            && !matches!(
+                edit,
+                SessionEdit::EnsureBuffer | SessionEdit::Visual { delete: false, .. }
+            )
+        {
+            return None;
+        }
         let finalize_empty_delete = matches!(edit, SessionEdit::Visual { delete: true, .. });
         let cursor_before = doc.cursor();
         let isolated_script = matches!(edit, SessionEdit::ScriptReplace { .. });
@@ -713,5 +721,38 @@ mod tests {
         assert!(session.reminder_ghosts.contains_key(&2));
         session.redo(&mut doc).unwrap();
         assert!(session.reminder_ghosts.is_empty());
+    }
+    #[test]
+    fn locked_session_rejects_mutations_before_any_bookkeeping() {
+        let (mut doc, mut session, ctx) = setup();
+        session.access_mode = app_core::storage::NoteAccessMode::Encrypted;
+        session.is_unlocked = false;
+        doc.joined_text_cache = Some("éx\nsecond".into());
+        let before = doc.lines.clone();
+        assert!(session
+            .apply(
+                &mut doc,
+                SessionEdit::Primitive(PrimitiveEdit::InsertChar('z')),
+                ctx
+            )
+            .is_none());
+        assert_eq!(doc.lines, before);
+        assert_eq!(doc.text_generation, 0);
+        assert_eq!(session.edit_seq, 0);
+        assert_eq!(session.history.undo_depth(), 0);
+        assert!(session.pending_line_edits.is_empty());
+        assert!(!session.dirty);
+        assert!(doc.joined_text_cache.is_some());
+        assert!(session
+            .apply(
+                &mut doc,
+                SessionEdit::Visual {
+                    linewise: true,
+                    delete: false
+                },
+                ctx
+            )
+            .is_some());
+        assert_eq!(doc.lines, before);
     }
 }

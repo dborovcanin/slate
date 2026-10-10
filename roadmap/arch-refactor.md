@@ -1150,3 +1150,8 @@ ordering and locked-note protection. Shared dispatch now owns text/reminder
 actions, derived-state upkeep and Normal/table source-cursor checkpoints;
 hosts consume effects without acknowledging history again. Four shared
 regressions and workspace checks pass, with no new warnings.
+
+Final bug round, access: a locked-session edit failed its new regression before
+the fix. Shared mutation entry now rejects before touching text/history/identity;
+nonmutating visual yank and canonical buffer initialization remain available.
+Four focused access tests pass.
