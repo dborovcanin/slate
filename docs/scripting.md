@@ -132,15 +132,14 @@ optional and shown in the status message. Unknown fields are rejected.
 
 At startup Slate loads the last rates from `exchange_rates.json` in the data
 directory, so conversions work offline and from the first frame. It then
-attempts one asynchronous fetch; when it finishes, visible results update.
-There are no periodic refreshes. Use `:currency refresh` to fetch again
-(`:currentcy refresh` is also accepted). Only one fetch runs at a time.
-A failed refresh keeps the cached rates and reports the error in the status
-line. With `[startup] background_tasks_enabled = false`, startup uses only
-cached rates; the explicit command still works. Conversions involving a
+attempts one asynchronous fetch; when the rates differ, visible results
+update, and identical rates leave results untouched. There are no periodic
+refreshes. Use `:currency refresh` to fetch again; only one fetch runs at a
+time. A failed refresh keeps the cached rates and reports the error in the
+status line. With `[startup] background_tasks_enabled = false`, startup uses
+only cached rates; the explicit command still works. Conversions involving a
 currency without a rate show no result. The command reads the current
-`[currency]` configuration. The old `refresh_hours` setting is accepted for
-compatibility but no longer controls fetching.
+`[currency]` configuration.
 
 This script is not a registered script: `:run` cannot invoke it.
 

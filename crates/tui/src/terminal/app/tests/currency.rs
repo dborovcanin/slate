@@ -42,10 +42,30 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
     app.poll_currency_refresh();
     assert_eq!(app.calc.results[0].as_deref(), Some("80"));
 
-    // Host dispatch refuses a second worker while one is pending.
-    app.currency = CurrencyState::with_result(Err("offline".into()));
+    // Identical rates keep the results and do not invalidate dependencies.
+    let epoch = app.cross_note_var_index.lock().unwrap().epoch();
+    app.currency = CurrencyState::with_result(Ok(Fetched {
+        rates: ExchangeRates {
+            base: "EUR".into(),
+            rates: [("USD".to_string(), 2.0)].into_iter().collect(),
+            as_of: Some("2026-10-10".into()),
+            fetched_at: 1,
+        },
+        save_error: None,
+    }));
+    app.poll_currency_refresh();
+    assert_eq!(app.status, "exchange rates unchanged (2026-10-10)");
+    assert_eq!(app.calc.results[0].as_deref(), Some("80"));
+    assert_eq!(app.cross_note_var_index.lock().unwrap().epoch(), epoch);
+
+    // Host dispatch refuses a second worker while one is running...
+    app.currency = CurrencyState::pending();
     app.execute_terminal_command(&db, "currency refresh");
     assert_eq!(app.status, "exchange rates refresh already running");
+    // ...but applies a finished one that waited for the command bar to close.
+    app.currency = CurrencyState::with_result(Err("offline".into()));
+    app.execute_terminal_command(&db, "currency refresh");
+    assert_eq!(app.status, "exchange rates: offline");
     #[cfg(unix)]
     {
         let dir =
@@ -68,7 +88,6 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
                 "-c".into(),
                 r#"printf '{"base":"EUR","rates":{"USD":4}}'"#.into(),
             ],
-            refresh_hours: 12,
             timeout_seconds: 5,
         };
         // Disabling startup work loads the cache without running the script.
@@ -91,8 +110,6 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
         let (state, problem) = CurrencyState::start_with_config(config, cache.clone(), true);
         assert!(problem.is_none());
         app.currency = state;
-        app.execute_terminal_command(&db, ":currentcy refresh");
-        assert_eq!(app.status, "exchange rates refresh already running");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !app.status.starts_with("exchange rates updated") {
             assert!(std::time::Instant::now() < deadline, "{}", app.status);

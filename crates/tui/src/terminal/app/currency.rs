@@ -53,7 +53,9 @@ impl CurrencyState {
         // A broken cache is refetched, not fatal.
         let mut problem = None;
         match currency::load_cache(&path) {
-            Ok(Some(rates)) => currency::install(rates),
+            Ok(Some(rates)) => {
+                currency::install(rates);
+            }
             Ok(None) => {}
             Err(error) => problem = Some(format!("currency: {error}")),
         }
@@ -82,6 +84,17 @@ impl CurrencyState {
         });
     }
 
+    /// The finished refresh's result, if one is waiting to be applied.
+    fn take_result(&mut self) -> Option<Result<Fetched, String>> {
+        let result = match self.refresh.as_ref()?.rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => Err("rates worker disconnected".into()),
+        };
+        self.refresh = None;
+        Some(result)
+    }
+
     fn request_refresh(&mut self) -> Result<(), String> {
         if self.refresh.is_some() {
             return Err("exchange rates refresh already running".into());
@@ -90,6 +103,20 @@ impl CurrencyState {
             .ok_or("currency: configure [currency] argv first")?;
         self.fetch(config, currency::cache_path()?);
         Ok(())
+    }
+
+    /// A refresh that never finishes.
+    #[cfg(test)]
+    pub(super) fn pending() -> Self {
+        let (tx, rx) = mpsc::channel();
+        std::mem::forget(tx);
+        Self {
+            refresh: Some(Refresh {
+                cancel: Arc::new(AtomicBool::new(false)),
+                rx,
+                worker: None,
+            }),
+        }
     }
 
     #[cfg(test)]
@@ -108,6 +135,12 @@ impl CurrencyState {
 
 impl TerminalApp {
     pub(super) fn refresh_currency(&mut self) {
+        // A refresh that finished while the command bar was open is applied
+        // now rather than reported as still running.
+        if let Some(result) = self.currency.take_result() {
+            self.apply_currency_result(result);
+            return;
+        }
         self.status = match self.currency.request_refresh() {
             Ok(()) => "refreshing exchange rates".into(),
             Err(error) => error,
@@ -119,38 +152,41 @@ impl TerminalApp {
         if super::scripts::mode_name(self.mode).is_none() {
             return;
         }
-        let Some(refresh) = &self.currency.refresh else {
-            return;
-        };
-        let result = match refresh.rx.try_recv() {
-            Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Err("rates worker disconnected".into()),
-        };
-        self.currency.refresh = None;
-        self.render_state.dirty = true;
-        match result {
-            Ok(Fetched { rates, save_error }) => {
-                let as_of = rates.as_of.clone();
-                currency::install(rates);
-                if let Ok(mut index) = self.cross_note_var_index.lock() {
-                    index.invalidate_calculations();
-                }
-                // Discard preparation made with the previous rates/exports.
-                self.calc.range_context_build = None;
-                if !self.start_viewport_calc_preparation() {
-                    self.recompute_calc_whole_note();
-                } else {
-                    self.clear_calc_cache();
-                }
-                self.status = match (save_error, as_of) {
-                    (Some(error), _) => format!("exchange rates updated; not cached: {error}"),
-                    (None, Some(as_of)) => format!("exchange rates updated ({as_of})"),
-                    (None, None) => "exchange rates updated".into(),
-                };
-            }
-            Err(error) => self.status = format!("exchange rates: {error}"),
+        if let Some(result) = self.currency.take_result() {
+            self.apply_currency_result(result);
         }
+    }
+
+    fn apply_currency_result(&mut self, result: Result<Fetched, String>) {
+        self.render_state.dirty = true;
+        let Fetched { rates, save_error } = match result {
+            Ok(fetched) => fetched,
+            Err(error) => {
+                self.status = format!("exchange rates: {error}");
+                return;
+            }
+        };
+        let as_of = rates.as_of.clone();
+        // Unchanged rates leave every calc result valid; skip re-evaluating.
+        let changed = currency::install(rates);
+        if changed {
+            if let Ok(mut index) = self.cross_note_var_index.lock() {
+                index.invalidate_calculations();
+            }
+            // Discard preparation made with the previous rates/exports.
+            self.calc.range_context_build = None;
+            if !self.start_viewport_calc_preparation() {
+                self.recompute_calc_whole_note();
+            } else {
+                self.clear_calc_cache();
+            }
+        }
+        let outcome = if changed { "updated" } else { "unchanged" };
+        self.status = match (save_error, as_of) {
+            (Some(error), _) => format!("exchange rates {outcome}; not cached: {error}"),
+            (None, Some(as_of)) => format!("exchange rates {outcome} ({as_of})"),
+            (None, None) => format!("exchange rates {outcome}"),
+        };
     }
 }
 
@@ -170,7 +206,6 @@ mod tests {
                 "-c".into(),
                 r#"printf '{"base":"EUR","rates":{"USD":1.5}}'"#.into(),
             ],
-            refresh_hours: 12,
             timeout_seconds: 5,
         };
         let mut state = CurrencyState::default();

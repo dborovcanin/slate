@@ -14,15 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[serde(deny_unknown_fields)]
 pub struct CurrencyConfig {
     pub argv: Vec<String>,
-    /// Legacy startup freshness setting; accepted for config compatibility.
-    /// Startup now always attempts one refresh.
-    #[serde(default = "default_refresh_hours")]
-    pub refresh_hours: u64,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
-}
-fn default_refresh_hours() -> u64 {
-    12
 }
 fn default_timeout() -> u64 {
     30
@@ -41,9 +34,6 @@ pub fn parse_currency_config(text: &str) -> Result<Option<CurrencyConfig>, Strin
         }
         if !(1..=3600).contains(&config.timeout_seconds) {
             return Err("currency: timeout_seconds must be 1..3600".into());
-        }
-        if !(1..=8760).contains(&config.refresh_hours) {
-            return Err("currency: refresh_hours must be 1..8760".into());
         }
     }
     Ok(root.currency)
@@ -67,10 +57,6 @@ impl ExchangeRates {
             return Some(1.0);
         }
         self.rates.get(currency).copied()
-    }
-
-    pub fn is_stale(&self, refresh_hours: u64, now: u64) -> bool {
-        now.saturating_sub(self.fetched_at) >= refresh_hours.saturating_mul(3600)
     }
 }
 
@@ -168,16 +154,22 @@ pub fn save_cache(path: &Path, rates: &ExchangeRates) -> Result<(), String> {
 static INSTALLED: RwLock<Option<Arc<ExchangeRates>>> = RwLock::new(None);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// Makes `rates` the ones calc evaluation uses.
-pub fn install(rates: ExchangeRates) {
-    if let Ok(mut installed) = INSTALLED.write() {
-        *installed = Some(Arc::new(rates));
-        GENERATION.fetch_add(1, Ordering::AcqRel);
+/// Makes `rates` the ones calc evaluation uses. Returns false, changing
+/// nothing, when the installed rates already have the same base and values,
+/// so callers can skip re-evaluating.
+pub fn install(rates: ExchangeRates) -> bool {
+    let Ok(mut installed) = INSTALLED.write() else {
+        return false;
+    };
+    if installed
+        .as_ref()
+        .is_some_and(|old| old.base == rates.base && old.rates == rates.rates)
+    {
+        return false;
     }
-}
-
-pub fn installed() -> Option<Arc<ExchangeRates>> {
-    INSTALLED.read().ok().and_then(|rates| rates.clone())
+    *installed = Some(Arc::new(rates));
+    GENERATION.fetch_add(1, Ordering::AcqRel);
+    true
 }
 
 /// Changes whenever installed rates change, so cached calc results can tell.
@@ -214,9 +206,9 @@ mod tests {
         let config = parse_currency_config("[currency]\nargv=['rates.py']")
             .unwrap()
             .unwrap();
-        assert_eq!((config.refresh_hours, config.timeout_seconds), (12, 30));
+        assert_eq!(config.timeout_seconds, 30);
         assert!(parse_currency_config("[currency]\nargv=[]").is_err());
-        assert!(parse_currency_config("[currency]\nargv=['x']\nrefresh_hours=0").is_err());
+        assert!(parse_currency_config("[currency]\nargv=['x']\ntimeout_seconds=0").is_err());
         assert!(parse_currency_config("[currency]\nargv=['x']\ntypo=1").is_err());
     }
 
@@ -244,13 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn staleness_uses_refresh_hours() {
-        let rates = parse_rates_response(br#"{"base":"EUR","rates":{"USD":1.1}}"#, 1000).unwrap();
-        assert!(!rates.is_stale(1, 1000 + 3599));
-        assert!(rates.is_stale(1, 1000 + 3600));
-    }
-
-    #[test]
     fn cache_round_trips() {
         let dir = std::env::temp_dir().join(format!("slate-rates-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -271,7 +256,6 @@ mod tests {
                 "-c".into(),
                 r#"printf '{"base":"EUR","rates":{"USD":1.1}}'"#.into(),
             ],
-            refresh_hours: 12,
             timeout_seconds: 5,
         };
         let rates = fetch_rates(&config, Arc::new(AtomicBool::new(false))).unwrap();

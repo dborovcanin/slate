@@ -378,7 +378,7 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 72] = [
     CommandDefinition {
         id: CommandId::CurrencyRefresh,
         value: "currency refresh",
-        aliases: &["currentcy refresh"],
+        aliases: &[],
         description: "refresh cached exchange rates",
         modes: &MODES_BOTH,
     },

@@ -3041,7 +3041,7 @@ mod tests {
     /// One test owns the process-wide rates, so parallel tests cannot race.
     #[test]
     fn currencies_convert_with_installed_rates() {
-        fn install(usd: f64) {
+        fn install(usd: f64) -> bool {
             crate::currency::install(crate::currency::ExchangeRates {
                 base: "EUR".into(),
                 rates: [("USD".to_string(), usd), ("RSD".to_string(), 117.1)]
@@ -3049,7 +3049,7 @@ mod tests {
                     .collect(),
                 as_of: None,
                 fetched_at: 0,
-            });
+            })
         }
         let lines: Vec<String> = [
             "10 USD to EUR",
@@ -3080,7 +3080,11 @@ mod tests {
         assert_eq!(results[5].as_deref(), Some("1171 RSD"));
 
         // New rates invalidate the cached preparation and its variable values.
-        install(2.0);
+        assert!(install(2.0));
+        // Identical rates change nothing, so cached results stay valid.
+        let generation = crate::currency::generation();
+        assert!(!install(2.0));
+        assert_eq!(crate::currency::generation(), generation);
         let results = engine
             .evaluate_note_context_cached(&lines, options, &mut cache)
             .line_results;

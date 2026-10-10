@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn currency_refresh_is_a_host_command_in_both_modes() {
         for mode in [CommandMode::Vim, CommandMode::Editor] {
-            for command in [":currency refresh", "CURRENTCY refresh"] {
+            for command in [":currency refresh", "CURRENCY Refresh"] {
                 assert_eq!(
                     EditorEngine::plan_host_command(mode, command),
                     Some(HostCommandPlan::CurrencyRefresh)
