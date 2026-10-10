@@ -4,11 +4,10 @@
 //! (PDF export, backups, web search, clipboard watching, image paste, folds)
 //! report that they are not in the desktop app yet.
 use crate::overlays::{self, Prompt, PromptKind};
+use crate::reminder_time::parse_when;
 use crate::window::SlateWindow;
 use app_core::storage::NoteModules;
-use chrono::{
-    Datelike, Duration as ChronoDuration, Local, NaiveDate, NaiveTime, TimeZone, Timelike,
-};
+use chrono::{Datelike, Local, Timelike};
 use editor_core::command_catalog::{
     parse_backup_command, parse_collection_command, parse_export_command, parse_web_search_command,
     CollectionCommandAction, CommandId, ExportFormat,
@@ -334,61 +333,6 @@ fn shellexpand_home(path: &str) -> String {
     }
 }
 
-/// Parse a reminder time: `YYYY-MM-DD HH:MM`, `HH:MM` (today or tomorrow),
-/// `tomorrow [9am|09:00]`, or `in 30m` / `in 2h` / `in 3d`.
-pub fn parse_when(input: &str, now: chrono::DateTime<Local>) -> Option<chrono::DateTime<Local>> {
-    let s = input.trim().to_ascii_lowercase();
-    if let Some(rest) = s.strip_prefix("in ") {
-        let rest = rest.trim();
-        let (num, unit) = rest.split_at(rest.find(|c: char| !c.is_ascii_digit())?);
-        let n: i64 = num.parse().ok()?;
-        let d = match unit.trim() {
-            "m" | "min" | "mins" | "minutes" => ChronoDuration::minutes(n),
-            "h" | "hour" | "hours" => ChronoDuration::hours(n),
-            "d" | "day" | "days" => ChronoDuration::days(n),
-            _ => return None,
-        };
-        return Some(now + d);
-    }
-    let time_of = |t: &str| -> Option<NaiveTime> {
-        let t = t.trim();
-        if let Ok(t) = NaiveTime::parse_from_str(t, "%H:%M") {
-            return Some(t);
-        }
-        let (digits, pm) = if let Some(d) = t.strip_suffix("pm") {
-            (d, true)
-        } else {
-            (t.strip_suffix("am")?, false)
-        };
-        let h: u32 = digits.trim().parse().ok()?;
-        NaiveTime::from_hms_opt(if pm { h % 12 + 12 } else { h % 12 }, 0, 0)
-    };
-    let at =
-        |date: NaiveDate, time: NaiveTime| Local.from_local_datetime(&date.and_time(time)).single();
-    if let Some(rest) = s.strip_prefix("tomorrow") {
-        let date = now.date_naive() + ChronoDuration::days(1);
-        let time = if rest.trim().is_empty() {
-            NaiveTime::from_hms_opt(9, 0, 0)?
-        } else {
-            time_of(rest)?
-        };
-        return at(date, time);
-    }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M") {
-        return Local.from_local_datetime(&dt).single();
-    }
-    if let Ok(date) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-        return at(date, NaiveTime::from_hms_opt(9, 0, 0)?);
-    }
-    let time = time_of(&s)?;
-    let today = at(now.date_naive(), time)?;
-    Some(if today > now {
-        today
-    } else {
-        at(now.date_naive() + ChronoDuration::days(1), time)?
-    })
-}
-
 fn set_reminder(win: &mut SlateWindow, when: &str, cx: &mut Context<SlateWindow>) {
     let Some(at) = parse_when(when, Local::now()) else {
         notify_status(win, format!("could not read the time: {when}"), cx);
@@ -704,34 +648,5 @@ pub fn go_to_definition(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) {
             notify_status(win, format!("definition: {}", target.name), cx);
         }
         None => notify_status(win, "no link or variable at the cursor", cx),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn now() -> chrono::DateTime<Local> {
-        Local.with_ymd_and_hms(2026, 10, 10, 14, 30, 0).unwrap()
-    }
-
-    #[test]
-    fn relative_and_absolute_reminder_times() {
-        let n = now();
-        assert_eq!(parse_when("in 2h", n), Some(n + ChronoDuration::hours(2)));
-        assert_eq!(
-            parse_when("in 30m", n),
-            Some(n + ChronoDuration::minutes(30))
-        );
-        let t = parse_when("tomorrow 9am", n).unwrap();
-        assert_eq!((t.day(), t.hour()), (11, 9));
-        let t = parse_when("2026-10-14 09:00", n).unwrap();
-        assert_eq!((t.month(), t.day(), t.hour()), (10, 14, 9));
-        // A time already past today means tomorrow.
-        let t = parse_when("09:00", n).unwrap();
-        assert_eq!(t.day(), 11);
-        let t = parse_when("5pm", n).unwrap();
-        assert_eq!((t.day(), t.hour()), (10, 17));
-        assert_eq!(parse_when("whenever", n), None);
     }
 }

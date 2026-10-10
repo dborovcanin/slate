@@ -570,7 +570,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("slate-gui-switch-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = app_core::storage::Db::open(dir.join("notes.db")).unwrap();
-        for (id, body) in [("a", "# Garden\nroses and tulips\nmore tulips"), ("b", "# Budget\nrent")] {
+        for (id, body) in [
+            ("a", "# Garden\nroses and tulips\nmore tulips"),
+            ("b", "# Budget\nrent"),
+        ] {
             db.create_note_with_context(id, Default::default(), None, None)
                 .unwrap();
             db.save_note(id, body).unwrap();

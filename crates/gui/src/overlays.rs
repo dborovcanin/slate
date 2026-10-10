@@ -242,7 +242,9 @@ impl PromptKind {
             PromptKind::Unlock => "This note is encrypted. Password:",
             PromptKind::Encrypt => "Encrypt note with password:",
             PromptKind::Decrypt => "Password to remove encryption:",
-            PromptKind::Remind => "Remind at (e.g. 2026-10-14 09:00, tomorrow 9am, in 2h):",
+            PromptKind::Remind => {
+                "Remind at: type a time (today at 5, fri 9am, in 2h) or pick below"
+            }
             PromptKind::Run => "Run script (name and arguments):",
             PromptKind::NewCollection => "New collection name:",
             PromptKind::ExportPath => "Export to file:",
@@ -267,6 +269,18 @@ pub struct Prompt {
     pub first: Option<String>,
     /// Extra data for the prompt (export format).
     pub extra: String,
+    /// Reminder prompts also offer a calendar; typed text still works.
+    pub picker: Option<crate::reminder_time::DatePicker>,
+}
+
+impl Prompt {
+    /// Edit the picker; using it replaces any typed time.
+    fn pick(&mut self, change: impl FnOnce(&mut crate::reminder_time::DatePicker)) {
+        if let Some(picker) = &mut self.picker {
+            change(picker);
+            self.text.clear();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -330,6 +344,8 @@ pub fn open_prompt(
         text: String::new(),
         first: None,
         extra: extra.to_string(),
+        picker: (kind == PromptKind::Remind)
+            .then(|| crate::reminder_time::DatePicker::new(chrono::Local::now())),
     });
     cx.notify();
 }
@@ -477,6 +493,7 @@ pub fn on_key(
             false
         }
         Overlay::Prompt(p) => {
+            let alt = k.modifiers.alt;
             match k.key.as_str() {
                 "escape" => {
                     win.overlay = Overlay::None;
@@ -485,10 +502,48 @@ pub fn on_key(
                 "backspace" => {
                     p.text.pop();
                 }
+                // The calendar: arrows by day and week, Page keys by month,
+                // Alt+arrows by hour and five minutes.
+                "left" if p.picker.is_some() => p.pick(|d| {
+                    if alt {
+                        d.add_minutes(-60)
+                    } else {
+                        d.add_days(-1)
+                    }
+                }),
+                "right" if p.picker.is_some() => p.pick(|d| {
+                    if alt {
+                        d.add_minutes(60)
+                    } else {
+                        d.add_days(1)
+                    }
+                }),
+                "up" if p.picker.is_some() => p.pick(|d| {
+                    if alt {
+                        d.add_minutes(5)
+                    } else {
+                        d.add_days(-7)
+                    }
+                }),
+                "down" if p.picker.is_some() => p.pick(|d| {
+                    if alt {
+                        d.add_minutes(-5)
+                    } else {
+                        d.add_days(7)
+                    }
+                }),
+                "pageup" if p.picker.is_some() => p.pick(|d| d.add_months(-1)),
+                "pagedown" if p.picker.is_some() => p.pick(|d| d.add_months(1)),
                 "enter" => {
-                    let Overlay::Prompt(p) = std::mem::take(&mut win.overlay) else {
+                    let Overlay::Prompt(mut p) = std::mem::take(&mut win.overlay) else {
                         unreachable!()
                     };
+                    // Nothing typed: the calendar's choice.
+                    if p.text.trim().is_empty() {
+                        if let Some(at) = p.picker.and_then(|d| d.datetime()) {
+                            p.text = at.format("%Y-%m-%d %H:%M").to_string();
+                        }
+                    }
                     crate::commands::submit_prompt(win, p, cx);
                     return true;
                 }
@@ -908,7 +963,7 @@ fn palette(win: &SlateWindow, query: &str, selected: usize) -> AnyElement {
         .into_any_element()
 }
 
-fn prompt(win: &SlateWindow, p: &Prompt) -> AnyElement {
+fn prompt(win: &SlateWindow, p: &Prompt, cx: &mut Context<SlateWindow>) -> AnyElement {
     let t = win.theme;
     let shown = if p.kind.secret() {
         "•".repeat(p.text.chars().count())
@@ -953,11 +1008,175 @@ fn prompt(win: &SlateWindow, p: &Prompt) -> AnyElement {
                         .font_family(win.fonts.mono.clone())
                         .child(format!("{shown}▏")),
                 )
+                .when_some(p.picker, |d, picker| {
+                    d.child(date_picker(win, p, picker, cx))
+                })
                 .child(
                     div()
                         .text_size(px(11.5))
                         .text_color(t.muted)
-                        .child("Enter confirm · Esc cancel"),
+                        .child(if p.picker.is_some() {
+                            "Enter confirm · Esc cancel · arrows day/week · PgUp/PgDn month · Alt+arrows time"
+                        } else {
+                            "Enter confirm · Esc cancel"
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The calendar under the reminder prompt, with the time it resolves to.
+fn date_picker(
+    win: &SlateWindow,
+    p: &Prompt,
+    picker: crate::reminder_time::DatePicker,
+    cx: &mut Context<SlateWindow>,
+) -> AnyElement {
+    use chrono::Datelike;
+    let t = win.theme;
+    let today = chrono::Local::now().date_naive();
+    // Click handlers edit the prompt through the window entity.
+    let entity = cx.entity();
+    let edit = {
+        let entity = entity.clone();
+        move |change: fn(&mut crate::reminder_time::DatePicker)| {
+            let entity = entity.clone();
+            move |_: &gpui::ClickEvent, _: &mut gpui::Window, app: &mut gpui::App| {
+                entity.update(app, |this, cx| {
+                    if let Overlay::Prompt(p) = &mut this.overlay {
+                        p.pick(change);
+                    }
+                    cx.notify();
+                });
+            }
+        }
+    };
+    let step = |id: &'static str,
+                label: &'static str,
+                change: fn(&mut crate::reminder_time::DatePicker)| {
+        div()
+            .id(id)
+            .w(px(26.0))
+            .h(px(26.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.0))
+            .cursor_pointer()
+            .text_color(t.muted)
+            .hover(|s| s.bg(t.active).text_color(t.text))
+            .on_click(edit(change))
+            .child(label)
+    };
+    let weeks = picker.weeks().into_iter().enumerate().map(|(w, week)| {
+        let entity = entity.clone();
+        div()
+            .flex()
+            .children(week.into_iter().enumerate().map(move |(i, day)| {
+                let cell = div()
+                    .w(px(44.0))
+                    .h(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center();
+                let Some(day) = day else {
+                    return cell.into_any_element();
+                };
+                let selected = day == picker.date.day();
+                let is_today = picker.date.with_day(day) == Some(today);
+                cell.id(("day", w * 7 + i))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_size(px(12.5))
+                    .text_color(if selected { t.on_accent } else { t.text })
+                    .when(selected, |d| d.bg(t.blue))
+                    .when(is_today && !selected, |d| d.border_1().border_color(t.blue))
+                    .when(!selected, |d| d.hover(|s| s.bg(t.active)))
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| {
+                            entity.update(app, |this, cx| {
+                                if let Overlay::Prompt(p) = &mut this.overlay {
+                                    p.pick(|d| {
+                                        if let Some(date) = d.date.with_day(day) {
+                                            d.date = date;
+                                        }
+                                    });
+                                }
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .child(day.to_string())
+                    .into_any_element()
+            }))
+    });
+    // What Enter will set: the typed time if there is one, else the calendar.
+    let (summary, ok) = if p.text.trim().is_empty() {
+        (
+            picker
+                .datetime()
+                .map(|d| d.format("%a %b %-d, %H:%M").to_string()),
+            true,
+        )
+    } else {
+        match crate::reminder_time::parse_when(&p.text, chrono::Local::now()) {
+            Some(d) => (Some(d.format("%a %b %-d, %H:%M").to_string()), true),
+            None => (None, false),
+        }
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(step("month-prev", "‹", |d| d.add_months(-1)))
+                .child(
+                    div()
+                        .text_color(t.heading)
+                        .child(picker.date.format("%B %Y").to_string()),
+                )
+                .child(step("month-next", "›", |d| d.add_months(1))),
+        )
+        .child(
+            div()
+                .flex()
+                .children(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(|d| {
+                    div()
+                        .w(px(44.0))
+                        .flex()
+                        .justify_center()
+                        .text_size(px(11.0))
+                        .text_color(t.faint)
+                        .child(d)
+                })),
+        )
+        .children(weeks)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(div().text_color(t.muted).pr(px(6.0)).child("Time"))
+                .child(step("hour-prev", "‹", |d| d.add_minutes(-60)))
+                .child(div().w(px(22.0)).child(format!("{:02}", picker.hour)))
+                .child(step("hour-next", "›", |d| d.add_minutes(60)))
+                .child(div().child(":"))
+                .child(step("min-prev", "‹", |d| d.add_minutes(-5)))
+                .child(div().w(px(22.0)).child(format!("{:02}", picker.minute)))
+                .child(step("min-next", "›", |d| d.add_minutes(5)))
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .text_color(if ok { t.amber } else { t.muted })
+                        .child(match summary {
+                            Some(s) => format!("⏰ {s}"),
+                            None => "can't read that time".to_string(),
+                        }),
                 ),
         )
         .into_any_element()
@@ -1112,7 +1331,7 @@ pub fn render(
             out.extend(menu_panels(win, &items, *sub, x, y, cx));
             out
         }
-        Overlay::Prompt(p) => vec![backdrop(cx), prompt(win, p)],
+        Overlay::Prompt(p) => vec![backdrop(cx), prompt(win, p, cx)],
         Overlay::Browser(b) => vec![crate::browser::render(win, b, cx)],
         Overlay::History(h) => vec![crate::history::render(win, h, cx)],
     }

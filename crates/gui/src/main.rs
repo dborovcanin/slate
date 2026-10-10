@@ -9,6 +9,7 @@ mod images;
 mod keys;
 mod note_view;
 mod overlays;
+mod reminder_time;
 mod settings;
 mod sidebar_search;
 mod switcher;

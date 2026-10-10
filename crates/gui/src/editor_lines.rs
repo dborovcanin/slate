@@ -168,6 +168,9 @@ fn cursor_text(
 fn ghost(text: &str, t: &Theme) -> impl IntoElement {
     div()
         .pl(px(24.0))
+        .text_size(px(13.0))
+        .line_height(px(26.0))
+        .font_weight(FontWeight::NORMAL)
         .text_color(t.amber)
         .child(text.trim().to_string())
 }
