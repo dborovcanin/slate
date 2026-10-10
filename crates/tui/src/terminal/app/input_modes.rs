@@ -85,16 +85,8 @@ impl TerminalApp {
         if self.mode != UiMode::Normal {
             self.folds.pending_prefix_until = None;
         }
-        // Like vim, every normal/visual-mode command is its own undo step;
-        // the edits one key makes (an edit and its autoformat) still merge.
-        if self.vim_enabled
-            && matches!(
-                self.mode,
-                UiMode::Normal | UiMode::Visual | UiMode::VisualLine
-            )
-        {
-            self.history.break_coalescing();
-        }
+        let session = self.undo_session();
+        self.undo_policy.begin_input(&mut self.history, session);
         match self.mode {
             UiMode::DatePicker => self.handle_date_picker_key(db, key)?,
             UiMode::Editor => self.handle_editor_key(db, key)?,

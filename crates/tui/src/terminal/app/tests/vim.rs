@@ -1256,6 +1256,32 @@ fn vim_each_normal_command_is_its_own_undo_step() {
 }
 
 #[test]
+fn non_vim_typing_coalesces_until_a_pause_then_starts_a_new_step() {
+    let (db, mut app, path) = app_with_note("a");
+    app.vim_enabled = false;
+    app.mode = UiMode::Editor;
+    app.editor.cursor_col = 1;
+    app.last_edit = Instant::now() - Duration::from_secs(1);
+    run_keys(&mut app, &db, &[Key::Char('b')]);
+    app.last_edit = Instant::now() - Duration::from_millis(100);
+    run_keys(&mut app, &db, &[Key::Char('c')]);
+    assert_eq!(app.history.undo_depth(), 1);
+    app.last_edit = Instant::now() - Duration::from_secs(1);
+    run_keys(&mut app, &db, &[Key::Char('d')]);
+    assert_eq!(app.history.undo_depth(), 2);
+    app.undo(&db);
+    assert_eq!(app.editor.lines, vec!["abc"]);
+    app.undo(&db);
+    assert_eq!(app.editor.lines, vec!["a"]);
+    app.redo(&db);
+    app.redo(&db);
+    assert_eq!(app.editor.lines, vec!["abcd"]);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn vim_insert_session_is_one_undo_step_across_pauses() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Normal;

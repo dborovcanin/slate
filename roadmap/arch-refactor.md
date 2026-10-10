@@ -256,7 +256,7 @@ them when a second consumer or a test needs them, not before.
 | Phase | Status | Notes |
 | --- | --- | --- |
 | 1. Buffer primitives | Complete | Offset helpers, text changes, typing and plain/table paste delegate to core; word deletion remains in phase 3 |
-| 2. Undo store and policy | In progress | Store and tests relocated to core; span recording uses EditDelta; grouping and text/reminder action policy remain |
+| 2. Undo store and policy | Complete | Core owns span recording, grouping, redo truncation, self-cancelling text markers and text/reminder action order; host supplies time/session boundaries and applies effects |
 | 3. Word motions | Planned | |
 | 4. Vim intent execution | Planned | Same as plan.md Commands/Vim action point 1 |
 | 5. Post-edit planning | Planned | |
@@ -282,5 +282,5 @@ end.
 | Currency results applied globally | `currency.rs`: `apply_currency_result` | no note check; identical rates skipped; one fetch at a time |
 | Viewport calc preparation installed only for the same note | `editing.rs`: `install_viewport_calc_preparation` | changed text caught by rehashing in the calc cache and the reset `cross_note_refs_generation`; cross-note index writes fenced by `epoch()` |
 | Script and currency cancellation | `scripts.rs`, `currency.rs` | process-group termination lives in `app_core::scripts` |
-| Clock for undo coalescing | `mark_edited_from_line_with_span` | supplied to core as an input after phase 2 |
+| Clock for undo coalescing | `mark_edited_from_line_with_span` | elapsed time supplied to core; grouping decisions are core-owned |
 | Calc scheduling (debounce, idle ticks, `key_depth`) | `editing.rs` | timing only; decisions move in phase 5 |

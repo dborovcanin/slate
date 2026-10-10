@@ -12,6 +12,7 @@ use super::render;
 use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
+use crate::editor_core::history::policy::{UndoAction, UndoPolicy};
 use crate::editor_core::history::LineHistory;
 
 use crate::config::ThemeConfig;
@@ -48,7 +49,6 @@ const CALC_RECOMPUTE_DEBOUNCE_MS: u64 = 90;
 const CALC_RECOMPUTE_PENDING_RETRY_MS: u64 = 35;
 const CALC_IDLE_EVAL_BUDGET_MS: u64 = 6;
 const CALC_ASYNC_MIN_LINES: usize = 2_000;
-const UNDO_DEBOUNCE_MS: u64 = 300;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
 const FOLD_PREFIX_TIMEOUT_MS: u64 = 900;
 const TITLE_ROW: usize = 1;
@@ -264,12 +264,6 @@ struct ReminderUndoEntry {
     line_idx: usize,
     before: Option<LineReminderGhost>,
     after: Option<LineReminderGhost>,
-}
-
-#[derive(Debug, Clone)]
-enum UndoAction {
-    Text,
-    Reminder(ReminderUndoEntry),
 }
 
 #[derive(Debug, Clone)]
@@ -826,8 +820,7 @@ struct TerminalApp {
     clipboard_watch: ClipboardWatch,
     // Undo/redo
     history: LineHistory<ReminderMarks>,
-    undo_actions: Vec<UndoAction>,
-    undo_action_pos: usize,
+    undo_policy: UndoPolicy<ReminderUndoEntry>,
     perf_trace: PerfTraceState,
     /// Terminal graphics support for the image preview. `None` until the
     /// first preview, which queries the terminal, so startup never pays for it.
@@ -1336,8 +1329,7 @@ impl TerminalApp {
                 last_poll: Instant::now(),
             },
             history,
-            undo_actions: Vec::new(),
-            undo_action_pos: 0,
+            undo_policy: UndoPolicy::default(),
             perf_trace: PerfTraceState {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()

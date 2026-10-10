@@ -12,7 +12,7 @@ use super::{
     CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
     CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
-    UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
 use crate::editor_core::buffer::paste::{
     apply_plain_paste, apply_table_cell_paste, normalize_paste, parse_table_paste,
@@ -25,6 +25,8 @@ use crate::editor_core::buffer::{
     apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
     map_offset_through_changes, prepare_text_change, EditDelta,
 };
+use crate::editor_core::history::policy::{UndoGrouping, UndoSession};
+use crate::editor_core::history::HistoryCursor;
 use crate::terminal::text_utils::{
     byte_index, char_col_at_byte, cursor_render_char_col, remove_char_at,
     viewport_col_for_display_col,
@@ -187,12 +189,15 @@ mod tests {
 
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
-    pub(super) fn push_undo_action(&mut self, action: UndoAction) {
-        if self.undo_action_pos < self.undo_actions.len() {
-            self.undo_actions.truncate(self.undo_action_pos);
+    pub(super) fn undo_session(&self) -> UndoSession {
+        if !self.vim_enabled {
+            return UndoSession::Other;
         }
-        self.undo_actions.push(action);
-        self.undo_action_pos = self.undo_actions.len();
+        match self.mode {
+            UiMode::Editor => UndoSession::Insert,
+            UiMode::Normal | UiMode::Visual | UiMode::VisualLine => UndoSession::Command,
+            _ => UndoSession::Other,
+        }
     }
 
     pub(super) fn push_reminder_undo_entry(
@@ -204,92 +209,33 @@ impl TerminalApp {
         if before == after {
             return;
         }
-        self.push_undo_action(UndoAction::Reminder(ReminderUndoEntry {
+        self.undo_policy.record_reminder(ReminderUndoEntry {
             line_idx,
             before,
             after,
-        }));
-    }
-
-    fn prefer_span_history_fast_path(&self) -> bool {
-        // Above COALESCE_ANCHOR_MAX_LINES the generic `record_edit` path no longer
-        // coalesces (its coalesce anchor is only retained while the doc fits within
-        // that cap), so it already emits one undo entry per edit. The span fast path
-        // is then behavior-equivalent but O(changed lines) instead of O(doc) per
-        // keystroke, because `record_edit`'s prefix/suffix diff scans from the
-        // document ends. Gate on the coalesce cap rather than the much larger
-        // lightweight-fold threshold so mid-size notes (5k–30k lines) stop paying
-        // the per-keystroke full-document diff.
-        self.editor.lines.len() > crate::editor_core::history::COALESCE_ANCHOR_MAX_LINES
+        });
     }
 
     fn record_history_after_edit(
         &mut self,
-        coalesce_undo: bool,
+        grouping: UndoGrouping,
         history_span: Option<(usize, usize, usize)>,
     ) {
-        self.record_text_history(coalesce_undo, history_span);
+        self.undo_policy.record_text(
+            &mut self.history,
+            &self.editor.lines,
+            HistoryCursor {
+                line: self.editor.cursor_line,
+                col: self.editor.cursor_col,
+            },
+            history_span.map(|(start_line, old_span, new_span)| EditDelta {
+                start_line,
+                old_span,
+                new_span,
+            }),
+            grouping,
+        );
         self.move_reminders_with_recorded_edit();
-    }
-
-    fn record_text_history(
-        &mut self,
-        coalesce_undo: bool,
-        history_span: Option<(usize, usize, usize)>,
-    ) {
-        let undo_depth_before = self.history.undo_depth();
-        let history_changed = if let Some((start_line, old_line_span, new_line_span)) = history_span
-        {
-            if self.prefer_span_history_fast_path() {
-                let history_changed = self.history.record_edit_span(
-                    &self.editor.lines,
-                    self.editor.cursor_line,
-                    self.editor.cursor_col,
-                    EditDelta {
-                        start_line,
-                        old_span: old_line_span,
-                        new_span: new_line_span,
-                    },
-                );
-                if history_changed {
-                    let undo_depth_after = self.history.undo_depth();
-                    if !coalesce_undo || undo_depth_after > undo_depth_before {
-                        self.push_undo_action(UndoAction::Text);
-                    }
-                }
-                return;
-            }
-            self.history.record_edit(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-                coalesce_undo,
-            )
-        } else {
-            self.history.record_edit(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-                coalesce_undo,
-            )
-        };
-        let undo_depth_after = self.history.undo_depth();
-        if history_changed && (!coalesce_undo || undo_depth_after > undo_depth_before) {
-            self.push_undo_action(UndoAction::Text);
-        } else if undo_depth_after < undo_depth_before {
-            // A merged step that undid itself was dropped from the history;
-            // drop its marker too so `u` and `Ctrl-r` stay in step.
-            self.pop_undo_text_action();
-        }
-    }
-
-    fn pop_undo_text_action(&mut self) {
-        if self.undo_action_pos == self.undo_actions.len()
-            && matches!(self.undo_actions.last(), Some(UndoAction::Text))
-        {
-            self.undo_actions.pop();
-            self.undo_action_pos = self.undo_actions.len();
-        }
     }
 
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
@@ -1381,10 +1327,10 @@ impl TerminalApp {
         changed_from_line: usize,
         history_span: Option<(usize, usize, usize)>,
     ) {
-        // A vim insert session is one undo step however long it pauses;
-        // without vim, edits merge while typing continues.
-        let coalesce_undo = (self.vim_enabled && self.mode == UiMode::Editor)
-            || self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
+        let grouping = UndoGrouping {
+            session: self.undo_session(),
+            elapsed: self.last_edit.elapsed(),
+        };
         let line_count_changed = self.editor.lines.len() != self.calc.results.len();
         let viewport_structural = line_count_changed && self.calc_runtime.viewport_only;
         self.invalidate_joined_text_cache();
@@ -1465,7 +1411,7 @@ impl TerminalApp {
         }
         // Splices are only meaningful for the edit that recorded them.
         self.calc.pending_result_splices.clear();
-        self.record_history_after_edit(coalesce_undo, history_span);
+        self.record_history_after_edit(grouping, history_span);
         self.last_edit = Instant::now();
     }
 
@@ -1563,7 +1509,10 @@ impl TerminalApp {
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
-            self.status = format!("undo ({} left)", self.undo_action_pos.saturating_sub(1));
+            self.status = format!(
+                "undo ({} left)",
+                self.undo_policy.undo_depth().saturating_sub(1)
+            );
         } else {
             self.status = "already at oldest change".to_string();
         }
@@ -1605,11 +1554,10 @@ impl TerminalApp {
     }
 
     pub(super) fn undo(&mut self, db: &Db) {
-        if self.undo_action_pos == 0 {
+        let Some(action) = self.undo_policy.undo_action().cloned() else {
             self.status = "already at oldest change".to_string();
             return;
-        }
-        let action = self.undo_actions[self.undo_action_pos - 1].clone();
+        };
         match action {
             UndoAction::Text => self.undo_text_action(),
             UndoAction::Reminder(entry) => {
@@ -1620,15 +1568,14 @@ impl TerminalApp {
                 self.status = format!("undo reminder on line {}", entry.line_idx + 1);
             }
         }
-        self.undo_action_pos = self.undo_action_pos.saturating_sub(1);
+        self.undo_policy.complete_undo();
     }
 
     pub(super) fn redo(&mut self, db: &Db) {
-        if self.undo_action_pos >= self.undo_actions.len() {
+        let Some(action) = self.undo_policy.redo_action().cloned() else {
             self.status = "already at newest change".to_string();
             return;
-        }
-        let action = self.undo_actions[self.undo_action_pos].clone();
+        };
         match action {
             UndoAction::Text => self.redo_text_action(),
             UndoAction::Reminder(entry) => {
@@ -1639,7 +1586,7 @@ impl TerminalApp {
                 self.status = format!("redo reminder on line {}", entry.line_idx + 1);
             }
         }
-        self.undo_action_pos += 1;
+        self.undo_policy.complete_redo();
     }
 
     pub(super) fn run_calc_recompute(&mut self) {

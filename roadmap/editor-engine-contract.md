@@ -68,9 +68,26 @@ This document defines the canonical shared-core contract for editor semantics.
     It retains the existing span clamping and changed-line storage.
     `take_last_delta` returns the removed and inserted lines for host metadata
     updates; the invalidation summary does not replace this exact text delta.
-  - `COALESCE_ANCHOR_MAX_LINES` retains the 5,000-line anchor limit. The host
-    still selects the recording path and decides grouping and text/reminder
-    action order; moving the store alone does not complete undo extraction.
+  - `COALESCE_ANCHOR_MAX_LINES` retains the 5,000-line anchor limit.
+- Undo policy contract (`editor_core::history::policy`):
+  - `UndoPolicy<R>` owns the text/reminder action sequence and its undo/redo
+    position. Reminder payloads remain opaque; the host applies them and
+    persists their effects.
+  - The host classifies input as an insert session, normal/visual command or
+    other input. `begin_input` breaks coalescing for commands. Explicit edit
+    boundaries and checkpoints still use the core history methods.
+  - `record_text` receives cursor, optional `EditDelta` and `UndoGrouping`
+    (session and elapsed time captured before post-edit work). Core coalesces
+    insert sessions across pauses, otherwise within 300 ms, selects the span
+    fast path above the anchor cap, and adds or removes text action markers.
+    Retention and large-note grouping behavior remain unchanged.
+  - Recording a new action truncates the action redo tail. Self-cancelling
+    merged text edits remove their trailing marker. The host maps reminders
+    and records attached marks after text recording, preserving call order.
+  - `undo_action` / `redo_action` offer the next action; the host applies it
+    before acknowledging with `complete_undo` / `complete_redo`. A reminder
+    error leaves the action pending. Existing text-store exhaustion behavior
+    is preserved. Note switching clears both store and policy.
 - Command contract:
   - input: `CommandMode`, `raw_input`
   - output: canonical command definition (or none), suggestions, normalized input

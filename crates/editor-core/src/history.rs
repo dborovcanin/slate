@@ -1,5 +1,7 @@
 use crate::buffer::EditDelta;
 
+pub mod policy;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HistoryCursor {
     pub line: usize,

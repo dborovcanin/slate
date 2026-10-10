@@ -3082,8 +3082,7 @@ impl TerminalApp {
             self.editor.cursor_col,
             self.reminder_marks(),
         );
-        self.undo_actions.clear();
-        self.undo_action_pos = 0;
+        self.undo_policy.clear();
         self.render_state.fence_checkpoints.truncate(1);
         self.render_state.fence_checkpoints_valid_through = 0;
         if self.calc_cross_note_enabled() && self.editor.lines.iter().any(|l| l.contains("[[")) {
