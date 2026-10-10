@@ -72,6 +72,10 @@ fn main() {
     // Cached rates are installed before the first calc, so conversions work on open.
     let (currency, currency_problem) =
         currency::Currency::start(app_core::config::load_theme_config().background_tasks_enabled);
+    // A restore a crashed session left staged is swapped in before the database opens.
+    if let Err(err) = slate_export::backup::apply_staged_restore_if_pending() {
+        eprintln!("slate-gui: staged restore failed: {err}");
+    }
     let result = parse_args().and_then(|args| {
         let db = app_core::storage::Db::open(app_core::data_dir()?.join("notes.db"))?;
         let host = NoteHost::open(db, args.note_id.as_deref())?;

@@ -236,6 +236,16 @@ impl SlateWindow {
         }
     }
 
+    /// Swap in the staged backup and show the restored notes.
+    pub(crate) fn apply_restore(&mut self) -> Result<String, String> {
+        if !slate_export::backup::apply_restore_in_session(&self.host.db)? {
+            return Err("staged file missing".to_string());
+        }
+        self.host.after_restore()?;
+        self.reload_lines();
+        Ok("backup loaded (previous notes kept as notes.db.before-restore)".to_string())
+    }
+
     /// Apply a finished rates refresh: new rates change every conversion.
     pub(crate) fn apply_currency(&mut self, cx: &mut Context<Self>) {
         let Some((status, changed)) = self.currency.poll() else {

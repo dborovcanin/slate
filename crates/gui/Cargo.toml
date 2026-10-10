@@ -14,6 +14,7 @@ path = "src/main.rs"
 gpui = "0.2.2"
 note-session = { path = "../session" }
 app-core = { path = "../app-core" }
+slate-export = { path = "../export" }
 editor-core = { path = "../editor-core" }
 table-syntax = { path = "../table-syntax" }
 env_logger = { version = "0.11", default-features = false }

@@ -56,6 +56,20 @@ unaffected.
   selection in standard mode), `Ctrl+Backspace` deletes the previous word.
 - **Sidebar search:** the box at the top of the sidebar (`Ctrl+Shift+F`) finds
   notes by title and by text; `Up`/`Down` and `Enter` open a result.
+- **Search in the note:** `/` (vim) or `Ctrl+F` opens a find bar; matches are
+  highlighted as you type, `Tab`/`Down`/`Ctrl+N` and `Shift+Tab`/`Up`/`Ctrl+P`
+  step through them, `Enter` keeps the position, `Esc` goes back. `n` / `N`
+  repeat the last search.
+- **Folding:** `za` toggles, `zc` folds and `zo` unfolds the block at the
+  cursor (also `:fold`, `:unfold`, `:fold-toggle`); a folded block shows how
+  many lines it hides.
+- **Macros:** `q{r}` records into a register, `q` stops, `@{r}` replays
+  (`3@a` repeats); the status bar shows the recording.
+- **Clip-watch:** `:clip-watch` pastes text copied elsewhere into the note
+  until `:clip-watch-stop`.
+- **Export and backup:** `:export md|txt|pdf [path]` and
+  `:backup export|load <path.zip>` run from the shared `slate-export` crate; a
+  loaded backup keeps the old database as `notes.db.before-restore`.
 - **Exchange rates:** cached rates are installed at startup and refreshed in
   the background (`[currency]` in the config); `:currency refresh` runs one
   now.
@@ -99,8 +113,7 @@ the editing mode, the theme and the sidebar are remembered in
 
 These are reported in the status bar when invoked:
 
-- PDF export, `:backup`, `:web-search`, clip-watch,
-  folding, in-note search (`/`), macros.
+- `:web-search`.
 - Vertical motion follows logical lines, not wrapped rows (`gj`/`gk` too).
 - IME composition and accessibility are untested.
 

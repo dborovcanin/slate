@@ -5365,6 +5365,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "slate-export"
+version = "0.3.0"
+dependencies = [
+ "app-core",
+ "base64 0.22.1",
+ "editor-core",
+ "flate2",
+ "image",
+ "note-session",
+ "regex",
+ "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
+ "time",
+ "ttf-parser 0.25.1",
+ "ulid",
+ "url",
+]
+
+[[package]]
 name = "slate-gui"
 version = "0.3.0"
 dependencies = [
@@ -5378,6 +5398,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "serde",
  "serde_json",
+ "slate-export",
  "table-syntax",
  "ulid",
 ]

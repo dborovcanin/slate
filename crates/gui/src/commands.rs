@@ -1,7 +1,7 @@
 //! Commands the editor core leaves to the host, and the actions behind
 //! prompts and table menus. Everything goes through `app-core` storage and
 //! the note session; features whose engine lives only in the terminal app
-//! (PDF export, backups, web search, clipboard watching, image paste, folds)
+//! (web search)
 //! report that they are not in the desktop app yet.
 use crate::overlays::{self, Prompt, PromptKind};
 use crate::reminder_time::parse_when;
@@ -10,7 +10,7 @@ use app_core::storage::NoteModules;
 use chrono::{Datelike, Local, Timelike};
 use editor_core::command_catalog::{
     parse_backup_command, parse_collection_command, parse_export_command, parse_web_search_command,
-    CollectionCommandAction, CommandId, ExportFormat,
+    BackupAction, CollectionCommandAction, CommandId, ExportFormat,
 };
 use gpui::Context;
 use note_session::input::InputOutcome;
@@ -122,10 +122,13 @@ pub fn run_host_command(
             }
         }
         RunCancel => notify_status(win, "no script is running", cx),
-        BackupExport | BackupLoad => {
-            let _ = parse_backup_command(raw);
-            not_yet(win, "backup", cx)
-        }
+        BackupExport | BackupLoad => match parse_backup_command(raw) {
+            Some(cmd) => match cmd.action {
+                BackupAction::Export => backup_export(win, cmd.path, cx),
+                BackupAction::Load => backup_load(win, cmd.path, cx),
+            },
+            None => notify_status(win, "usage: backup export|load <path.zip>", cx),
+        },
         WebSearch => {
             let _ = parse_web_search_command(raw);
             not_yet(win, "web search", cx)
@@ -328,27 +331,102 @@ fn export(
     path: Option<String>,
     cx: &mut Context<SlateWindow>,
 ) {
-    if format == ExportFormat::Pdf {
-        not_yet(win, "PDF export", cx);
-        return;
-    }
     let Some(path) = path else {
         overlays::open_prompt(win, PromptKind::ExportPath, format.as_str(), cx);
         return;
     };
     let text = win.host.doc.lines().join("\n");
-    let path = std::path::PathBuf::from(shellexpand_home(&path));
-    match std::fs::write(&path, text) {
-        Ok(()) => notify_status(win, format!("exported to {}", path.display()), cx),
-        Err(err) => notify_status(win, format!("export failed: {err}"), cx),
+    if format != ExportFormat::Pdf {
+        let message = match slate_export::export::export_to_file_blocking(&path, &text) {
+            Ok(()) => format!("exported {} to {path}", format.as_str()),
+            Err(err) => format!("export failed: {err}"),
+        };
+        notify_status(win, message, cx);
+        return;
     }
+    // A PDF takes a moment (layout, fonts, images): build it off the UI thread.
+    let db = win.host.db.clone();
+    let note_id = win.host.note_id().to_string();
+    notify_status(win, "exporting pdf…", cx);
+    cx.spawn(async move |this, cx| {
+        let target = path.clone();
+        let result = cx
+            .background_executor()
+            .spawn(async move {
+                let sources = app_core::note_sources::NoteSourceService::new(db);
+                slate_export::export::export_markdown_to_pdf_file(
+                    &sources,
+                    &note_id,
+                    &target,
+                    &text,
+                    &slate_export::export::PdfExportPalette::default(),
+                )
+            })
+            .await;
+        let _ = this.update(cx, |this, cx| {
+            let message = match result {
+                Ok(()) => format!("exported pdf to {path}"),
+                Err(err) => format!("export failed: {err}"),
+            };
+            notify_status(this, message, cx);
+        });
+    })
+    .detach();
 }
 
-fn shellexpand_home(path: &str) -> String {
-    match (path.strip_prefix("~/"), std::env::var("HOME")) {
-        (Some(rest), Ok(home)) => format!("{home}/{rest}"),
-        _ => path.to_string(),
+/// `:backup export <path.zip>`: write every note to a portable archive.
+fn backup_export(win: &mut SlateWindow, path: Option<String>, cx: &mut Context<SlateWindow>) {
+    let Some(path) = path else {
+        return notify_status(win, "usage: backup export <path.zip>", cx);
+    };
+    if let Err(err) = win.host.save() {
+        return notify_status(win, format!("backup failed: save failed: {err}"), cx);
     }
+    let db = win.host.db.clone();
+    notify_status(win, "exporting backup…", cx);
+    cx.spawn(async move |this, cx| {
+        let result = cx
+            .background_executor()
+            .spawn(async move { slate_export::backup::backup_notes_database_blocking(&db, &path) })
+            .await;
+        let _ = this.update(cx, |this, cx| {
+            let message = match result {
+                Ok(done) => format!("backed up notes to {}", done.path),
+                Err(err) => format!("backup failed: {err}"),
+            };
+            notify_status(this, message, cx);
+        });
+    })
+    .detach();
+}
+
+/// `:backup load <path.zip>`: replace the notes with a backup's; the old
+/// database is kept next to it as `notes.db.before-restore`.
+fn backup_load(win: &mut SlateWindow, path: Option<String>, cx: &mut Context<SlateWindow>) {
+    let Some(path) = path else {
+        return notify_status(win, "usage: backup load <path.zip>", cx);
+    };
+    if let Err(err) = win.host.save() {
+        return notify_status(win, format!("backup load failed: save failed: {err}"), cx);
+    }
+    notify_status(win, "loading backup…", cx);
+    cx.spawn(async move |this, cx| {
+        let staged = cx
+            .background_executor()
+            .spawn(async move { slate_export::backup::stage_restore_from_zip(&path) })
+            .await;
+        let _ = this.update(cx, |this, cx| {
+            let message = match staged.and_then(|_| this.apply_restore()) {
+                Ok(message) => message,
+                Err(err) => {
+                    slate_export::backup::discard_staged_restore();
+                    format!("backup load failed: {err}")
+                }
+            };
+            notify_status(this, message, cx);
+        });
+    })
+    .detach();
 }
 
 fn set_reminder(win: &mut SlateWindow, when: &str, cx: &mut Context<SlateWindow>) {

@@ -352,6 +352,33 @@ impl NoteHost {
         self.run_input(|session, doc, input, cx| session.handle_key(doc, input, key, cx))
     }
 
+    /// The database was replaced by a restored backup: nothing read from the
+    /// old one stays valid. Reopens the open note, or one that exists.
+    pub fn after_restore(&mut self) -> Result<(), String> {
+        if let Ok(mut index) = self.index.lock() {
+            index.reset();
+        }
+        self.working = None;
+        self.refresh_notes();
+        let id = self.note_id().to_string();
+        let note = match self.db.get_note(&id)? {
+            Some(note) => note,
+            None => match self.db.list_notes_meta()?.first() {
+                Some(first) => self
+                    .db
+                    .get_note(&first.id)?
+                    .ok_or("the restored database has no readable notes")?,
+                None => {
+                    let id = ulid::Ulid::new().to_string();
+                    self.db
+                        .create_note_with_context(&id, NoteModules::default(), None, None)?
+                }
+            },
+        };
+        self.open_note(note);
+        Ok(())
+    }
+
     /// Search the note for `query` (case-insensitive), starting from the
     /// cursor; returns the number of matches.
     pub fn set_find(&mut self, query: &str) -> usize {
@@ -1335,6 +1362,34 @@ mod tests {
         // Backspace never eats a pipe.
         let (lines, _) = table_after((2, 2), &[VimKey::Backspace]);
         assert!(lines[2].matches('|').count() == 3, "{:?}", lines[2]);
+    }
+
+    #[test]
+    fn a_restored_backup_replaces_the_notes_and_reopens_one() {
+        // The only test that points the data directory somewhere else.
+        let dir = std::env::temp_dir().join(format!("slate-gui-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &dir);
+        let data = app_core::data_dir().unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let db = Db::open(data.join("notes.db")).unwrap();
+        db.create_note_with_context("keep", Default::default(), None, None)
+            .unwrap();
+        db.save_note("keep", "# Kept\nbefore the backup").unwrap();
+        let zip = dir.join("backup.zip");
+        let zip = zip.to_str().unwrap();
+        slate_export::backup::backup_notes_database_blocking(&db, zip).unwrap();
+        db.save_note("keep", "# Kept\nchanged after").unwrap();
+        db.create_note_with_context("later", Default::default(), None, None)
+            .unwrap();
+        let mut host = NoteHost::open(db.clone(), Some("later")).unwrap();
+        slate_export::backup::stage_restore_from_zip(zip).unwrap();
+        assert!(slate_export::backup::apply_restore_in_session(&db).unwrap());
+        host.after_restore().unwrap();
+        // "later" did not exist in the backup: another note opens.
+        assert_eq!(host.note_id(), "keep");
+        assert_eq!(host.doc.lines()[1], "before the backup");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
