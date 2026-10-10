@@ -12,6 +12,7 @@ pub use edit::{EditContext, EditOutcome, SessionEdit};
 mod operations;
 
 mod undo;
+pub use undo::{SessionUndoOutcome, UndoContext};
 
 pub mod calc;
 pub mod variables;

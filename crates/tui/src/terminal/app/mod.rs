@@ -14,7 +14,6 @@ use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
 use crate::editor_core::completion::VariableAutocompleteState;
-use crate::editor_core::history::policy::UndoAction;
 use crate::editor_core::vim_actions::{VimRegisterMode, VimRegisterValue as VimRegister};
 use note_session::lifecycle::build_history_for_note;
 

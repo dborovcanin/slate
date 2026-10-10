@@ -4,7 +4,7 @@ use super::{
     gutter_width_for_visible_lines, is_markdown_table_line, line_char_len, line_display_cols,
     preload_cross_note_dep_value, table_cell_edit_start, table_cell_info_at_char,
     table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind, LineReminderGhost,
-    ReminderUndoEntry, TerminalApp, UiMode, UndoAction, VariableAutocompletePopupState,
+    ReminderUndoEntry, TerminalApp, UiMode, VariableAutocompletePopupState,
     VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
     CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
     CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
@@ -363,27 +363,6 @@ impl TerminalApp {
     }
     fn calc_recompute_debounce_duration(&self) -> Duration {
         Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS)
-    }
-
-    /// Viewport-only notes after an edit that may insert, delete or replace
-    /// lines: shifts cached results so unchanged lines keep their values and
-    /// re-evaluates only the viewport, and only when the changed lines take
-    /// part in calc. The whole note is never evaluated on the keystroke.
-    fn refresh_viewport_calc_after_edit(&mut self) {
-        let inputs = self.calc_inputs();
-        let (needs_eval, index_sync_pending) = self
-            .session
-            .calc
-            .refresh_viewport_calc_after_edit(&self.editor, inputs);
-        self.calc_runtime.index_sync_pending |= index_sync_pending;
-        if needs_eval {
-            let height = self.editor_height();
-            self.ensure_calc_for_viewport(height, true);
-        }
-        self.calc_runtime.recompute_pending = false;
-        self.calc_runtime.recompute_due_at = None;
-        self.calc_runtime.pending_viewport_pass = false;
-        self.calc_runtime.pending_full_pass = false;
     }
 
     fn schedule_calc_recompute(&mut self, viewport_pass: bool, full_pass: bool) {
@@ -816,132 +795,91 @@ impl TerminalApp {
         });
     }
 
-    fn apply_reminder_state(
-        &mut self,
-        db: &Db,
-        line_idx: usize,
-        state: Option<LineReminderGhost>,
-    ) -> Result<(), String> {
-        match state {
-            Some(reminder) => {
-                self.session.reminder_ghosts.insert(line_idx, reminder);
-            }
-            None => {
-                self.session.reminder_ghosts.remove(&line_idx);
-            }
-        }
-        self.reminders_changed_outside_text(db);
-        Ok(())
-    }
-
-    fn undo_text_action(&mut self) {
-        if self.session.undo(&mut self.editor).is_some() {
-            self.last_edit = Instant::now();
-            // Full lines replacement: invalidate all caches.
-            self.render_state.fence_checkpoints.truncate(1);
-            self.render_state.fence_checkpoints_valid_through = 0;
-            if self.calc_runtime.viewport_only {
-                // History swaps lines without splicing metadata.
-                self.session.calc.pending_result_splices.clear();
-                self.refresh_viewport_calc_after_edit();
-            } else {
-                self.run_calc_recompute();
-            }
-            // History may replace any lines; rescan, deferred to idle time
-            // unless a collapsed fold depends on it.
-            self.session.folds.rescan_pending = true;
-            self.recompute_folding_if_needed(None);
-            self.adjust_cursor();
-            if self.mode == UiMode::Normal {
-                self.editor.cursor_col = self
-                    .editor
-                    .cursor_col
-                    .min(line_char_len(self.current_line()).saturating_sub(1));
-            }
-            self.adjust_scroll();
-            self.session.history.checkpoint(
-                self.editor.lines(),
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            );
-            self.status = format!(
-                "undo ({} left)",
-                self.session.undo_policy.undo_depth().saturating_sub(1)
-            );
+    fn restore_history(&mut self, db: &Db, redo: bool) {
+        let base = self.calc_inputs();
+        let ctx = note_session::UndoContext {
+            normal_mode: self.mode == UiMode::Normal,
+            table_enabled: self.note_table_module_enabled(),
+        };
+        let folds = self.session_edit_context().folds;
+        let selection_range = self.editor.selection_anchor.map(|(line, _)| {
+            (
+                line.min(self.editor.cursor_line),
+                line.max(self.editor.cursor_line),
+            )
+        });
+        let host = CalcHost {
+            base,
+            cross_note_enabled: self.calc_cross_note_enabled(),
+            table_enabled: self.note_table_module_enabled(),
+            note_id: &self.active_note.id,
+            index: &self.cross_note_var_index,
+            db: &self.cross_note_db,
+            condvar: &self.cross_note_eval_condvar,
+            selection_range,
+        };
+        let result = if redo {
+            self.session.redo_action_with_upkeep(
+                &mut self.editor,
+                ctx,
+                Some(base),
+                Some(&host),
+                folds,
+            )
         } else {
-            self.status = "already at oldest change".to_string();
+            self.session.undo_action_with_upkeep(
+                &mut self.editor,
+                ctx,
+                Some(base),
+                Some(&host),
+                folds,
+            )
+        };
+        match result {
+            note_session::SessionUndoOutcome::Text(outcome) => {
+                self.last_edit = Instant::now();
+                self.render_state.fence_checkpoints.truncate(1);
+                self.render_state.fence_checkpoints_valid_through = 0;
+                self.apply_calc_effect(outcome.calc_effect);
+                self.apply_fold_effect(outcome.fold_effect);
+                self.adjust_cursor_line_and_col_bounds();
+                self.session
+                    .checkpoint_restored_cursor(&mut self.editor, ctx);
+                self.adjust_scroll();
+                self.status = if redo {
+                    format!("redo ({} left)", self.session.history.redo_depth())
+                } else {
+                    format!("undo ({} left)", self.session.undo_policy.undo_depth())
+                };
+            }
+            note_session::SessionUndoOutcome::Reminder { line_idx } => {
+                self.last_edit = Instant::now();
+                self.render_state.dirty = true;
+                self.persist_reminders_if_text_saved(db);
+                self.status = format!(
+                    "{} reminder on line {}",
+                    if redo { "redo" } else { "undo" },
+                    line_idx + 1
+                );
+            }
+            note_session::SessionUndoOutcome::Exhausted => {
+                self.status = if redo {
+                    "already at newest change"
+                } else {
+                    "already at oldest change"
+                }
+                .to_string();
+            }
+            note_session::SessionUndoOutcome::NotEditable => {
+                self.status = "note is locked".to_string();
+            }
         }
     }
-
-    fn redo_text_action(&mut self) {
-        if self.session.redo(&mut self.editor).is_some() {
-            self.last_edit = Instant::now();
-            self.render_state.fence_checkpoints.truncate(1);
-            self.render_state.fence_checkpoints_valid_through = 0;
-            if self.calc_runtime.viewport_only {
-                // History swaps lines without splicing metadata.
-                self.session.calc.pending_result_splices.clear();
-                self.refresh_viewport_calc_after_edit();
-            } else {
-                self.run_calc_recompute();
-            }
-            // History may replace any lines; rescan, deferred to idle time
-            // unless a collapsed fold depends on it.
-            self.session.folds.rescan_pending = true;
-            self.recompute_folding_if_needed(None);
-            self.adjust_cursor();
-            if self.mode == UiMode::Normal {
-                self.editor.cursor_col = self
-                    .editor
-                    .cursor_col
-                    .min(line_char_len(self.current_line()).saturating_sub(1));
-            }
-            self.adjust_scroll();
-            self.session.history.checkpoint(
-                self.editor.lines(),
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            );
-            self.status = format!("redo ({} left)", self.session.history.redo_depth());
-        } else {
-            self.status = "already at newest change".to_string();
-        }
-    }
-
     pub(super) fn undo(&mut self, db: &Db) {
-        let Some(action) = self.session.undo_policy.undo_action().cloned() else {
-            self.status = "already at oldest change".to_string();
-            return;
-        };
-        match action {
-            UndoAction::Text => self.undo_text_action(),
-            UndoAction::Reminder(entry) => {
-                if let Err(error) = self.apply_reminder_state(db, entry.line_idx, entry.before) {
-                    self.status = format!("undo reminder failed: {error}");
-                    return;
-                }
-                self.status = format!("undo reminder on line {}", entry.line_idx + 1);
-            }
-        }
-        self.session.undo_policy.complete_undo();
+        self.restore_history(db, false);
     }
-
     pub(super) fn redo(&mut self, db: &Db) {
-        let Some(action) = self.session.undo_policy.redo_action().cloned() else {
-            self.status = "already at newest change".to_string();
-            return;
-        };
-        match action {
-            UndoAction::Text => self.redo_text_action(),
-            UndoAction::Reminder(entry) => {
-                if let Err(error) = self.apply_reminder_state(db, entry.line_idx, entry.after) {
-                    self.status = format!("redo reminder failed: {error}");
-                    return;
-                }
-                self.status = format!("redo reminder on line {}", entry.line_idx + 1);
-            }
-        }
-        self.session.undo_policy.complete_redo();
+        self.restore_history(db, true);
     }
 
     pub(super) fn run_calc_recompute(&mut self) {

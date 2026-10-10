@@ -1144,3 +1144,9 @@ Unicode conversion, affinity, reflow and cache invalidation tests pass. Source
 search/selection ranges map through transforms. Styling and row/media caches
 are bounded and keyed by their semantic inputs. Workspace checks pass without
 new warnings; final performance and live-terminal qualification are pending.
+
+Final bug round, undo: headless callers previously bypassed reminder action
+ordering and locked-note protection. Shared dispatch now owns text/reminder
+actions, derived-state upkeep and Normal/table source-cursor checkpoints;
+hosts consume effects without acknowledging history again. Four shared
+regressions and workspace checks pass, with no new warnings.
