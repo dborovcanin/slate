@@ -159,7 +159,9 @@ pub fn run_host_command(
                 notify_status(win, "no image on the clipboard", cx);
             }
         }
-        Fold | Unfold | FoldToggle => not_yet(win, "folding", cx),
+        Fold => win.fold(Some(true), cx),
+        Unfold => win.fold(Some(false), cx),
+        FoldToggle => win.fold(None, cx),
         // Core commands never reach the host.
         _ => notify_status(win, format!("{raw}: nothing to do"), cx),
     }

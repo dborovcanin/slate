@@ -107,6 +107,8 @@ pub struct LineView {
     pub chip: Option<String>,
     /// Search matches in the runs' characters; the current one is flagged.
     pub found: Vec<(Range<usize>, bool)>,
+    /// Lines folded away under this one.
+    pub folded: Option<usize>,
 }
 
 /// The matches of an in-note search.
@@ -161,6 +163,7 @@ pub struct NoteHost {
     pub working: Option<(String, String)>,
     /// The in-note search: matches to highlight and step through.
     pub find: Option<Find>,
+    pub folds: crate::folds::Folds,
     /// Preview mode: no cursor, so every line shows as rendered.
     pub preview: bool,
     /// Titles of all notes by id, for wiki-link display.
@@ -231,6 +234,7 @@ impl NoteHost {
             working: None,
             preview: false,
             find: None,
+            folds: Default::default(),
             titles: Default::default(),
             last_edit: None,
             insert_only: false,
@@ -278,6 +282,8 @@ impl NoteHost {
             .map(|n| n.title.clone())
             .unwrap_or_default();
         self.last_edit = None;
+        self.folds = Default::default();
+        self.find = None;
         self.recompute_calc();
     }
 
@@ -993,6 +999,7 @@ impl NoteHost {
             below,
             chip: None,
             found,
+            folded: self.folds.folded_lines(index),
         }
     }
 
@@ -1038,6 +1045,7 @@ impl NoteHost {
             below: None,
             chip: None,
             found: Vec::new(),
+            folded: None,
         };
         if table_syntax::is_delimiter_line_in(lines, index) {
             return view;

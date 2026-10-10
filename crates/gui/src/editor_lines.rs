@@ -353,6 +353,9 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                         .items_center()
                         .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
                         .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t, s.scale)))
+                        .when_some(line.folded, |d, n| {
+                            d.child(chip(&format!("▸ {n} lines"), t, s.sans))
+                        })
                         .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans))),
                 )
                 .into_any_element()
@@ -369,6 +372,9 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                     .child(text_with_cursor(line, s, layout)),
             )
             .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t, s.scale)))
+            .when_some(line.folded, |d, n| {
+                d.child(chip(&format!("▸ {n} lines"), t, s.sans))
+            })
             .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans)))
             .into_any_element(),
         LineKind::TableRow {
@@ -386,6 +392,9 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                     .items_center()
                     .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
                     .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t, s.scale)))
+                    .when_some(line.folded, |d, n| {
+                        d.child(chip(&format!("▸ {n} lines"), t, s.sans))
+                    })
                     .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans))),
             )
             .when(line.below.is_some(), |d| d.child(image_box(s.image, "", t)))

@@ -5,6 +5,7 @@ mod commands;
 mod completion;
 mod currency;
 mod editor_lines;
+mod folds;
 mod history;
 mod images;
 mod keys;

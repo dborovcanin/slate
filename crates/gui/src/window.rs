@@ -123,6 +123,8 @@ pub struct SlateWindow {
     pub(crate) currency: crate::currency::Currency,
     pub(crate) font_size: f32,
     pub(crate) clip_watch: crate::clipwatch::ClipWatch,
+    /// `z` was pressed: the next key picks a fold action.
+    fold_prefix: bool,
     sidebar_search: Option<SidebarSearch>,
     search_bar: Option<SearchBar>,
     /// The last search, for `n` and `N`.
@@ -174,6 +176,7 @@ impl SlateWindow {
             fences: Vec::new(),
             currency,
             clip_watch: Default::default(),
+            fold_prefix: false,
             font_size: settings.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE),
             sidebar_search: None,
             search_bar: None,
@@ -434,6 +437,12 @@ impl SlateWindow {
         if outcome.text_changed {
             // Match positions are stale after an edit; `n` searches again.
             self.host.find = None;
+            let first = outcome.first_changed_line.unwrap_or(0);
+            let delta = self.host.doc.lines().len() as isize - self.cache.len() as isize;
+            self.host.folds.edited(first, delta);
+        }
+        self.leave_hidden_lines(old_cursor);
+        if outcome.text_changed {
             let first = outcome
                 .first_changed_line
                 .unwrap_or_else(|| self.top_line());
@@ -890,6 +899,28 @@ impl SlateWindow {
     pub(crate) fn run_key_command(&mut self, command: KeyCommand, cx: &mut Context<Self>) {
         match command {
             KeyCommand::Vim(key) => {
+                // `za`, `zc`, `zo`: the terminal app's fold keys.
+                let prefix = std::mem::take(&mut self.fold_prefix);
+                let normal = self.mode == EditingMode::Vim
+                    && self.host.input.mode() == VimMode::Normal
+                    && self.host.input.pending_keys().is_empty();
+                if normal && prefix {
+                    let want = match key {
+                        VimKey::Char('a') => Some(None),
+                        VimKey::Char('c') => Some(Some(true)),
+                        VimKey::Char('o') => Some(Some(false)),
+                        _ => None,
+                    };
+                    if let Some(want) = want {
+                        self.fold(want, cx);
+                        return;
+                    }
+                } else if normal && key == VimKey::Char('z') {
+                    self.fold_prefix = true;
+                    self.set_status("z");
+                    cx.notify();
+                    return;
+                }
                 if !self.standard_type_over(key, cx) {
                     self.send_key(key, cx);
                 }
@@ -971,6 +1002,50 @@ impl SlateWindow {
                 cx.notify();
             }
         }
+    }
+
+    /// The cursor never rests on a line a fold hides.
+    fn leave_hidden_lines(&mut self, from: usize) {
+        if !self.host.folds.any() {
+            return;
+        }
+        self.host.folds.refresh(&self.host.doc);
+        let doc = &mut self.host.doc;
+        let last = doc.lines().len().saturating_sub(1);
+        let line = self
+            .host
+            .folds
+            .visible_line(doc.cursor_line, doc.cursor_line > from, last);
+        if line != doc.cursor_line {
+            doc.cursor_line = line;
+            doc.cursor_col = doc.cursor_col.min(doc.lines()[line].chars().count());
+        }
+    }
+
+    /// `za`, `zc`, `zo` and `:fold`, `:unfold`, `:fold-toggle`: fold the
+    /// block at the cursor (`None` toggles).
+    pub(crate) fn fold(&mut self, want: Option<bool>, cx: &mut Context<Self>) {
+        use crate::folds::Folded;
+        let line = self.host.doc.cursor_line;
+        let message = match self.host.folds.set(&self.host.doc, line, want) {
+            Folded::Changed { folded, lines } => {
+                let action = if folded { "folded" } else { "unfolded" };
+                self.leave_hidden_lines(line + 1);
+                // Rows hide or show: measure again, keeping the place.
+                let top = self.list.logical_scroll_top();
+                self.restyle();
+                self.list.reset(self.cache.len());
+                self.list.scroll_to(top);
+                self.reveal_cursor();
+                format!("fold: {action} {lines} lines")
+            }
+            Folded::Already(true) => "fold: already folded".to_string(),
+            Folded::Already(false) => "fold: already unfolded".to_string(),
+            Folded::NoBlock => "fold: no foldable block at cursor".to_string(),
+            Folded::TooLarge => "fold: the note is too large to fold".to_string(),
+        };
+        self.set_status(message);
+        cx.notify();
     }
 
     /// `/` or `Ctrl+F`: ask for a search term.
@@ -1385,6 +1460,10 @@ impl SlateWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.host.folds.hidden_by(ix).is_some() {
+            self.layouts.borrow_mut().remove(&ix);
+            return div().h(px(0.0)).into_any_element();
+        }
         let Some(line) = self.line(ix) else {
             return div().into_any_element();
         };
