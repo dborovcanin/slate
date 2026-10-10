@@ -459,7 +459,12 @@ impl SlateWindow {
         {
             return false;
         }
-        let open = self.completion.is_some();
+        // A popup with nothing to show does not take keys (Esc still closes it).
+        let exists = self.completion.is_some();
+        let open = self
+            .completion
+            .as_ref()
+            .is_some_and(|c| !c.items.is_empty());
         match ev.keystroke.key.as_str() {
             "down" | "up" if open && !m.shift => {
                 let delta = if ev.keystroke.key == "down" { 1 } else { -1 };
@@ -469,7 +474,7 @@ impl SlateWindow {
                 cx.notify();
                 true
             }
-            "escape" if open => {
+            "escape" if exists => {
                 self.dismiss_completion(cx);
                 true
             }

@@ -332,9 +332,13 @@ pub fn accept(host: &mut NoteHost, popup: &mut Completion) -> Option<Picked> {
         }
         Kind::Wiki { from, .. } => {
             let note_id = pick.note_id.clone()?;
-            let replacement = match &pick.heading {
-                Some(h) => format!("[[{note_id}#{h}]]"),
-                None => format!("[[{note_id}#]]"),
+            // A note without headings has nothing more to offer: finish
+            // the link instead of leaving an empty heading step open.
+            let finish = pick.heading.is_none() && host.heading_items(&note_id).is_empty();
+            let replacement = match (&pick.heading, finish) {
+                (Some(h), _) => format!("[[{note_id}#{h}]]"),
+                (None, true) => format!("[[{note_id}]]"),
+                (None, false) => format!("[[{note_id}#]]"),
             };
             // The link ends at the next `]]` after the cursor.
             let chars: Vec<char> = line.chars().collect();
@@ -346,13 +350,13 @@ pub fn accept(host: &mut NoteHost, popup: &mut Completion) -> Option<Picked> {
                 }
                 end += 1;
             }
-            let cursor = if pick.heading.is_some() {
+            let cursor = if pick.heading.is_some() || finish {
                 from + replacement.chars().count()
             } else {
                 from + 2 + note_id.chars().count() + 1
             };
             let outcome = host.replace_chars(from..end, &replacement, cursor);
-            if pick.heading.is_some() {
+            if pick.heading.is_some() || finish {
                 Some(Picked::Closed(outcome))
             } else {
                 if let Kind::Wiki { pending, .. } = &mut popup.kind {
@@ -392,4 +396,69 @@ pub fn cancel(host: &mut NoteHost, popup: &Completion) -> Option<InputOutcome> {
         return None;
     }
     Some(host.replace_chars(hash..end, "", hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host(notes: &[(&str, &str)]) -> (NoteHost, std::path::PathBuf) {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "slate-gui-complete-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = app_core::storage::Db::open(dir.join("notes.db")).unwrap();
+        for (id, body) in notes {
+            db.create_note_with_context(id, Default::default(), None, None)
+                .unwrap();
+            db.save_note(id, body).unwrap();
+        }
+        (NoteHost::open(db, Some("src")).unwrap(), dir)
+    }
+
+    fn type_link(h: &mut NoteHost) -> Completion {
+        h.input.vim.mode = VimMode::Insert;
+        h.doc.cursor_line = 0;
+        h.doc.cursor_col = 0;
+        for ch in "see ".chars().chain(['[', '[']) {
+            h.handle_key(editor_core::vim::VimKey::Char(ch));
+        }
+        open_wiki(h)
+    }
+
+    #[test]
+    fn picking_a_note_without_headings_finishes_the_link() {
+        let (mut h, dir) = host(&[("src", ""), ("plain", "just text, no headings")]);
+        let mut popup = type_link(&mut h);
+        popup.selected = popup
+            .items
+            .iter()
+            .position(|i| i.note_id.as_deref() == Some("plain"))
+            .expect("note offered");
+        let picked = accept(&mut h, &mut popup).expect("pick");
+        assert!(matches!(picked, Picked::Closed(_)), "no heading step");
+        assert_eq!(h.doc.lines()[0], "see [[plain]]");
+        assert_eq!(h.doc.cursor_col, "see [[plain]]".chars().count());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn picking_a_note_with_headings_offers_them() {
+        let (mut h, dir) = host(&[("src", ""), ("doc", "# Title\n## Part one\ntext")]);
+        let mut popup = type_link(&mut h);
+        popup.selected = popup
+            .items
+            .iter()
+            .position(|i| i.note_id.as_deref() == Some("doc"))
+            .expect("note offered");
+        let picked = accept(&mut h, &mut popup).expect("pick");
+        assert!(matches!(picked, Picked::Headings(_)));
+        assert_eq!(h.doc.lines()[0], "see [[doc#]]");
+        assert!(popup.items.iter().all(|i| i.heading.is_some()));
+        assert!(!popup.items.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
