@@ -147,6 +147,10 @@ pub fn apply_primitive_edit(
 ) -> BufferCursor {
     let from = prepared.edit.from;
     let to = prepared.edit.to;
+    debug_assert!(
+        lines.is_empty() || lines.get(from.0).map(String::len) == Some(prepared.edit.from_line_len),
+        "primitive edit applied to a buffer that changed after preparation"
+    );
     match prepared.mutation {
         Mutation::InsertChar(ch) => {
             if lines.is_empty() {
@@ -314,11 +318,7 @@ mod tests {
         assert_eq!(lines, vec!["éa\nb"]);
         assert_eq!(cursor.column, 6);
     }
-}
 
-#[cfg(test)]
-mod empty_buffer_tests {
-    use super::*;
     #[test]
     fn newline_initializes_an_empty_buffer() {
         let mut lines = Vec::new();

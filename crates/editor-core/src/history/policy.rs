@@ -32,6 +32,15 @@ pub enum UndoAction<R> {
     Reminder(R),
 }
 
+impl<M: Clone + Default> LineHistory<M> {
+    /// Normal/visual commands begin a step; mutations within one key may merge.
+    pub fn begin_input(&mut self, session: UndoSession) {
+        if session == UndoSession::Command {
+            self.break_coalescing();
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UndoPolicy<R> {
     actions: Vec<UndoAction<R>>,
@@ -51,17 +60,6 @@ impl<R> UndoPolicy<R> {
     pub fn clear(&mut self) {
         self.actions.clear();
         self.pos = 0;
-    }
-
-    /// Normal/visual commands begin a step; mutations within one key may merge.
-    pub fn begin_input<M: Clone + Default>(
-        &mut self,
-        history: &mut LineHistory<M>,
-        session: UndoSession,
-    ) {
-        if session == UndoSession::Command {
-            history.break_coalescing();
-        }
     }
 
     pub fn record_reminder(&mut self, payload: R) {

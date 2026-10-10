@@ -12,8 +12,10 @@ use super::render;
 use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
+use crate::editor_core::completion::VariableAutocompleteState;
 use crate::editor_core::history::policy::{UndoAction, UndoPolicy};
 use crate::editor_core::history::LineHistory;
+use crate::editor_core::vim_actions::{VimRegisterMode, VimRegisterValue as VimRegister};
 
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
@@ -190,51 +192,10 @@ enum VimPipelineResult {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VimRegisterMode {
-    Charwise,
-    Linewise,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct VimRegister {
-    text: String,
-    mode: VimRegisterMode,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VimMacroStep {
     Action(crate::editor_core::vim::VimAction),
     InsertKey(crate::editor_core::vim::VimKey),
-}
-
-impl Default for VimRegister {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            mode: VimRegisterMode::Charwise,
-        }
-    }
-}
-
-impl VimRegister {
-    fn charwise(text: String) -> Self {
-        Self {
-            text,
-            mode: VimRegisterMode::Charwise,
-        }
-    }
-
-    fn linewise(text: String) -> Self {
-        Self {
-            text,
-            mode: VimRegisterMode::Linewise,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.mode == VimRegisterMode::Charwise && self.text.is_empty()
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -304,8 +265,6 @@ struct CollectionEditDialogState {
     description: String,
     default_tags: String,
 }
-
-use crate::editor_core::completion::VariableAutocompleteState;
 
 #[derive(Debug, Clone, Default)]
 struct VariableAutocompletePopupState {
@@ -588,6 +547,21 @@ struct EditorModel {
     scroll_col: usize,
     selection_anchor: Option<(usize, usize)>, // (line, col)
     markdown_formatting_right_boundary_exit: Option<(usize, usize)>,
+}
+
+impl EditorModel {
+    /// The cursor as the core buffer APIs take it (character column).
+    fn cursor(&self) -> crate::editor_core::buffer::primitives::BufferCursor {
+        crate::editor_core::buffer::primitives::BufferCursor {
+            line: self.cursor_line,
+            column: self.cursor_col,
+        }
+    }
+
+    fn set_cursor(&mut self, cursor: crate::editor_core::buffer::primitives::BufferCursor) {
+        self.cursor_line = cursor.line;
+        self.cursor_col = cursor.column;
+    }
 }
 
 /// Note-switcher overlay state: the fuzzy query + result list, the reused

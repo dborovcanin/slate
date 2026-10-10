@@ -40,7 +40,7 @@ fn typing_boundary_insert_pauses_and_command_boundaries() {
         UndoSession::Insert,
     );
     assert_eq!(history.undo_depth(), 2);
-    policy.begin_input(&mut history, UndoSession::Command);
+    history.begin_input(UndoSession::Command);
     record(&mut policy, &mut history, "abcde", 0, UndoSession::Command);
     assert_eq!(history.undo_depth(), 3);
     assert_eq!(policy.undo_depth(), 3);

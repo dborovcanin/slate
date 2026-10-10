@@ -215,6 +215,11 @@ fn char_column_for_byte(text: &str, byte: usize) -> usize {
 }
 
 pub fn apply_word_delete(line: &mut String, range: WordDeleteRange) -> usize {
+    debug_assert_eq!(
+        line.len(),
+        range.edit.from_line_len,
+        "word deletion applied to a line that changed after preparation"
+    );
     line.replace_range(range.start_byte..range.end_byte, "");
     range.column
 }

@@ -66,10 +66,15 @@ pub fn prepare_plain_paste<'a>(
 /// Apply to the unchanged buffer used for preparation, after host metadata is
 /// recorded. Preserve the existing per-line insertion path and cursor placement.
 pub fn apply_plain_paste(lines: &mut Vec<String>, prepared: PreparedPaste<'_>) -> BufferCursor {
+    let line = prepared.delta.start_line;
+    debug_assert_eq!(
+        lines.get(line).map_or("", String::as_str),
+        prepared.current,
+        "paste applied to a buffer that changed after preparation"
+    );
     if lines.is_empty() {
         lines.push(String::new());
     }
-    let line = prepared.delta.start_line;
     let (left, right) = prepared.current.split_at(prepared.edit.from.1);
     if prepared.parts.len() == 1 {
         lines[line] = format!("{left}{}{right}", prepared.parts[0]);

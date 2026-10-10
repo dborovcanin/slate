@@ -86,7 +86,7 @@ impl TerminalApp {
             self.folds.pending_prefix_until = None;
         }
         let session = self.undo_session();
-        self.undo_policy.begin_input(&mut self.history, session);
+        self.history.begin_input(session);
         match self.mode {
             UiMode::DatePicker => self.handle_date_picker_key(db, key)?,
             UiMode::Editor => self.handle_editor_key(db, key)?,

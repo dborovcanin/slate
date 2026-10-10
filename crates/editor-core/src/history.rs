@@ -91,6 +91,14 @@ impl<M: Clone + Default> LineHistory<M> {
         self.max_entries == 0
     }
 
+    /// Forget which entry the last edit recorded, so marks and the undo
+    /// policy no longer attach to it.
+    fn clear_recorded(&mut self) {
+        self.recorded_entry = None;
+        self.recorded_new_entry = false;
+        self.recorded_eviction = false;
+    }
+
     #[cfg(test)]
     pub fn reset(&mut self, lines: &[String], cursor_line: usize, cursor_col: usize) {
         self.entries.clear();
@@ -108,15 +116,11 @@ impl<M: Clone + Default> LineHistory<M> {
             marks: M::default(),
         };
         self.coalesce_anchor = None;
-        self.recorded_entry = None;
-        self.recorded_new_entry = false;
-        self.recorded_eviction = false;
+        self.clear_recorded();
     }
 
     pub fn checkpoint(&mut self, lines: &[String], cursor_line: usize, cursor_col: usize) {
-        self.recorded_entry = None;
-        self.recorded_new_entry = false;
-        self.recorded_eviction = false;
+        self.clear_recorded();
         if self.disabled() {
             self.snapshot.lines.clear();
             self.snapshot.cursor = HistoryCursor {
@@ -150,9 +154,7 @@ impl<M: Clone + Default> LineHistory<M> {
     pub fn set_marks(&mut self, marks: M) {
         self.snapshot.marks = marks;
         self.coalesce_anchor = None;
-        self.recorded_entry = None;
-        self.recorded_new_entry = false;
-        self.recorded_eviction = false;
+        self.clear_recorded();
     }
 
     /// The marks the last recorded edit left: the step it created or merged
@@ -187,9 +189,7 @@ impl<M: Clone + Default> LineHistory<M> {
         cursor_col: usize,
         coalesce: bool,
     ) -> bool {
-        self.recorded_entry = None;
-        self.recorded_new_entry = false;
-        self.recorded_eviction = false;
+        self.clear_recorded();
         self.last_delta = None;
         if self.disabled() {
             self.snapshot.cursor = HistoryCursor {
@@ -279,9 +279,7 @@ impl<M: Clone + Default> LineHistory<M> {
         cursor_col: usize,
         delta: EditDelta,
     ) -> bool {
-        self.recorded_entry = None;
-        self.recorded_new_entry = false;
-        self.recorded_eviction = false;
+        self.clear_recorded();
         self.last_delta = None;
         if self.disabled() {
             self.snapshot.cursor = HistoryCursor {
@@ -358,9 +356,7 @@ impl<M: Clone + Default> LineHistory<M> {
     /// Steps back one entry; [`LineHistory::current_marks`] then holds the
     /// marks from before it.
     pub fn undo(&mut self, lines: &mut Vec<String>) -> Option<HistoryCursor> {
-        self.recorded_entry = None;
-        self.recorded_new_entry = false;
-        self.recorded_eviction = false;
+        self.clear_recorded();
         if self.disabled() {
             return None;
         }
@@ -390,9 +386,7 @@ impl<M: Clone + Default> LineHistory<M> {
     /// Steps forward one entry; [`LineHistory::current_marks`] then holds the
     /// marks from after it.
     pub fn redo(&mut self, lines: &mut Vec<String>) -> Option<HistoryCursor> {
-        self.recorded_entry = None;
-        self.recorded_new_entry = false;
-        self.recorded_eviction = false;
+        self.clear_recorded();
         if self.disabled() {
             return None;
         }

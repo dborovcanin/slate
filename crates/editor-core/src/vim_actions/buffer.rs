@@ -11,9 +11,15 @@ pub struct VisualSelectionPlan {
     pub exact_edit: Option<ExactTextEdit>,
     pub deleted_lines: Option<(usize, usize)>,
     replacement: Option<Vec<String>>,
+    source_line_count: usize,
 }
 impl VisualSelectionPlan {
     pub fn apply(self, lines: &mut Vec<String>) -> (VimRegisterValue, BufferCursor) {
+        debug_assert_eq!(
+            lines.len(),
+            self.source_line_count,
+            "visual plan applied to a buffer that changed after preparation"
+        );
         if let Some(replacement) = self.replacement {
             let end = self.delta.start_line + self.delta.old_span;
             lines.splice(self.delta.start_line..end, replacement);
@@ -133,6 +139,7 @@ pub fn prepare_visual_selection(
         exact_edit,
         deleted_lines,
         replacement,
+        source_line_count: lines.len(),
     })
 }
 

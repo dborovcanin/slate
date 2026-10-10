@@ -18,7 +18,7 @@ use crate::editor_core::buffer::paste::{
     prepare_plain_paste, prepare_table_cell_paste, prepare_table_import, table_paste_outside_code,
 };
 use crate::editor_core::buffer::primitives::{
-    apply_primitive_edit, prepare_primitive_edit, BufferCursor, PrimitiveEdit,
+    apply_primitive_edit, prepare_primitive_edit, PrimitiveEdit,
 };
 use crate::editor_core::buffer::words::{self, BackwardWordDelete};
 use crate::editor_core::buffer::{
@@ -216,11 +216,7 @@ impl TerminalApp {
         });
     }
 
-    fn record_history_after_edit(
-        &mut self,
-        grouping: UndoGrouping,
-        history_span: Option<(usize, usize, usize)>,
-    ) {
+    fn record_history_after_edit(&mut self, grouping: UndoGrouping, delta: Option<EditDelta>) {
         self.undo_policy.record_text(
             &mut self.history,
             &self.editor.lines,
@@ -228,11 +224,7 @@ impl TerminalApp {
                 line: self.editor.cursor_line,
                 col: self.editor.cursor_col,
             },
-            history_span.map(|(start_line, old_span, new_span)| EditDelta {
-                start_line,
-                old_span,
-                new_span,
-            }),
+            delta,
             grouping,
         );
         self.move_reminders_with_recorded_edit();
@@ -1058,7 +1050,7 @@ impl TerminalApp {
     pub(super) fn mark_edited_from_line_with_span(
         &mut self,
         changed_from_line: usize,
-        history_span: Option<(usize, usize, usize)>,
+        delta: Option<EditDelta>,
     ) {
         let grouping = UndoGrouping {
             session: self.undo_session(),
@@ -1101,10 +1093,10 @@ impl TerminalApp {
             CalcAfterEdit::ViewportRefresh => self.refresh_viewport_calc_after_edit(),
             CalcAfterEdit::RemapOrRecompute => {
                 if !self.try_remap_calc_results_after_structural_edit() {
-                    self.recompute_calc_after_edit(history_span);
+                    self.recompute_calc_after_edit(delta);
                 }
             }
-            CalcAfterEdit::RecomputeRange => self.recompute_calc_after_edit(history_span),
+            CalcAfterEdit::RecomputeRange => self.recompute_calc_after_edit(delta),
             CalcAfterEdit::ScheduleIdle => {
                 // Keep large-note typing non-blocking: schedule calc for
                 // the next idle tick and clear only the edited line's
@@ -1118,8 +1110,10 @@ impl TerminalApp {
                 }
                 // Keep the edited lines' metadata current so a later
                 // structural edit diffs against what is actually there.
-                let (start, span) = match history_span {
-                    Some((start, old_span, new_span)) if old_span == new_span => (start, new_span),
+                let (start, span) = match delta {
+                    Some(delta) if delta.old_span == delta.new_span => {
+                        (delta.start_line, delta.new_span)
+                    }
                     _ => (self.editor.cursor_line, 1),
                 };
                 // Without metadata yet (viewport notes build it at idle),
@@ -1137,28 +1131,32 @@ impl TerminalApp {
         }
         // Splices are only meaningful for the edit that recorded them.
         self.calc.pending_result_splices.clear();
-        self.record_history_after_edit(grouping, history_span);
+        self.record_history_after_edit(grouping, delta);
         self.last_edit = Instant::now();
     }
 
     /// Recomputes calc now, or once the key being handled is done when it may
     /// edit again (autoformat after the typed text). The edited lines'
     /// metadata is kept current so that recompute sees every edit.
-    fn recompute_calc_after_edit(&mut self, history_span: Option<(usize, usize, usize)>) {
+    fn recompute_calc_after_edit(&mut self, delta: Option<EditDelta>) {
         if self.key_depth == 0 {
             self.run_calc_recompute();
             return;
         }
         self.ensure_calc_line_metadata();
-        if let Some((start, old_span, new_span)) = history_span {
-            if old_span == new_span {
-                for line_idx in start..start + new_span {
+        if let Some(delta) = delta {
+            if delta.old_span == delta.new_span {
+                for line_idx in delta.start_line..delta.start_line + delta.new_span {
                     self.refresh_calc_line_metadata_at(line_idx);
                 }
             }
         }
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.calc_recompute_after_key = true;
+    }
+
+    pub(super) fn mark_edited_with_delta(&mut self, delta: EditDelta) {
+        self.mark_edited_from_line_with_span(delta.start_line, Some(delta));
     }
 
     pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {
@@ -1174,7 +1172,11 @@ impl TerminalApp {
             .editor
             .cursor_line
             .min(self.editor.lines.len().saturating_sub(1));
-        self.mark_edited_from_line_with_span(changed_line, Some((changed_line, 1, 1)));
+        self.mark_edited_with_delta(EditDelta {
+            start_line: changed_line,
+            old_span: 1,
+            new_span: 1,
+        });
     }
 
     fn apply_reminder_state(
@@ -1815,10 +1817,7 @@ impl TerminalApp {
 
     fn move_cursor_word(&mut self, forward: bool) {
         let current_virtual = self.current_virtual_line();
-        let cursor = BufferCursor {
-            line: self.editor.cursor_line,
-            column: self.editor.cursor_col,
-        };
+        let cursor = self.editor.cursor();
         let tables = self.note_table_module_enabled();
         let after = if forward {
             let neighbors = (current_virtual + 1..self.visible_line_count())
@@ -1830,8 +1829,7 @@ impl TerminalApp {
                 .map_while(|line| self.real_line_for_virtual(line));
             words::move_cursor_left_word(&self.editor.lines, cursor, tables, neighbors)
         };
-        self.editor.cursor_line = after.line;
-        self.editor.cursor_col = after.column;
+        self.editor.set_cursor(after);
     }
 
     pub(super) fn move_cursor_left_word(&mut self) {
@@ -1845,10 +1843,7 @@ impl TerminalApp {
     pub(super) fn delete_word_backward(&mut self) -> bool {
         let Some(plan) = words::prepare_backward_word_delete(
             &self.editor.lines,
-            BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
+            self.editor.cursor(),
             self.note_table_module_enabled(),
         ) else {
             return false;
@@ -1859,10 +1854,7 @@ impl TerminalApp {
                 let delta = range.delta;
                 self.editor.cursor_col = words::apply_word_delete(self.current_line_mut(), range);
                 self.refresh_calc_line_metadata_at(delta.start_line);
-                self.mark_edited_from_line_with_span(
-                    delta.start_line,
-                    Some((delta.start_line, delta.old_span, delta.new_span)),
-                );
+                self.mark_edited_with_delta(delta);
                 self.prune_empty_table_continuation_row_at_cursor();
             }
         }
@@ -1873,14 +1865,7 @@ impl TerminalApp {
         &mut self,
         primitive: PrimitiveEdit<'_>,
     ) -> Option<crate::editor_core::buffer::EditDelta> {
-        let prepared = prepare_primitive_edit(
-            &self.editor.lines,
-            BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
-            primitive,
-        )?;
+        let prepared = prepare_primitive_edit(&self.editor.lines, self.editor.cursor(), primitive)?;
         let delta = prepared.delta;
         // Preserve the existing structural reminder callbacks before mutation.
         // Same-line character edits leave line-attached marks in place.
@@ -1889,8 +1874,7 @@ impl TerminalApp {
             self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
         }
         let cursor = apply_primitive_edit(&mut self.editor.lines, prepared);
-        self.editor.cursor_line = cursor.line;
-        self.editor.cursor_col = cursor.column;
+        self.editor.set_cursor(cursor);
         Some(delta)
     }
 
@@ -1919,10 +1903,7 @@ impl TerminalApp {
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
         let Some(edit) = prepare_table_cell_paste(
             &self.editor.lines,
-            BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
+            self.editor.cursor(),
             normalized,
             self.note_table_module_enabled(),
             &mut self.table_format_cache,
@@ -1934,8 +1915,7 @@ impl TerminalApp {
         let start = edit.start;
         self.note_block_replace(start, replaced_count, &edit.lines);
         let cursor = apply_table_cell_paste(&mut self.editor.lines, edit);
-        self.editor.cursor_line = cursor.line;
-        self.editor.cursor_col = cursor.column;
+        self.editor.set_cursor(cursor);
         self.splice_calc_line_metadata(start, replaced_count, inserted_count);
         self.mark_edited_from_line(start);
         true
@@ -1949,14 +1929,9 @@ impl TerminalApp {
         if self.try_insert_table_cell_multiline_paste(&normalized) {
             return;
         }
-        let Some(prepared) = prepare_plain_paste(
-            &self.editor.lines,
-            BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
-            &normalized,
-        ) else {
+        let Some(prepared) =
+            prepare_plain_paste(&self.editor.lines, self.editor.cursor(), &normalized)
+        else {
             return;
         };
         let delta = prepared.delta;
@@ -1965,8 +1940,7 @@ impl TerminalApp {
             self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
         }
         let cursor = apply_plain_paste(&mut self.editor.lines, prepared);
-        self.editor.cursor_line = cursor.line;
-        self.editor.cursor_col = cursor.column;
+        self.editor.set_cursor(cursor);
         self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
         self.mark_edited_from_line(delta.start_line);
     }
@@ -2044,16 +2018,9 @@ impl TerminalApp {
         let Some(table) = self.pasted_table(text) else {
             return false;
         };
-        let (block, cursor) = prepare_table_import(
-            &table,
-            self.current_line(),
-            BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
-        );
-        self.editor.cursor_line = cursor.line;
-        self.editor.cursor_col = cursor.column;
+        let (block, cursor) =
+            prepare_table_import(&table, self.current_line(), self.editor.cursor());
+        self.editor.set_cursor(cursor);
         self.insert_paste(&block);
         self.status = "pasted as table".to_string();
         true
@@ -2073,8 +2040,12 @@ impl TerminalApp {
         }
         let line = self.current_line();
         // Cross-note prefix takes priority: [[ID]].partial
-        if let Some((dep_id, bracket_col, from_col, partial)) =
-            extract_cross_note_completion_prefix(line, self.editor.cursor_col)
+        if let Some(crate::editor_core::completion::CrossNoteCompletionPrefix {
+            note_id: dep_id,
+            bracket_col,
+            from_col,
+            partial,
+        }) = extract_cross_note_completion_prefix(line, self.editor.cursor_col)
         {
             if !self.note_variables_module_enabled() {
                 return None;
@@ -2697,10 +2668,11 @@ impl TerminalApp {
             if !(old_line_span == 1 && new_line_span == 1 && from_line == self.editor.cursor_line) {
                 self.folds.rescan_pending = true;
             }
-            self.mark_edited_from_line_with_span(
-                from_line,
-                Some((from_line, old_line_span, new_line_span)),
-            );
+            self.mark_edited_with_delta(EditDelta {
+                start_line: from_line,
+                old_span: old_line_span,
+                new_span: new_line_span,
+            });
             self.adjust_cursor_after_operation(op);
             self.adjust_scroll();
             return;
@@ -2771,10 +2743,11 @@ impl TerminalApp {
             self.editor.cursor_col = char_col_at_byte(line, line_byte);
         }
         self.folds.rescan_pending = true;
-        self.mark_edited_from_line_with_span(
-            changed_from_line,
-            Some((changed_from_line, old_line_span, new_line_span)),
-        );
+        self.mark_edited_with_delta(EditDelta {
+            start_line: changed_from_line,
+            old_span: old_line_span,
+            new_span: new_line_span,
+        });
         self.adjust_cursor_after_operation(op);
         self.adjust_scroll();
     }
@@ -2861,10 +2834,7 @@ impl TerminalApp {
             return;
         }
         self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
-        self.mark_edited_from_line_with_span(
-            delta.start_line,
-            Some((delta.start_line, delta.old_span, delta.new_span)),
-        );
+        self.mark_edited_with_delta(delta);
     }
 
     pub(super) fn delete_forward(&mut self) {
@@ -2881,10 +2851,7 @@ impl TerminalApp {
             return;
         }
         self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
-        self.mark_edited_from_line_with_span(
-            delta.start_line,
-            Some((delta.start_line, delta.old_span, delta.new_span)),
-        );
+        self.mark_edited_with_delta(delta);
     }
 
     pub(super) fn try_shared_table_cursor_motion(
@@ -3003,15 +2970,11 @@ impl TerminalApp {
             .and_then(|idx| self.real_line_for_virtual(idx));
         let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
             &self.editor.lines,
-            crate::editor_core::buffer::primitives::BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
+            self.editor.cursor(),
             false,
             neighbour,
         );
-        self.editor.cursor_line = cursor.line;
-        self.editor.cursor_col = cursor.column;
+        self.editor.set_cursor(cursor);
     }
 
     pub(super) fn move_cursor_right(&mut self) {
@@ -3041,10 +3004,7 @@ impl TerminalApp {
         let neighbour = self.real_line_for_virtual(current_virtual + 1);
         let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
             &self.editor.lines,
-            crate::editor_core::buffer::primitives::BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
+            self.editor.cursor(),
             true,
             neighbour,
         );
@@ -3054,8 +3014,7 @@ impl TerminalApp {
             } else {
                 None
             };
-        self.editor.cursor_line = cursor.line;
-        self.editor.cursor_col = cursor.column;
+        self.editor.set_cursor(cursor);
     }
 
     /// Cell positions of the cursor line's chars (see

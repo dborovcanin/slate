@@ -97,10 +97,22 @@ pub fn build_variable_suggestions(
     matches
 }
 
+/// A `[[ID]].partial` reference being typed before the cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossNoteCompletionPrefix {
+    pub note_id: String,
+    /// Character column of the opening `[[`, used to anchor the popup.
+    pub bracket_col: usize,
+    /// Character column where the typed variable name starts.
+    pub from_col: usize,
+    /// Typed variable name, trimmed and lowercased.
+    pub partial: String,
+}
+
 pub fn extract_cross_note_completion_prefix(
     line_text: &str,
     cursor_col: usize,
-) -> Option<(String, usize, usize, String)> {
+) -> Option<CrossNoteCompletionPrefix> {
     use regex::Regex;
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -124,7 +136,12 @@ pub fn extract_cross_note_completion_prefix(
     let partial_chars = partial_raw.chars().count();
     let from_col = col.saturating_sub(partial_chars);
 
-    Some((note_id, bracket_col, from_col, partial))
+    Some(CrossNoteCompletionPrefix {
+        note_id,
+        bracket_col,
+        from_col,
+        partial,
+    })
 }
 
 pub fn parse_wiki_link_query(query: &str) -> Option<(&str, Option<&str>)> {
@@ -280,7 +297,15 @@ mod tests {
     #[test]
     fn qualified_prefix_and_export_matching_preserve_unicode_names() {
         let prefix = extract_cross_note_completion_prefix("é [[NOTE_1]].Tax ra", 19).unwrap();
-        assert_eq!(prefix, ("NOTE_1".into(), 2, 13, "tax ra".into()));
+        assert_eq!(
+            prefix,
+            CrossNoteCompletionPrefix {
+                note_id: "NOTE_1".into(),
+                bracket_col: 2,
+                from_col: 13,
+                partial: "tax ra".into(),
+            }
+        );
         assert_eq!(
             cross_note_suggestions(
                 [

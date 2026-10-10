@@ -142,17 +142,7 @@ impl TerminalApp {
         if self.clipboard.is_empty() {
             return None;
         }
-        Some(crate::editor_core::vim_actions::VimRegisterValue {
-            text: self.clipboard.text.clone(),
-            mode: match self.clipboard.mode {
-                VimRegisterMode::Charwise => {
-                    crate::editor_core::vim_actions::VimRegisterMode::Charwise
-                }
-                VimRegisterMode::Linewise => {
-                    crate::editor_core::vim_actions::VimRegisterMode::Linewise
-                }
-            },
-        })
+        Some(self.clipboard.clone())
     }
 
     pub(super) fn try_execute_shared_vim_action(
@@ -222,18 +212,6 @@ impl TerminalApp {
             self.apply_edit_operation(operation);
         }
         if let Some(register) = result.register {
-            let mode = match register.mode {
-                crate::editor_core::vim_actions::VimRegisterMode::Charwise => {
-                    VimRegisterMode::Charwise
-                }
-                crate::editor_core::vim_actions::VimRegisterMode::Linewise => {
-                    VimRegisterMode::Linewise
-                }
-            };
-            let register = VimRegister {
-                text: register.text,
-                mode,
-            };
             if mirror_register_to_system_clipboard {
                 let _ = self.set_clipboard_register(register);
             } else {
@@ -293,10 +271,7 @@ impl TerminalApp {
             .unwrap_or((self.editor.cursor_line, self.editor.cursor_col));
         let Some(plan) = crate::editor_core::vim_actions::buffer::prepare_visual_selection(
             &self.editor.lines,
-            BufferCursor {
-                line: self.editor.cursor_line,
-                column: self.editor.cursor_col,
-            },
+            self.editor.cursor(),
             BufferCursor {
                 line: anchor.0,
                 column: anchor.1,
@@ -314,19 +289,7 @@ impl TerminalApp {
             self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
         }
         let (register, cursor) = plan.apply(&mut self.editor.lines);
-        self.editor.cursor_line = cursor.line;
-        self.editor.cursor_col = cursor.column;
-        let register = VimRegister {
-            text: register.text,
-            mode: match register.mode {
-                crate::editor_core::vim_actions::VimRegisterMode::Linewise => {
-                    VimRegisterMode::Linewise
-                }
-                crate::editor_core::vim_actions::VimRegisterMode::Charwise => {
-                    VimRegisterMode::Charwise
-                }
-            },
-        };
+        self.editor.set_cursor(cursor);
         if delete {
             let _ = self.set_vim_register(register);
         } else {
@@ -344,7 +307,7 @@ impl TerminalApp {
         if delete {
             self.mark_edited_from_line_with_span(
                 history_delta.map_or(self.editor.cursor_line, |delta| delta.start_line),
-                history_delta.map(|delta| (delta.start_line, delta.old_span, delta.new_span)),
+                history_delta,
             );
         }
         true

@@ -141,6 +141,11 @@ pub fn apply_text_change_in_place(
 ) -> EditDelta {
     let from_line = prepared.edit.from.0;
     let to_line = prepared.edit.to.0;
+    debug_assert!(
+        lines.is_empty()
+            || lines.get(from_line).map(String::len) == Some(prepared.edit.from_line_len),
+        "text change applied to a buffer that changed after preparation"
+    );
     if from_line <= to_line && from_line < lines.len() {
         let end = to_line.min(lines.len().saturating_sub(1));
         lines.splice(from_line..=end, prepared.replacement);
