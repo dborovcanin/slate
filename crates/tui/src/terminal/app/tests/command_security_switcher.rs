@@ -158,7 +158,7 @@ fn apply_edit_operation_single_line_change_updates_in_place() {
     app.apply_edit_operation(&op);
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["aXYZa".to_string(), "beta".to_string()]
     );
     assert_eq!(app.editor.cursor_line, 0);
@@ -187,7 +187,7 @@ fn apply_edit_operation_cross_line_change_still_merges_lines() {
     };
     app.apply_edit_operation(&op);
 
-    assert_eq!(app.editor.lines, vec!["alphabeta".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["alphabeta".to_string()]);
     assert_eq!(app.editor.cursor_line, 0);
     assert_eq!(app.editor.cursor_col, 5);
 
@@ -215,7 +215,7 @@ fn apply_edit_operation_multiline_insert_updates_lines_directly() {
     app.apply_edit_operation(&op);
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["start a".to_string(), "b".to_string(), "end".to_string()]
     );
     assert_eq!(app.editor.cursor_line, 2);
@@ -252,7 +252,7 @@ fn apply_edit_operation_multi_change_updates_lines_without_full_rebuild() {
     app.apply_edit_operation(&op);
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec![
             "Alpha".to_string(),
             "beta".to_string(),
@@ -278,7 +278,7 @@ fn editor_paste_multiline_inserts_as_single_bulk_edit() {
         .expect("paste applies");
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["start a".to_string(), "b".to_string(), "end".to_string()]
     );
     assert_eq!(app.editor.cursor_line, 2);
@@ -307,14 +307,17 @@ fn write_command_saves_active_note_without_quit() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
-    app.editor.lines = vec!["one updated".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["one updated".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
 
     app.execute_terminal_command(&db, "w");
 
     assert_eq!(app.status, "written");
     assert!(!app.quit);
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     let persisted = db
         .get_note("n1")
         .expect("note lookup")
@@ -359,17 +362,20 @@ fn write_command_syncs_markdown_file_backed_note() {
         )),
     )
     .expect("terminal app");
-    assert_eq!(app.editor.lines, vec!["file body".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["file body".to_string()]);
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
-    app.editor.lines = vec!["updated body".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["updated body".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
 
     app.execute_terminal_command(&db, "w");
 
     assert_eq!(app.status, "written");
     assert!(!app.quit);
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     assert_eq!(
         fs::read_to_string(&markdown_path).expect("markdown read"),
         "updated body"
@@ -388,15 +394,18 @@ fn write_command_detects_conflict_and_w_bang_forces_db_save() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
-    app.editor.lines = vec!["local body".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["local body".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
 
     db.save_note("n1", "external body")
         .expect("external save should succeed");
 
     app.execute_terminal_command(&db, "w");
     assert!(app.status.contains("use :w!"));
-    assert!(app.dirty);
+    assert!(app.session.dirty());
     let persisted = db
         .get_note("n1")
         .expect("note lookup")
@@ -405,7 +414,7 @@ fn write_command_detects_conflict_and_w_bang_forces_db_save() {
 
     app.execute_terminal_command(&db, "w!");
     assert_eq!(app.status, "written");
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     let persisted_forced = db
         .get_note("n1")
         .expect("note lookup")
@@ -452,14 +461,17 @@ fn write_command_detects_conflict_and_w_bang_forces_file_save() {
     .expect("terminal app");
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
-    app.editor.lines = vec!["local body".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["local body".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
 
     fs::write(&markdown_path, "external body").expect("external write");
 
     app.execute_terminal_command(&db, "w");
     assert!(app.status.contains("use :w!"));
-    assert!(app.dirty);
+    assert!(app.session.dirty());
     assert_eq!(
         fs::read_to_string(&markdown_path).expect("markdown read"),
         "external body"
@@ -467,7 +479,7 @@ fn write_command_detects_conflict_and_w_bang_forces_file_save() {
 
     app.execute_terminal_command(&db, "w!");
     assert_eq!(app.status, "written");
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     assert_eq!(
         fs::read_to_string(&markdown_path).expect("markdown read"),
         "local body"
@@ -484,14 +496,17 @@ fn write_quit_command_saves_then_exits() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
-    app.editor.lines = vec!["one updated".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["one updated".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
 
     app.execute_terminal_command(&db, "wq");
 
     assert_eq!(app.status, "written");
     assert!(app.quit);
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     let persisted = db
         .get_note("n1")
         .expect("note lookup")
@@ -507,15 +522,18 @@ fn write_quit_command_saves_then_exits() {
 fn autosave_disabled_only_write_command_persists_changes() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Editor;
-    app.editor.lines = vec!["one updated".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["one updated".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.autosave_enabled = false;
     app.last_edit =
         Instant::now() - Duration::from_millis(crate::terminal::app::AUTOSAVE_DEBOUNCE_MS + 5);
 
     app.maybe_autosave(&db)
         .expect("autosave-disabled idle tick should not fail");
-    assert!(app.dirty);
+    assert!(app.session.dirty());
     let persisted_before = db
         .get_note("n1")
         .expect("note lookup")
@@ -535,7 +553,7 @@ fn autosave_disabled_only_write_command_persists_changes() {
     app.command_bar_from_normal = true;
     app.execute_terminal_command(&db, "w");
     assert_eq!(app.status, "written");
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     let persisted_after_write = db
         .get_note("n1")
         .expect("note lookup")
@@ -551,15 +569,18 @@ fn autosave_disabled_only_write_command_persists_changes() {
 fn ctrl_s_in_normal_mode_still_saves_when_autosave_is_disabled() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Normal;
-    app.editor.lines = vec!["one updated".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["one updated".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.autosave_enabled = false;
 
     app.handle_normal_key(&db, Key::Ctrl('s'))
         .expect("ctrl+s in normal mode should save");
 
     assert_eq!(app.status, "saved n1");
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     let persisted = db
         .get_note("n1")
         .expect("note lookup")
@@ -694,7 +715,7 @@ fn module_commands_update_and_persist_note_modules() {
     );
     assert!(!app.active_note.modules.variables);
     assert!(!app.variable_autocomplete_popup.visible);
-    assert!(app.calc.variable_names.is_empty());
+    assert!(app.session.calc().variable_names.is_empty());
 
     let persisted = db
         .get_note("n1")
@@ -724,7 +745,7 @@ fn module_math_toggle_disables_calc_tab_path() {
     app.execute_terminal_command(&db, "module math off");
     app.handle_editor_key(&db, Key::Tab)
         .expect("tab falls back when math module is off");
-    assert_eq!(app.editor.lines[0], "1 + 1  ");
+    assert_eq!(app.editor.lines()[0], "1 + 1  ");
 
     drop(app);
     drop(db);
@@ -761,7 +782,7 @@ fn module_style_toggle_disables_enter_autoformat_rules() {
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter uses plain newline when style module is off");
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["- [ ] task".to_string(), String::new()]
     );
 
@@ -781,9 +802,9 @@ fn module_style_off_keeps_table_autoformat_when_table_module_is_on() {
     app.handle_editor_key(&db, Key::Char('0'))
         .expect("typing still triggers table autoformat");
 
-    assert_ne!(app.editor.lines[2], "|1|20|");
-    assert!(app.editor.lines[2].contains("20"));
-    assert!(app.editor.lines[2].starts_with("| "));
+    assert_ne!(app.editor.lines()[2], "|1|20|");
+    assert!(app.editor.lines()[2].contains("20"));
+    assert!(app.editor.lines()[2].starts_with("| "));
 
     drop(app);
     drop(db);
@@ -847,12 +868,12 @@ fn note_encrypt_and_decrypt_ask_for_the_password_in_a_masked_dialog() {
     run_keys(&mut app, &db, &[Key::Backspace, Key::Backspace]);
     enter_password(&mut app, &db, "different");
     assert!(app.status.contains("passwords differ"));
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::None);
     // A mismatch starts over from the first entry.
     enter_password(&mut app, &db, "enc123");
     enter_password(&mut app, &db, "enc123");
     assert!(app.note_password_dialog.is_none());
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::Encrypted);
     assert_eq!(app.status, "note encrypted at rest");
     assert!(db.unlock_note("n1", "visible").is_err());
 
@@ -860,15 +881,15 @@ fn note_encrypt_and_decrypt_ask_for_the_password_in_a_masked_dialog() {
     app.execute_terminal_command(&db, "decrypt-note");
     enter_password(&mut app, &db, "wrong");
     assert!(app.status.contains("invalid password"), "{}", app.status);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::Encrypted);
     app.execute_terminal_command(&db, "note decrypt");
     run_keys(&mut app, &db, &[Key::Char('x'), Key::Esc]);
     assert!(app.note_password_dialog.is_none());
     assert_eq!(app.status, "note decrypt cancelled");
     app.execute_terminal_command(&db, "note decrypt");
     enter_password(&mut app, &db, "enc123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
-    assert_eq!(app.editor.lines, vec!["classified".to_string()]);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::None);
+    assert_eq!(app.editor.lines(), vec!["classified".to_string()]);
     assert_eq!(
         app.status,
         "note decrypted; stored without at-rest encryption"
@@ -897,7 +918,7 @@ fn new_note_in_a_locked_encrypted_working_collection_is_refused_not_fatal() {
     db.unlock_collection(&vault.id, "pw").expect("unlock");
     app.handle_key(&db, Key::Ctrl('n')).expect("new note");
     assert_ne!(app.active_note.id, "n1");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::Encrypted);
     assert_eq!(app.active_note_key_collection.as_deref(), Some("Vault"));
 
     drop((app, db, other));
@@ -910,15 +931,15 @@ fn locked_notes_block_edits_and_ask_for_the_password() {
     encrypt_elsewhere(&path, "n1", "pass123");
     let note = db.get_note("n1").expect("lookup").expect("exists");
     app.set_active_note(&db, note).expect("reopen note");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
-    assert!(!app.active_note.is_unlocked);
-    assert_eq!(app.editor.lines, vec![String::new()]);
-    assert!(!app.dirty);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::Encrypted);
+    assert!(!app.session.is_unlocked());
+    assert_eq!(app.editor.lines(), vec![String::new()]);
+    assert!(!app.session.dirty());
 
     app.handle_editor_key(&db, Key::Char('x'))
         .expect("locked edit should not fail");
-    assert_eq!(app.editor.lines, vec![String::new()]);
-    assert!(!app.dirty);
+    assert_eq!(app.editor.lines(), vec![String::new()]);
+    assert!(!app.session.dirty());
     assert_eq!(app.mode, UiMode::Switcher);
     assert_eq!(
         app.switcher
@@ -931,7 +952,7 @@ fn locked_notes_block_edits_and_ask_for_the_password() {
     // Dismissed, a failing autosave asks again.
     run_keys(&mut app, &db, &[Key::Esc, Key::Ctrl('p')]);
     assert_eq!(app.mode, UiMode::Editor);
-    app.dirty = true;
+    app.session.set_dirty_for_tests(true);
     app.last_edit =
         Instant::now() - Duration::from_millis(crate::terminal::app::AUTOSAVE_DEBOUNCE_MS + 5);
     app.maybe_autosave(&db)
@@ -946,8 +967,8 @@ fn locked_notes_block_edits_and_ask_for_the_password() {
         &[Key::Paste("pass123".to_string()), Key::Enter],
     );
     assert_eq!(app.mode, UiMode::Normal);
-    assert!(app.active_note.is_unlocked);
-    assert_eq!(app.editor.lines, vec!["top secret".to_string()]);
+    assert!(app.session.is_unlocked());
+    assert_eq!(app.editor.lines(), vec!["top secret".to_string()]);
 
     drop(app);
     drop(db);
@@ -1851,9 +1872,9 @@ fn normal_mode_movement_does_not_trigger_table_autoformat() {
 
     run_keys(&mut app, &db, &[Key::Char('l')]);
 
-    assert_eq!(app.editor.lines[0], "|a|b|".to_string());
-    assert_eq!(app.editor.lines[1], "|---|---|".to_string());
-    assert_eq!(app.editor.lines[2], "|1|2|".to_string());
+    assert_eq!(app.editor.lines()[0], "|a|b|".to_string());
+    assert_eq!(app.editor.lines()[1], "|---|---|".to_string());
+    assert_eq!(app.editor.lines()[2], "|1|2|".to_string());
 
     drop(app);
     drop(db);
@@ -2790,11 +2811,11 @@ fn today_command_opens_the_daily_note_with_cursor_at_the_end() {
         app.active_note.id
     );
     assert!(
-        app.editor.lines[0].starts_with("# "),
+        app.editor.lines()[0].starts_with("# "),
         "template heading: {:?}",
-        app.editor.lines
+        app.editor.lines()
     );
-    assert_eq!(app.editor.cursor_line, app.editor.lines.len() - 1);
+    assert_eq!(app.editor.cursor_line, app.editor.lines().len() - 1);
 
     // Running it again returns to the same note instead of creating another.
     let first_id = app.active_note.id.clone();
@@ -2813,15 +2834,18 @@ fn past_autosave_debounce() -> Instant {
 #[test]
 fn autosave_writes_on_a_background_thread() {
     let (db, mut app, path) = app_with_note("one");
-    app.editor.lines = vec!["one updated".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["one updated".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.last_edit = past_autosave_debounce();
 
     app.maybe_autosave(&db).expect("idle tick");
     assert!(app.background_save.is_some(), "save runs in the background");
     app.poll_background_save(&db, true);
 
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     assert!(app.status.starts_with("autosaved"));
     let persisted = db.get_note("n1").expect("lookup").expect("note");
     assert_eq!(persisted.body, "one updated");
@@ -2834,22 +2858,29 @@ fn autosave_writes_on_a_background_thread() {
 #[test]
 fn edits_during_a_background_autosave_are_saved_next() {
     let (db, mut app, path) = app_with_note("one");
-    app.editor.lines = vec!["two".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["two".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.last_edit = past_autosave_debounce();
     app.maybe_autosave(&db).expect("first autosave starts");
 
     // Typed while the first write is in flight.
-    app.editor.lines = vec!["three".to_string()];
-    app.editor.joined_text_cache = None;
+    {
+        let replacement: Vec<String> = vec!["three".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.editor.clear_joined_text_cache();
+    app.session.note_changed_for_tests();
     app.last_edit = Instant::now();
     app.poll_background_save(&db, true);
-    assert!(app.dirty, "the newer text is still unsaved");
+    assert!(app.session.dirty(), "the newer text is still unsaved");
 
     app.last_edit = past_autosave_debounce();
     app.maybe_autosave(&db).expect("second autosave starts");
     app.poll_background_save(&db, true);
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     let persisted = db.get_note("n1").expect("lookup").expect("note");
     assert_eq!(persisted.body, "three");
 
@@ -2872,8 +2903,11 @@ fn wait_for_background_write(db: &Db, note_id: &str, body: &str) {
 #[test]
 fn module_command_after_an_unpolled_autosave_keeps_the_newer_revision() {
     let (db, mut app, path) = app_with_note("one");
-    app.editor.lines = vec!["two".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["two".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.last_edit = past_autosave_debounce();
     app.maybe_autosave(&db).expect("autosave starts");
     wait_for_background_write(&db, "n1", "two");
@@ -2885,11 +2919,14 @@ fn module_command_after_an_unpolled_autosave_keeps_the_newer_revision() {
     app.execute_terminal_command(&db, "modules variables off");
     app.poll_background_save(&db, false);
     let persisted = db.get_note("n1").expect("lookup").expect("note");
-    assert_eq!(app.active_note.updated_at, persisted.updated_at);
+    assert_eq!(app.session.stored_revision(), persisted.updated_at);
 
-    app.editor.lines = vec!["three".to_string()];
-    app.editor.joined_text_cache = None;
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["three".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.editor.clear_joined_text_cache();
+    app.session.set_dirty_for_tests(true);
     app.save(&db).expect("save without a false conflict");
     let persisted = db.get_note("n1").expect("lookup").expect("note");
     assert_eq!(persisted.body, "three");
@@ -2902,8 +2939,11 @@ fn module_command_after_an_unpolled_autosave_keeps_the_newer_revision() {
 #[test]
 fn finished_autosave_does_not_roll_back_a_newer_revision() {
     let (db, mut app, path) = app_with_note("one");
-    app.editor.lines = vec!["two".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["two".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.last_edit = past_autosave_debounce();
     app.maybe_autosave(&db).expect("autosave starts");
     wait_for_background_write(&db, "n1", "two");
@@ -2913,9 +2953,10 @@ fn finished_autosave_does_not_roll_back_a_newer_revision() {
     let saved = db
         .save_note("n1", "written elsewhere")
         .expect("other write");
-    app.active_note.updated_at = saved.updated_at.clone();
+    app.session
+        .acknowledge_locked_revision(saved.updated_at.clone());
     app.poll_background_save(&db, false);
-    assert_eq!(app.active_note.updated_at, saved.updated_at);
+    assert_eq!(app.session.stored_revision(), saved.updated_at);
 
     drop(app);
     drop(db);
@@ -2925,14 +2966,21 @@ fn finished_autosave_does_not_roll_back_a_newer_revision() {
 #[test]
 fn write_command_waits_for_an_in_flight_autosave() {
     let (db, mut app, path) = app_with_note("one");
-    app.editor.lines = vec!["two".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["two".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.last_edit = past_autosave_debounce();
     app.maybe_autosave(&db).expect("autosave starts");
 
-    app.editor.lines = vec!["three".to_string()];
-    app.editor.joined_text_cache = None;
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["three".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.editor.clear_joined_text_cache();
+    app.session.set_dirty_for_tests(true);
+    app.session.note_changed_for_tests();
     app.last_edit = Instant::now();
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
@@ -2975,9 +3023,12 @@ fn app_with_conflicting_edit() -> (Db, TerminalApp, PathBuf) {
     std::thread::sleep(Duration::from_millis(2));
     db.save_note("n1", "changed elsewhere")
         .expect("external edit");
-    app.editor.lines = vec!["mine".to_string()];
-    app.editor.joined_text_cache = None;
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["mine".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.editor.clear_joined_text_cache();
+    app.session.set_dirty_for_tests(true);
     app.last_edit = past_autosave_debounce();
     (db, app, path)
 }
@@ -2989,8 +3040,8 @@ fn failed_autosave_keeps_edits_and_waits_for_the_next_edit() {
 
     app.maybe_autosave(&db).expect("idle tick");
     app.poll_background_save(&db, true);
-    assert!(app.dirty, "the buffer stays unsaved");
-    assert_eq!(app.editor.lines, vec!["mine".to_string()]);
+    assert!(app.session.dirty(), "the buffer stays unsaved");
+    assert_eq!(app.editor.lines(), vec!["mine".to_string()]);
     assert!(app.status.starts_with("autosave failed"), "{}", app.status);
 
     // No retry loop until something changes.
@@ -3000,7 +3051,7 @@ fn failed_autosave_keeps_edits_and_waits_for_the_next_edit() {
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
     app.execute_terminal_command(&db, "w!");
-    assert!(!app.dirty, "{}", app.status);
+    assert!(!app.session.dirty(), "{}", app.status);
     let persisted = db.get_note("n1").expect("lookup").expect("note");
     assert_eq!(persisted.body, "mine");
 
@@ -3013,8 +3064,11 @@ fn failed_autosave_keeps_edits_and_waits_for_the_next_edit() {
 fn e_reloads_only_after_asking_about_unsaved_changes() {
     let (db, mut app, path) = app_with_note("one");
     app.autosave_enabled = false;
-    app.editor.lines = vec!["unsaved".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["unsaved".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
     app.command_input = "e".to_string();
@@ -3022,15 +3076,15 @@ fn e_reloads_only_after_asking_about_unsaved_changes() {
     assert_eq!(menu.options[0].token, "e");
 
     app.execute_terminal_command(&db, "e");
-    assert_eq!(app.editor.lines, vec!["unsaved".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["unsaved".to_string()]);
     assert!(
         app.status.starts_with("no write since last change"),
         "{}",
         app.status
     );
     app.execute_terminal_command(&db, "e");
-    assert_eq!(app.editor.lines, vec!["one".to_string()]);
-    assert!(!app.dirty);
+    assert_eq!(app.editor.lines(), vec!["one".to_string()]);
+    assert!(!app.session.dirty());
 
     drop(app);
     drop(db);
@@ -3044,8 +3098,8 @@ fn reload_discards_unsaved_changes() {
     app.command_bar_from_normal = true;
 
     app.execute_terminal_command(&db, "e!");
-    assert_eq!(app.editor.lines, vec!["changed elsewhere".to_string()]);
-    assert!(!app.dirty);
+    assert_eq!(app.editor.lines(), vec!["changed elsewhere".to_string()]);
+    assert!(!app.session.dirty());
     assert!(app.status.starts_with("reloaded"), "{}", app.status);
 
     drop(app);
@@ -3058,14 +3112,18 @@ fn leaving_an_unsaved_note_needs_a_second_request_without_autosave() {
     let (db, mut app, path) = app_with_note("one");
     db.save_note("n2", "other").expect("second note");
     app.autosave_enabled = false;
-    app.editor.lines = vec!["unsaved".to_string()];
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["unsaved".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.session.set_dirty_for_tests(true);
+    app.session.note_changed_for_tests();
     app.last_edit = Instant::now();
 
     app.open_note_from_switcher(&db, "n2", None, None)
         .expect("switch handled");
     assert_eq!(app.active_note.id, "n1");
-    assert_eq!(app.editor.lines, vec!["unsaved".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["unsaved".to_string()]);
     assert!(
         app.status.starts_with("no write since last change"),
         "{}",
@@ -3073,6 +3131,7 @@ fn leaving_an_unsaved_note_needs_a_second_request_without_autosave() {
     );
 
     // An edit in between makes the next attempt ask again.
+    app.session.note_changed_for_tests();
     app.last_edit = Instant::now() + Duration::from_millis(1);
     assert!(!app.can_leave_note(&db));
     assert!(
@@ -3096,7 +3155,7 @@ fn leaving_after_a_failed_save_needs_a_second_request() {
 
     assert!(!app.can_leave_note(&db));
     assert!(app.status.starts_with("save failed"), "{}", app.status);
-    assert!(app.dirty);
+    assert!(app.session.dirty());
     assert!(app.can_leave_note(&db));
 
     drop(app);
@@ -3108,9 +3167,12 @@ fn leaving_after_a_failed_save_needs_a_second_request() {
 fn module_command_keeps_a_save_conflict_with_changes_made_elsewhere() {
     let (db, mut app, path) = app_with_note("original");
     app.autosave_enabled = true;
-    app.editor.lines = vec!["my unsaved changes".to_string()];
-    app.editor.joined_text_cache = None;
-    app.dirty = true;
+    {
+        let replacement: Vec<String> = vec!["my unsaved changes".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
+    app.editor.clear_joined_text_cache();
+    app.session.set_dirty_for_tests(true);
     std::thread::sleep(Duration::from_millis(2));
     db.save_note("n1", "external changes")
         .expect("external edit");
@@ -3153,16 +3215,16 @@ fn outside_change_reloads_a_clean_buffer_as_one_undoable_edit() {
 
     // Nothing changed: nothing happens.
     take_outside_change(&mut app, &db);
-    assert_eq!(app.history.undo_depth(), 0);
+    assert_eq!(app.session.history().undo_depth(), 0);
 
     std::thread::sleep(Duration::from_millis(2));
     db.save_note("n1", "intro\n# Log\n- a\n- b")
         .expect("outside edit");
     take_outside_change(&mut app, &db);
-    assert_eq!(app.editor.lines, ["intro", "# Log", "- a", "- b"]);
-    assert!(!app.dirty);
+    assert_eq!(app.editor.lines(), ["intro", "# Log", "- a", "- b"]);
+    assert!(!app.session.dirty());
     assert_eq!(
-        Some(app.active_note.updated_at.clone()),
+        Some(app.session.stored_revision().to_owned()),
         db.get_note_updated_at("n1").expect("revision")
     );
     // The cursor stays on the text it was on.
@@ -3170,8 +3232,8 @@ fn outside_change_reloads_a_clean_buffer_as_one_undoable_edit() {
     assert!(app.status.contains("reloaded"), "{}", app.status);
 
     app.undo(&db);
-    assert_eq!(app.editor.lines, ["# Log", "- a"]);
-    assert!(app.dirty, "undoing the reload is an unsaved edit");
+    assert_eq!(app.editor.lines(), ["# Log", "- a"]);
+    assert!(app.session.dirty(), "undoing the reload is an unsaved edit");
 
     drop(app);
     drop(db);
@@ -3184,8 +3246,8 @@ fn outside_change_keeps_unsaved_edits_and_warns_once() {
     app.autosave_enabled = false;
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.editor.lines, ["mine"]);
-    assert!(app.dirty);
+    assert_eq!(app.editor.lines(), ["mine"]);
+    assert!(app.session.dirty());
     assert!(
         app.status.contains("changed outside Slate"),
         "{}",
@@ -3210,7 +3272,7 @@ fn outside_change_is_left_alone_when_turned_off() {
     db.save_note("n1", "two").expect("outside edit");
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.editor.lines, ["one"]);
+    assert_eq!(app.editor.lines(), ["one"]);
     assert!(!app.status.contains("outside Slate"), "{}", app.status);
 
     drop(app);
@@ -3225,7 +3287,7 @@ fn outside_delete_keeps_the_buffer_and_warns_once() {
     db.delete_note("n1", None).expect("deleted elsewhere");
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.editor.lines, ["keep me"]);
+    assert_eq!(app.editor.lines(), ["keep me"]);
     assert!(
         app.status.contains("deleted outside Slate"),
         "{}",
@@ -3249,11 +3311,11 @@ fn outside_change_waits_while_an_overlay_is_open() {
 
     app.mode = UiMode::CommandBar;
     take_outside_change(&mut app, &db);
-    assert_eq!(app.editor.lines, ["one"]);
+    assert_eq!(app.editor.lines(), ["one"]);
 
     app.mode = UiMode::Editor;
     take_outside_change(&mut app, &db);
-    assert_eq!(app.editor.lines, ["two"]);
+    assert_eq!(app.editor.lines(), ["two"]);
 
     drop(app);
     drop(db);
@@ -3270,7 +3332,7 @@ fn outside_change_keeps_the_cursor_on_a_char_boundary() {
     db.save_note("n1", "éx").expect("outside edit");
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.editor.lines, ["éx"]);
+    assert_eq!(app.editor.lines(), ["éx"]);
     assert!(app.editor.cursor_col <= 1);
 
     drop(app);
@@ -3290,15 +3352,19 @@ fn outside_encryption_locks_the_open_note_instead_of_blanking_it() {
         .expect("edited elsewhere");
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::Encrypted);
     assert!(!app.active_note_is_editable());
-    assert!(!app.dirty);
+    assert!(!app.session.dirty());
     assert!(
         app.status.contains("encrypted outside Slate"),
         "{}",
         app.status
     );
-    assert_eq!(app.history.undo_depth(), 0, "no undoable blanking edit");
+    assert_eq!(
+        app.session.history().undo_depth(),
+        0,
+        "no undoable blanking edit"
+    );
 
     drop(other);
     drop(app);
@@ -3314,15 +3380,15 @@ fn outside_decryption_reloads_the_note_as_plain_text() {
     other.encrypt_note("n1", "pw").expect("encrypted");
     db.unlock_note("n1", "pw").expect("unlocked here");
     app.reload_active_note(&db).expect("open unlocked");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::Encrypted);
 
     std::thread::sleep(Duration::from_millis(2));
     // Encrypting or decrypting keeps the revision; the edit after it moves it.
     other.decrypt_note("n1", "pw").expect("decrypted elsewhere");
     other.save_note("n1", "two").expect("edited elsewhere");
     take_outside_change(&mut app, &db);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
-    assert_eq!(app.editor.lines, ["two"]);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::None);
+    assert_eq!(app.editor.lines(), ["two"]);
     assert!(
         app.status.contains("decrypted outside Slate"),
         "{}",
@@ -3355,9 +3421,9 @@ fn outside_decryption_unlocks_a_locked_open_note() {
     other.save_note("n1", "two").expect("edited elsewhere");
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.session.access_mode(), NoteAccessMode::None);
     assert!(app.active_note_is_editable());
-    assert_eq!(app.editor.lines, ["two"]);
+    assert_eq!(app.editor.lines(), ["two"]);
     assert!(
         app.status.contains("decrypted outside Slate"),
         "{}",
@@ -3382,7 +3448,7 @@ fn a_locked_open_note_edited_elsewhere_stays_locked_quietly() {
     assert!(!app.active_note_is_editable());
     assert!(app.status.is_empty(), "{}", app.status);
     assert_eq!(
-        Some(app.active_note.updated_at.clone()),
+        Some(app.session.stored_revision().to_owned()),
         db.get_note_updated_at("n1").expect("revision")
     );
 
@@ -3418,7 +3484,7 @@ fn f1_opens_help_that_filters_and_closes() {
     assert!(app.help.is_none());
     assert_eq!(app.mode, UiMode::Normal);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one"],
         "keys typed in help do not edit"
     );

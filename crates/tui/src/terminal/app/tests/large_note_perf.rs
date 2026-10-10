@@ -575,19 +575,22 @@ fn large_note_fixture_evaluates_in_the_app() {
     measure_idle(&mut app, &db, &mut Samples::default());
     let line = |prefix: &str| {
         app.editor
-            .lines
+            .lines()
             .iter()
             .position(|line| line.starts_with(prefix))
             .unwrap_or_else(|| panic!("no line starting with {prefix:?}"))
     };
     let (vat, budget, table) = (line("cost 1 * [["), line("[["), line("| a1 |"));
-    assert!(app.calc.results[vat].is_some(), "cross-note vat unresolved");
     assert!(
-        app.calc.results[budget].is_some(),
+        app.session.calc().results[vat].is_some(),
+        "cross-note vat unresolved"
+    );
+    assert!(
+        app.session.calc().results[budget].is_some(),
         "cross-note budget unresolved"
     );
     assert!(
-        !app.calc.cell_results[table].is_empty(),
+        !app.session.calc().cell_results[table].is_empty(),
         "table formula not evaluated"
     );
     let screen = screen_text(&mut app);

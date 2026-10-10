@@ -1,9 +1,13 @@
 //! In-place buffer edits and byte-offset mapping, independent of the host.
 use crate::types::TextChange;
 
+pub mod lines;
 pub mod paste;
 pub mod primitives;
+pub mod replace;
 pub mod words;
+
+pub use replace::{apply_line_replace, prepare_line_replace, LineReplacePlan};
 
 /// Line-span summary for invalidating derived state; not an exact edit map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

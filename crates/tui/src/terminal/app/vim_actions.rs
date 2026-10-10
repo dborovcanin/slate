@@ -3,7 +3,6 @@ use super::{
     line_char_len, Db, Key, TerminalApp, TerminalVimAdapter, UiMode, VimMacroStep,
     VimPipelineResult, VimRegister, VimRegisterMode,
 };
-use crate::terminal::text_utils::join_lines;
 
 const VIM_MACRO_REPLAY_STEP_BUDGET: usize = 10_000;
 
@@ -67,7 +66,7 @@ impl TerminalApp {
     pub(super) fn build_vim_context(&self) -> crate::editor_core::vim::VimContext {
         crate::editor_core::vim::VimContext {
             has_search_matches: !self.search.matches.is_empty(),
-            line_count: self.editor.lines.len(),
+            line_count: self.editor.lines().len(),
             macro_recording: self.vim_macro_recording.is_some(),
         }
     }
@@ -161,10 +160,10 @@ impl TerminalApp {
         let scope = crate::editor_core::vim_actions::scoped_line_range(
             intent,
             count,
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor_line,
         )
-        .filter(|_| self.editor.lines.len() >= 2048);
+        .filter(|_| self.editor.lines().len() >= 2048);
         if let Some((start, end)) = scope {
             let (snapshot, scope_start_offset) =
                 self.build_scoped_snapshot_for_line_span(start, end, None);
@@ -179,9 +178,7 @@ impl TerminalApp {
             )?;
             return Some((result, scope_start_offset));
         }
-        if self.editor.joined_text_cache.is_none() {
-            self.editor.joined_text_cache = Some(join_lines(&self.editor.lines));
-        }
+        self.editor.ensure_joined_text();
         let fallback_cursor =
             self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
         let selection =
@@ -191,7 +188,7 @@ impl TerminalApp {
                     head: fallback_cursor,
                 });
         let register = self.shared_vim_register();
-        let text: &str = self.editor.joined_text_cache.as_deref().unwrap();
+        let text: &str = self.editor.joined_text_cached().unwrap_or_default();
         let result = crate::editor_core::vim_actions::execute_vim_action_with_target(
             text,
             selection,
@@ -207,9 +204,15 @@ impl TerminalApp {
         &mut self,
         result: crate::editor_core::vim_actions::VimActionExecutionResult,
         mirror_register_to_system_clipboard: bool,
+        mut deleted_lines: Option<(usize, usize)>,
     ) {
         for operation in &result.operations {
-            self.apply_edit_operation(operation);
+            let span = if operation.changes.is_empty() {
+                None
+            } else {
+                deleted_lines.take()
+            };
+            self.apply_edit_operation_with_deleted_lines(operation, span);
         }
         if let Some(register) = result.register {
             if mirror_register_to_system_clipboard {
@@ -261,35 +264,14 @@ impl TerminalApp {
         if !matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
             return false;
         }
-        if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
-        }
-        use crate::editor_core::buffer::primitives::BufferCursor;
-        let anchor = self
-            .editor
-            .selection_anchor
-            .unwrap_or((self.editor.cursor_line, self.editor.cursor_col));
-        let Some(plan) = crate::editor_core::vim_actions::buffer::prepare_visual_selection(
-            &self.editor.lines,
-            self.editor.cursor(),
-            BufferCursor {
-                line: anchor.0,
-                column: anchor.1,
-            },
-            self.mode == UiMode::VisualLine,
+        let Some(outcome) = self.apply_session_edit(note_session::SessionEdit::Visual {
+            linewise: self.mode == UiMode::VisualLine,
             delete,
-        ) else {
+        }) else {
             return false;
         };
-        let history_delta = plan.text_changed.then_some(plan.delta);
-        if let Some((start, end)) = plan.deleted_lines {
-            self.note_deleted_lines(start, end);
-        }
-        if let Some(edit) = plan.exact_edit {
-            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
-        }
-        let (register, cursor) = plan.apply(&mut self.editor.lines);
-        self.editor.set_cursor(cursor);
+        let history_delta = outcome.text_changed.then_some(outcome.delta);
+        let register = outcome.register.expect("visual register");
         if delete {
             let _ = self.set_vim_register(register);
         } else {
@@ -459,12 +441,11 @@ impl TerminalApp {
             if let Some((shared, scope_start_offset)) =
                 self.try_execute_shared_vim_action(action.intent, count, action.target_char)
             {
-                if action.intent == crate::editor_core::vim::VimIntent::DeleteLine
-                    && !shared.operations.is_empty()
-                {
-                    let start = self.editor.cursor_line;
-                    self.drop_reminders_on_deleted_lines(start, start + count.max(1) - 1);
-                }
+                let deleted_lines =
+                    (action.intent == crate::editor_core::vim::VimIntent::DeleteLine).then(|| {
+                        let start = self.editor.cursor_line;
+                        (start, start.saturating_add(count.max(1) - 1))
+                    });
                 let had_register = shared.register.is_some();
                 let mapped = crate::editor_core::vim_actions::VimActionExecutionResult {
                     operations: shared
@@ -477,6 +458,7 @@ impl TerminalApp {
                 self.apply_shared_vim_action_result(
                     mapped,
                     vim_intent_mirrors_register_to_system_clipboard(action.intent),
+                    deleted_lines,
                 );
                 if had_register {
                     let status = match action.intent {
@@ -646,13 +628,13 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::MoveDocEnd => {
                     self.editor.cursor_line = self
                         .real_line_for_virtual(self.visible_line_count().saturating_sub(1))
-                        .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1))
+                        .unwrap_or_else(|| self.editor.lines().len().saturating_sub(1))
                 }
                 crate::editor_core::vim::VimIntent::MoveToLine => {
                     let target_virtual = count.max(1).min(self.visible_line_count()) - 1;
                     self.editor.cursor_line = self
                         .real_line_for_virtual(target_virtual)
-                        .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1));
+                        .unwrap_or_else(|| self.editor.lines().len().saturating_sub(1));
                 }
                 crate::editor_core::vim::VimIntent::EnterInsert => {
                     self.mode = UiMode::Editor;
@@ -708,11 +690,18 @@ impl TerminalApp {
                             action.intent,
                         );
                     let current = self.editor.cursor_line;
-                    self.note_lines_inserted(current, 1);
-                    crate::editor_core::vim_actions::buffer::insert_empty_line_above(
-                        &mut self.editor.lines,
-                        current,
+                    let outcome = self
+                        .apply_session_edit(note_session::SessionEdit::InsertLines {
+                            at: current,
+                            lines: vec![String::new()].into(),
+                        })
+                        .expect("inserted line");
+                    self.splice_calc_line_metadata(
+                        outcome.delta.start_line,
+                        outcome.delta.old_span,
+                        outcome.delta.new_span,
                     );
+                    self.mark_edited_with_delta(outcome.delta);
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
@@ -759,13 +748,23 @@ impl TerminalApp {
                                     );
                                 if !repeated.is_empty() {
                                     let insert_at = self.editor.cursor_line + 1;
-                                    self.note_lines_inserted(insert_at, repeated.len());
-                                    for (offset, line) in repeated.iter().enumerate() {
-                                        self.editor.lines.insert(insert_at + offset, line.clone());
-                                    }
+                                    let delta = self
+                                        .apply_session_edit(
+                                            note_session::SessionEdit::InsertLines {
+                                                at: insert_at,
+                                                lines: repeated.into(),
+                                            },
+                                        )
+                                        .expect("linewise register")
+                                        .delta;
                                     self.editor.cursor_line = insert_at;
                                     self.editor.cursor_col = 0;
-                                    self.mark_edited();
+                                    self.splice_calc_line_metadata(
+                                        delta.start_line,
+                                        delta.old_span,
+                                        delta.new_span,
+                                    );
+                                    self.mark_edited_with_delta(delta);
                                 }
                             }
                             VimRegisterMode::Charwise => {
@@ -813,7 +812,7 @@ impl TerminalApp {
                                         .collect(),
                                     register: None,
                                 };
-                            self.apply_shared_vim_action_result(mapped, false);
+                            self.apply_shared_vim_action_result(mapped, false, None);
                         }
                     }
                 }

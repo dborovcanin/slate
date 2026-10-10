@@ -44,14 +44,6 @@ pub fn byte_index(text: &str, char_idx: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-pub fn remove_char_at(text: &mut String, char_idx: usize) {
-    let start = byte_index(text, char_idx);
-    let end = byte_index(text, char_idx + 1);
-    if start < end && end <= text.len() {
-        text.replace_range(start..end, "");
-    }
-}
-
 pub fn derive_title_from_lines(lines: &[String]) -> String {
     let line = lines
         .iter()

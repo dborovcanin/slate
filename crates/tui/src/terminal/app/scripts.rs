@@ -16,10 +16,7 @@ struct Binding {
 }
 struct RunningScript {
     name: String,
-    note_id: String,
-    generation: u64,
-    range: TextRange,
-    output: ScriptOutput,
+    ticket: note_session::scripts::ScriptTicket,
     cancel: Arc<AtomicBool>,
     rx: mpsc::Receiver<Result<ScriptResponse, String>>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -187,11 +184,11 @@ impl TerminalApp {
                 self.scripts.pending_since = None;
                 self.command_selection_linewise = self.mode == UiMode::VisualLine;
                 self.command_selection = self.capture_visual_command_selection();
-                self.history.break_coalescing();
+                self.session.break_undo_coalescing();
                 self.execute_terminal_command(db, &command);
                 self.command_selection = None;
                 self.command_selection_linewise = false;
-                self.history.break_coalescing();
+                self.session.break_undo_coalescing();
             }
         } else {
             // Replay the prefix as ordinary input, then handle the breaking key
@@ -276,9 +273,9 @@ impl TerminalApp {
             let selection = selection.ok_or("script requires a selection")?;
             let linewise = self.command_selection_linewise || self.mode == UiMode::VisualLine;
             let (first_line, _) =
-                line_and_byte_for_offset(&self.editor.lines, selection.anchor.min(selection.head));
+                line_and_byte_for_offset(self.editor.lines(), selection.anchor.min(selection.head));
             let (last_line, _) =
-                line_and_byte_for_offset(&self.editor.lines, selection.anchor.max(selection.head));
+                line_and_byte_for_offset(self.editor.lines(), selection.anchor.max(selection.head));
             let (snapshot, start) =
                 self.build_scoped_snapshot_for_line_span(first_line, last_line, None);
             let selection = crate::editor_core::types::SelectionSnapshot {
@@ -307,7 +304,7 @@ impl TerminalApp {
         let text = match script.input {
             ScriptInput::None => String::new(),
             ScriptInput::Note => {
-                if document_text_len(&self.editor.lines) > app_core::scripts::MAX_INPUT_BYTES {
+                if document_text_len(self.editor.lines()) > app_core::scripts::MAX_INPUT_BYTES {
                     return Err("script input exceeds 16 MiB".into());
                 }
                 self.joined_text_cached_ref().to_owned()
@@ -323,7 +320,9 @@ impl TerminalApp {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let (tx, rx) = mpsc::channel();
-        let output = script.output;
+        let ticket = self
+            .session
+            .script_ticket(&self.editor, range, script.output);
         let worker = std::thread::spawn(move || {
             let _ = tx.send(app_core::scripts::run_script(
                 &script,
@@ -333,10 +332,7 @@ impl TerminalApp {
         });
         self.scripts.running = Some(RunningScript {
             name: name.clone(),
-            note_id: self.active_note.id.clone(),
-            generation: self.editor.text_generation,
-            range,
-            output,
+            ticket,
             cancel,
             rx,
             worker: Some(worker),
@@ -365,17 +361,22 @@ impl TerminalApp {
         match response {
             Err(error) => self.status = format!("script {}: {error}", run.name),
             Ok(response) => {
-                if run.note_id != self.active_note.id
-                    || run.generation != self.editor.text_generation
-                    || !self.active_note_is_editable()
-                {
-                    self.status = format!("script {}: buffer changed; result discarded", run.name);
-                    return;
-                }
-                if run.output != ScriptOutput::Message {
-                    self.history.break_coalescing();
-                    let op = crate::editor_core::scripts::plan_result(run.range, response.text);
-                    self.apply_edit_operation(&op);
+                let edit =
+                    match self
+                        .session
+                        .accept_script_result(&self.editor, &run.ticket, &response)
+                    {
+                        Ok(edit) => edit,
+                        Err(_) => {
+                            self.status =
+                                format!("script {}: buffer changed; result discarded", run.name);
+                            return;
+                        }
+                    };
+                if let Some(edit) = edit {
+                    if let Some(outcome) = self.apply_session_edit(edit) {
+                        self.mark_edited_with_delta(outcome.delta);
+                    }
                     self.editor.selection_anchor = None;
                     if matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
                         // Leave Visual as Escape does: the Vim state machine
@@ -386,7 +387,6 @@ impl TerminalApp {
                         self.vim_state.pending_count = None;
                         self.vim_state.count_buffer.clear();
                     }
-                    self.history.break_coalescing();
                     self.adjust_cursor();
                     self.adjust_scroll();
                     self.status = response

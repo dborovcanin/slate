@@ -1539,6 +1539,66 @@
           "pending_count": null
         }
       }
+    },
+    {
+      "name": "normal_undo_redo_restored_end_cursor_deletes_character",
+      "initial_text": "",
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "keys": [
+        "char:i",
+        "char:o",
+        "char:n",
+        "char:e",
+        "enter",
+        "char:t",
+        "char:w",
+        "char:o",
+        "esc",
+        "char:o",
+        "char:t",
+        "char:h",
+        "char:r",
+        "char:e",
+        "char:e",
+        "enter",
+        "char:f",
+        "char:o",
+        "char:u",
+        "char:r",
+        "esc",
+        "char:g",
+        "char:g",
+        "char:V",
+        "char:d",
+        "char:u",
+        "ctrl:r",
+        "char:u",
+        "char:x"
+      ],
+      "expected": {
+        "lines": [
+          "one",
+          "two",
+          "three",
+          "fou"
+        ],
+        "cursor_line": 3,
+        "cursor_col": 3,
+        "mode": "Normal",
+        "vim_state": {
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null,
+          "count_buffer": ""
+        },
+        "selection_anchor": null,
+        "clipboard_text": "one",
+        "clipboard_mode": "Linewise"
+      }
     }
   ]
 }

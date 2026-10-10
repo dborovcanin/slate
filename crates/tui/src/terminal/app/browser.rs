@@ -335,7 +335,13 @@ impl TerminalApp {
             None => (PREVIEW_MAX_LINES, PREVIEW_BODY_CHARS),
         };
         let (lines, locked) = if note.id == self.active_note.id {
-            let lines = self.editor.lines.iter().take(max_lines).cloned().collect();
+            let lines = self
+                .editor
+                .lines()
+                .iter()
+                .take(max_lines)
+                .cloned()
+                .collect();
             (lines, !self.active_note_is_editable())
         } else {
             let body = db
@@ -858,8 +864,8 @@ impl TerminalApp {
     /// encrypted collection). The buffer is kept.
     fn refresh_active_note_protection(&mut self, db: &Db) -> Result<(), String> {
         if let Some(note) = db.get_note_meta(&self.active_note.id)? {
-            self.active_note.access_mode = note.access_mode;
-            self.active_note.is_unlocked = note.is_unlocked;
+            self.session
+                .set_protection(note.access_mode, note.is_unlocked);
         }
         Ok(())
     }
@@ -1299,7 +1305,7 @@ impl TerminalApp {
             ),
             Ok(text) => {
                 let current = if note.id == self.active_note.id {
-                    Ok(self.editor.lines.join("\n"))
+                    Ok(self.editor.lines().join("\n"))
                 } else {
                     db.get_note(&note.id)
                         .and_then(|found| found.ok_or_else(|| "note missing".to_string()))
@@ -1358,8 +1364,8 @@ impl TerminalApp {
         let text = db.note_version_text(&note_id, version_id)?;
         db.end_history_session(&note_id)?;
         if note_id == self.active_note.id {
-            let doc_len = self.editor.lines.iter().map(String::len).sum::<usize>()
-                + self.editor.lines.len().saturating_sub(1);
+            let doc_len = self.editor.lines().iter().map(String::len).sum::<usize>()
+                + self.editor.lines().len().saturating_sub(1);
             self.apply_edit_operation(&crate::editor_core::types::EditOperation {
                 changes: vec![crate::editor_core::types::TextChange {
                     from: 0,

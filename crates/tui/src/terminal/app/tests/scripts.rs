@@ -39,11 +39,11 @@ fn script_replaces_unicode_selection_with_one_undo_step() {
     app.execute_terminal_command(&db, "run example 'literal argument'");
     app.command_selection = None;
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines, vec!["one two", "lines tail"]);
+    assert_eq!(app.editor.lines(), vec!["one two", "lines tail"]);
     app.undo(&db);
-    assert_eq!(app.editor.lines, vec!["one é日 tail"]);
+    assert_eq!(app.editor.lines(), vec!["one é日 tail"]);
     app.redo(&db);
-    assert_eq!(app.editor.lines, vec!["one two", "lines tail"]);
+    assert_eq!(app.editor.lines(), vec!["one two", "lines tail"]);
     let _ = fs::remove_file(path);
 }
 #[test]
@@ -59,13 +59,13 @@ fn stale_result_and_cancellation_preserve_buffer() {
     app.execute_terminal_command(&db, "run example");
     app.handle_key(&db, Key::Char('x')).unwrap();
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines, vec!["xoriginal"]);
+    assert_eq!(app.editor.lines(), vec!["xoriginal"]);
     assert!(app.status.contains("buffer changed"));
     app.execute_terminal_command(&db, "run example");
     app.execute_terminal_command(&db, "run-cancel");
     wait_for_result(&mut app);
     assert!(app.status.contains("cancelled"));
-    assert_eq!(app.editor.lines, vec!["xoriginal"]);
+    assert_eq!(app.editor.lines(), vec!["xoriginal"]);
     let _ = fs::remove_file(path);
 }
 #[test]
@@ -84,7 +84,7 @@ fn switching_away_and_back_discards_result() {
     // Even returning to the same note is a different buffer context.
     app.status = "running script example".into();
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines, vec!["original"]);
+    assert_eq!(app.editor.lines(), vec!["original"]);
     assert!(app.status.contains("cancelled"));
     let _ = fs::remove_file(path);
 }
@@ -109,7 +109,7 @@ fn script_errors_and_missing_selection_do_not_edit() {
     app.execute_terminal_command(&db, "run example");
     wait_for_result(&mut app);
     assert!(app.status.contains("failure"));
-    assert_eq!(app.editor.lines, vec!["original"]);
+    assert_eq!(app.editor.lines(), vec!["original"]);
     let _ = fs::remove_file(path);
 }
 #[test]
@@ -120,15 +120,15 @@ fn keybinding_sequences_replay_mismatches_and_timeouts() {
             .unwrap();
     app.scripts = super::super::scripts::ScriptState::new(Ok(config));
     app.handle_key(&db, Key::Char('x')).unwrap();
-    assert_eq!(app.editor.lines, vec!["original"]);
+    assert_eq!(app.editor.lines(), vec!["original"]);
     app.handle_key(&db, Key::Char('z')).unwrap();
-    assert_eq!(app.editor.lines, vec!["xzoriginal"]);
+    assert_eq!(app.editor.lines(), vec!["xzoriginal"]);
     app.handle_key(&db, Key::Char('x')).unwrap();
     std::thread::sleep(Duration::from_millis(950));
     app.poll_script_binding_timeout(&db).unwrap();
-    assert_eq!(app.editor.lines, vec!["xzxoriginal"]);
+    assert_eq!(app.editor.lines(), vec!["xzxoriginal"]);
     app.handle_key(&db, Key::Ctrl('r')).unwrap();
-    assert!(app.editor.lines[0].contains("****"));
+    assert!(app.editor.lines()[0].contains("****"));
     let _ = fs::remove_file(path);
 }
 #[test]
@@ -153,7 +153,7 @@ fn visual_shortcut_runs_script_and_message_output_does_not_edit() {
     app.editor.cursor_col = 8;
     app.handle_key(&db, Key::Ctrl('r')).unwrap();
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines, vec!["REPLACED"]);
+    assert_eq!(app.editor.lines(), vec!["REPLACED"]);
     configure(
         &mut app,
         "cat >/dev/null; printf '{\"text\":\"status only\"}'",
@@ -163,7 +163,7 @@ fn visual_shortcut_runs_script_and_message_output_does_not_edit() {
     app.execute_terminal_command(&db, "run example");
     wait_for_result(&mut app);
     assert_eq!(app.status, "status only");
-    assert_eq!(app.editor.lines, vec!["REPLACED"]);
+    assert_eq!(app.editor.lines(), vec!["REPLACED"]);
     let _ = fs::remove_file(path);
 }
 
@@ -183,7 +183,7 @@ fn single_character_visual_command_uses_the_highlighted_character() {
     app.command_input = "run example".into();
     app.handle_key(&db, Key::Enter).unwrap();
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines, vec!["É tail"]);
+    assert_eq!(app.editor.lines(), vec!["É tail"]);
     let _ = fs::remove_file(path);
 }
 
@@ -222,11 +222,10 @@ fn locked_note_cannot_run_scripts_and_registered_names_complete() {
     app.command_input = "run ex".into();
     assert!(app.open_command_completion_menu());
     assert_eq!(app.command_input, "run example");
-    app.active_note.access_mode = NoteAccessMode::Encrypted;
-    app.active_note.is_unlocked = false;
+    app.session.set_protection(NoteAccessMode::Encrypted, false);
     app.execute_terminal_command(&db, "run example");
     assert!(app.status.contains("locked"));
-    assert_eq!(app.editor.lines, vec!["original"]);
+    assert_eq!(app.editor.lines(), vec!["original"]);
     let _ = fs::remove_file(path);
 }
 
@@ -238,7 +237,7 @@ fn normal_bindings_preserve_pending_vim_operators() {
     app.mode = UiMode::Normal;
     app.handle_key(&db, Key::Char('d')).unwrap();
     app.handle_key(&db, Key::Char('w')).unwrap();
-    assert_eq!(app.editor.lines, vec!["two"]);
+    assert_eq!(app.editor.lines(), vec!["two"]);
     assert!(app.help.is_none());
     let _ = fs::remove_file(path);
 }
@@ -254,15 +253,15 @@ fn selection_script_copies_selected_lines_without_joining_whole_note() {
         ScriptInput::Selection,
         ScriptOutput::ReplaceSelection,
     );
-    app.editor.joined_text_cache = None;
+    app.editor.clear_joined_text_cache();
     app.mode = UiMode::Visual;
     app.editor.cursor_line = 5000;
     app.editor.selection_anchor = Some((5000, 0));
     app.execute_terminal_command(&db, "run example");
-    assert!(app.editor.joined_text_cache.is_none());
+    assert!(app.editor.joined_text_cached().is_none());
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines[5000], "É tail");
-    assert_eq!(app.editor.lines[0], "unselected line");
+    assert_eq!(app.editor.lines()[5000], "É tail");
+    assert_eq!(app.editor.lines()[0], "unselected line");
     let _ = fs::remove_file(path);
 }
 
@@ -297,7 +296,7 @@ fn key_breaking_a_sequence_can_start_another_binding() {
     app.scripts = super::super::scripts::ScriptState::new(Ok(config));
     app.handle_key(&db, Key::Char('x')).unwrap();
     app.handle_key(&db, Key::Char('z')).unwrap();
-    assert_eq!(app.editor.lines, vec!["xoriginal"]);
+    assert_eq!(app.editor.lines(), vec!["xoriginal"]);
     assert!(app.help.is_some());
     let _ = fs::remove_file(path);
 }
@@ -318,7 +317,7 @@ fn charwise_visual_on_empty_line_replaces_nothing_but_inserts_result() {
     app.editor.selection_anchor = Some((1, 0));
     app.execute_terminal_command(&db, "run example");
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines, vec!["a", "X", "b"]);
+    assert_eq!(app.editor.lines(), vec!["a", "X", "b"]);
     let _ = fs::remove_file(path);
 }
 
@@ -349,11 +348,11 @@ fn visual_shortcut_result_returns_vim_to_normal_mode() {
         app.handle_key(&db, key).unwrap();
     }
     wait_for_result(&mut app);
-    assert_eq!(app.editor.lines, vec!["ONE two"]);
+    assert_eq!(app.editor.lines(), vec!["ONE two"]);
     assert_eq!(app.mode, UiMode::Normal);
     // Undo and insert must work at once, without an Escape first.
     app.handle_key(&db, Key::Char('u')).unwrap();
-    assert_eq!(app.editor.lines, vec!["one two"]);
+    assert_eq!(app.editor.lines(), vec!["one two"]);
     app.handle_key(&db, Key::Char('i')).unwrap();
     assert_eq!(app.mode, UiMode::Editor);
     let _ = fs::remove_file(path);

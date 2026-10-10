@@ -12,6 +12,7 @@ name = "slate"
 path = "src/main.rs"
 
 [dependencies]
+note-session = { path = "../session" }
 app-core = { path = "../app-core" }
 editor-core = { path = "../editor-core" }
 slate-mcp = { path = "../mcp" }
@@ -39,3 +40,6 @@ ratatui-image = { version = "11.1", default-features = false, features = ["cross
 [features]
 default = ["imap"]
 imap = ["dep:rustls", "dep:rustls-native-certs", "dep:mailparse"]
+
+[dev-dependencies]
+note-session = { path = "../session", features = ["test-support"] }

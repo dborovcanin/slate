@@ -1,7 +1,10 @@
+#[cfg(test)]
+use note_session::ReminderMarks;
+use note_session::{reminder_marks_of, LineReminderGhost};
 mod currency;
 mod scripts;
 use super::adapter::TerminalVimAdapter;
-use super::calc_cache::CalcCache;
+use super::calc_cache::CalcWorkers;
 use super::canvas::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, TextStyle};
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::DatePickerAction;
@@ -13,9 +16,8 @@ use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
 use crate::editor_core::completion::VariableAutocompleteState;
-use crate::editor_core::history::policy::{UndoAction, UndoPolicy};
-use crate::editor_core::history::LineHistory;
 use crate::editor_core::vim_actions::{VimRegisterMode, VimRegisterValue as VimRegister};
+use note_session::lifecycle::build_history_for_note;
 
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
@@ -50,7 +52,7 @@ enum BackupThreadResult {
 const CALC_RECOMPUTE_DEBOUNCE_MS: u64 = 90;
 const CALC_RECOMPUTE_PENDING_RETRY_MS: u64 = 35;
 const CALC_IDLE_EVAL_BUDGET_MS: u64 = 6;
-const CALC_ASYNC_MIN_LINES: usize = 2_000;
+use note_session::calc_reset::CALC_ASYNC_MIN_LINES;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
 const FOLD_PREFIX_TIMEOUT_MS: u64 = 900;
 const TITLE_ROW: usize = 1;
@@ -59,8 +61,7 @@ const GUTTER_WIDTH: usize = 6;
 const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
 const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
-const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
-const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
+use note_session::calc_provider::LARGE_DOC_CALC_DEFER_LINES;
 /// Viewport notes this long prepare calc off the input thread when opened;
 /// below it the preparation takes a few milliseconds and runs inline.
 #[cfg(not(test))]
@@ -87,7 +88,6 @@ const TABLE_FORMULA_SEGMENT_CACHE_TTL_MS: u64 = 90 * 1000;
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
 const LARGE_NOTE_FULL_FEATURE_LINE_LIMIT: usize = 30_000;
-const LARGE_NOTE_REDUCED_UNDO_LINES: usize = LARGE_NOTE_FULL_FEATURE_LINE_LIMIT + 1;
 
 type ContentSearchResponse = (String, Result<Vec<NoteSearchResult>, String>);
 type BrowserSearchResponse = (String, Result<Vec<super::browser::SearchHit>, String>);
@@ -126,29 +126,6 @@ fn file_render_syntax_for_note_id(note_id: &str) -> (bool, Option<String>) {
     (
         true,
         app_core::note_sources::syntax_language_for_path(&path),
-    )
-}
-
-fn history_max_entries_for_line_count(line_count: usize) -> usize {
-    if line_count >= LARGE_NOTE_REDUCED_UNDO_LINES {
-        128
-    } else {
-        MAX_UNDO_ENTRIES
-    }
-}
-
-fn build_history_for_note(
-    lines: &[String],
-    cursor_line: usize,
-    cursor_col: usize,
-    reminders: ReminderMarks,
-) -> LineHistory<ReminderMarks> {
-    LineHistory::new(
-        history_max_entries_for_line_count(lines.len()),
-        lines,
-        cursor_line,
-        cursor_col,
-        reminders,
     )
 }
 
@@ -206,26 +183,7 @@ struct TerminalStartupMetrics {
     loading_screen: Duration,
 }
 
-const MAX_UNDO_ENTRIES: usize = 500;
 const MAX_COMMAND_HISTORY_ENTRIES: usize = 100;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LineReminderGhost {
-    remind_at_ms: i64,
-    display_at: String,
-    line_text: String,
-    reminded_at_ms: Option<i64>,
-}
-
-/// The open note's reminders by line, as undo history carries them.
-type ReminderMarks = std::sync::Arc<Vec<(usize, LineReminderGhost)>>;
-
-#[derive(Debug, Clone)]
-struct ReminderUndoEntry {
-    line_idx: usize,
-    before: Option<LineReminderGhost>,
-    after: Option<LineReminderGhost>,
-}
 
 #[derive(Debug, Clone)]
 struct SwitcherDeleteConfirm {
@@ -325,6 +283,7 @@ struct WikiLinkRenderCacheEntry {
 
 #[derive(Debug, Clone)]
 struct WikiLinkLineRenderCacheEntry {
+    source_map: note_session::display::mapping::SourceDisplayMap,
     rendered_line: String,
     underline_ranges: Vec<(usize, usize)>,
     cached_at: Instant,
@@ -455,17 +414,8 @@ impl Default for DatePickerState {
 
 /// An autosave running on a background thread.
 struct BackgroundSave {
-    /// The new revision, and whether the text was saved (or only reminders).
-    rx: mpsc::Receiver<Result<(app_core::storage::NoteRevision, bool), String>>,
-    /// The reminder version stored with it, if any.
-    reminders_generation: Option<u64>,
-    note_id: String,
-    /// `last_edit` when the saved text was taken: later edits keep the note
-    /// dirty once the save lands.
-    edit_mark: Instant,
-    /// Revision the save was checked against. When the note's revision has
-    /// moved on meanwhile (e.g. a module change), the saved one is stale.
-    expected_revision: String,
+    rx: mpsc::Receiver<note_session::save::SaveResult>,
+    ticket: note_session::save::SaveTicket,
 }
 
 /// Calc recompute scheduling/runtime flags (distinct from `calc: CalcCache`,
@@ -495,7 +445,7 @@ struct SelectionStatsKey {
     linewise: bool,
     anchor: (usize, usize),
     cursor: (usize, usize),
-    last_edit: Instant,
+    edit_seq: u64,
 }
 
 struct RenderState {
@@ -524,44 +474,14 @@ struct RenderState {
     dirty: bool,
 }
 
-/// Editable document model: the canonical `Vec<String>` line buffer plus its
-/// derived joined-text cache, the cursor position, viewport scroll offsets, the
-/// selection anchor, and the markdown-formatting boundary-exit marker. These
-/// are the fields edits, motions, and rendering all read/write together, so
-/// they are grouped to keep `lines` and `joined_text_cache` co-owned (the
-/// partial-borrow canary called out in roadmap/review.md item 3).
+/// Terminal viewport and cursor-dependent presentation state.
 #[derive(Default)]
-struct EditorModel {
-    lines: Vec<String>,
-    joined_text_cache: Option<String>,
-    /// Changes whenever `lines` does (bumped with `joined_text_cache`'s
-    /// invalidation), so calc caches can tell an unchanged note without
-    /// rehashing it.
-    text_generation: u64,
-    cursor_line: usize,
-    cursor_col: usize, // char index
+struct ViewState {
     scroll_line: usize,
-    /// Rows of the soft-wrapped top line scrolled past; only nonzero when the
-    /// cursor line is taller than the editor area.
+    /// Rows of the soft-wrapped top line scrolled past.
     scroll_row_offset: usize,
     scroll_col: usize,
-    selection_anchor: Option<(usize, usize)>, // (line, col)
     markdown_formatting_right_boundary_exit: Option<(usize, usize)>,
-}
-
-impl EditorModel {
-    /// The cursor as the core buffer APIs take it (character column).
-    fn cursor(&self) -> crate::editor_core::buffer::primitives::BufferCursor {
-        crate::editor_core::buffer::primitives::BufferCursor {
-            line: self.cursor_line,
-            column: self.cursor_col,
-        }
-    }
-
-    fn set_cursor(&mut self, cursor: crate::editor_core::buffer::primitives::BufferCursor) {
-        self.cursor_line = cursor.line;
-        self.cursor_col = cursor.column;
-    }
 }
 
 /// Note-switcher overlay state: the fuzzy query + result list, the reused
@@ -649,12 +569,14 @@ pub(super) struct WebSearchResponse {
 }
 
 struct TerminalApp {
+    session: note_session::NoteSession,
+    pending_session_edit: bool,
     active_note: Note,
     /// Encrypted collection whose password unlocks the open note.
     active_note_key_collection: Option<String>,
-    // Editable document model: line buffer + joined-text cache, cursor, viewport
-    // scroll, selection anchor, and the markdown-formatting boundary-exit marker.
-    editor: EditorModel,
+    // Shared document text, cache, cursor and selection; terminal view is separate.
+    editor: note_session::Document,
+    view: ViewState,
     scripts: scripts::ScriptState,
     currency: currency::CurrencyState,
     mode: UiMode,
@@ -689,7 +611,6 @@ struct TerminalApp {
     note_creation_theme: ThemeConfig,
     /// `[daily]` settings used by `:today`.
     daily_config: app_core::config::DailyNotesConfig,
-    dirty: bool,
     last_edit: Instant,
     status: String,
     command_input: String,
@@ -700,12 +621,6 @@ struct TerminalApp {
     command_history_index: Option<usize>,
     quit: bool,
     force_quit: bool,
-    /// Edit mark of a buffer whose autosave failed; autosave waits for the
-    /// next edit (or an explicit save) instead of retrying in a loop.
-    autosave_paused_at: Option<Instant>,
-    /// Edit mark of a buffer `can_leave_note` refused to leave; leaving
-    /// again without editing in between discards its unsaved changes.
-    leave_refused_at: Option<Instant>,
     backup: BackupState,
     /// Autosave writing on a background thread, if one is in flight.
     background_save: Option<BackgroundSave>,
@@ -728,23 +643,15 @@ struct TerminalApp {
     // DB handle for on-demand cross-note export loading (cheap Arc clone).
     cross_note_db: Db,
     // Calc ghost cache
-    calc: CalcCache,
+    calc_workers: CalcWorkers,
     calc_runtime: CalcRuntime,
-    reminder_ghosts: FxHashMap<usize, LineReminderGhost>, // 0-based line index
     /// Coordinates of edits applied since the last history record, for
     /// moving reminders with them (`note_line_edit`).
-    pending_line_edits: Vec<reminder_helpers::PendingLineChange>,
-    /// Bumped whenever the reminders change; equal to the persisted one when
-    /// they are stored as they are.
-    reminders_generation: u64,
-    persisted_reminders_generation: u64,
+    /// Host reminder polling timer.
     last_reminder_check: Instant,
     /// When the stored note was last checked for changes made outside this
     /// session (`maybe_take_outside_change`).
     outside_change_checked_at: Instant,
-    /// Outside revision the unsaved buffer was warned about, so the warning
-    /// is shown once per change.
-    outside_change_reported: Option<String>,
     // In-note search overlay
     search: SearchState,
     // Web search overlay
@@ -777,8 +684,6 @@ struct TerminalApp {
     // Clipboard watch
     clipboard_watch: ClipboardWatch,
     // Undo/redo
-    history: LineHistory<ReminderMarks>,
-    undo_policy: UndoPolicy<ReminderUndoEntry>,
     perf_trace: PerfTraceState,
     /// Terminal graphics support for the image preview. `None` until the
     /// first preview, which queries the terminal, so startup never pays for it.
@@ -807,27 +712,20 @@ use table_helpers::*;
 
 impl TerminalApp {
     fn large_note_reduced_features(&self) -> bool {
-        self.editor.lines.len() > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
+        self.editor.lines().len() > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
     }
 
     fn maybe_compact_buffers_after_note_switch(&mut self) {
         // Best-effort memory trimming when switching from very large notes.
         // This doesn't guarantee RSS drops immediately (allocator-dependent),
         // but it releases large vector capacities held by app structures.
-        self.editor.lines.shrink_to_fit();
-        self.calc.results.shrink_to_fit();
-        self.calc.cell_results.shrink_to_fit();
-        self.calc.variable_names.shrink_to_fit();
-        self.calc.line_metadata.shrink_to_fit();
-        self.calc.prev_line_metadata.shrink_to_fit();
-        self.folds.line_has_structure.shrink_to_fit();
-        self.folds.line_text_snapshot.shrink_to_fit();
-        self.folds.range_by_start.shrink_to_fit();
+        self.editor.compact();
+        self.session.compact_derived_state();
         self.folds.visible_to_real.shrink_to_fit();
         self.folds.real_to_visible.shrink_to_fit();
         self.folds.hidden_owner.shrink_to_fit();
         self.folds.placeholder_hidden_lines.shrink_to_fit();
-        self.history.compact();
+        self.session.compact_history();
     }
 
     pub(super) fn working_collection_status_suffix(&self) -> String {
@@ -838,7 +736,7 @@ impl TerminalApp {
     }
 
     fn active_note_is_editable(&self) -> bool {
-        self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked
+        self.session.editable()
     }
 
     fn access_mode_prompt_label(mode: NoteAccessMode) -> &'static str {
@@ -929,7 +827,7 @@ impl TerminalApp {
     }
 
     fn require_startup_password_if_needed(&mut self, db: &Db) {
-        if self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked {
+        if self.session.access_mode() == NoteAccessMode::None || self.session.is_unlocked() {
             return;
         }
         self.active_note_key_collection = db
@@ -966,14 +864,14 @@ impl TerminalApp {
             note_id: self.active_note.id.clone(),
             note_title,
             collection: self.active_note_key_collection.clone(),
-            access_mode: self.active_note.access_mode,
+            access_mode: self.session.access_mode(),
             password: String::new(),
             line_number: None,
         });
         self.switcher.delete_confirm = None;
         self.status = format!(
             "password required to open {}",
-            Self::access_mode_prompt_label(self.active_note.access_mode)
+            Self::access_mode_prompt_label(self.session.access_mode())
         );
     }
 
@@ -1047,24 +945,26 @@ impl TerminalApp {
             );
         let initial_has_builtin_formula = initial_calc_signals.has_builtin_formula;
         let initial_has_variable_assignment = initial_calc_signals.has_variable_assignment;
-        let active_has_expression = note_math_enabled && initial_calc_signals.has_expression;
-        let active_has_builtin_formula = note_math_enabled && initial_has_builtin_formula;
         let active_has_variable_assignment =
             note_math_enabled && note_variables_enabled && initial_has_variable_assignment;
-        let calc_viewport_only = note_math_enabled
-            && lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
-            && active_has_variable_assignment
-            && !active_has_builtin_formula;
-        let skip_initial_calc = calc_viewport_only
-            || (!active_has_builtin_formula
-                && !active_has_variable_assignment
-                && !active_has_expression);
+        let initial_plan = note_session::calc_reset::initial_calc_plan(
+            lines.len(),
+            initial_calc_signals,
+            note_session::calc::CalcInputs {
+                mask: crate::editor_core::calc_plan::CalcFeatureMask {
+                    math_enabled: note_math_enabled,
+                    table_enabled: note_table_enabled,
+                    variables_enabled: note_variables_enabled,
+                },
+                math_enabled: note_math_enabled,
+                viewport_only: false,
+            },
+        );
+        let calc_viewport_only = initial_plan.viewport_only;
+        let skip_initial_calc = initial_plan.skip;
         // Keep startup responsive for larger notes by deferring full calc
         // evaluation to the first idle ticks after initial paint.
-        let defer_initial_full_calc = note_math_enabled
-            && lines.len() >= CALC_ASYNC_MIN_LINES
-            && active_has_builtin_formula
-            && active_has_variable_assignment;
+        let defer_initial_full_calc = initial_plan.defer;
         let calc_begin = Instant::now();
         let calc_data = if skip_initial_calc || defer_initial_full_calc {
             CalcData {
@@ -1075,7 +975,7 @@ impl TerminalApp {
             }
         } else {
             let extern_vars = if active_note.modules.cross_note {
-                startup_cross_note_extern_vars(
+                note_session::calc_provider::load_extern_vars_at_startup(
                     db,
                     &calc_engine,
                     &cross_note_var_index,
@@ -1143,14 +1043,36 @@ impl TerminalApp {
         };
 
         let mut app = Self {
+            session: note_session::NoteSession::new(
+                history,
+                reminder_ghosts,
+                note_session::calc::CalcState {
+                    engine: calc_engine,
+                    results: calc_data.line_results,
+                    cell_results: calc_data.cell_results,
+                    variable_names: calc_data.variable_names.into(),
+                    range_context: Default::default(),
+                    pending_result_splices: Vec::new(),
+                    cross_note_refs_scan: None,
+                    cross_note_refs_generation: None,
+                    calc_dependency_index,
+                    line_metadata: line_metadata.clone(),
+                    prev_line_metadata: line_metadata,
+                    stale: defer_initial_full_calc,
+                    cached_has_builtin_formula: initial_has_builtin_formula,
+                    cached_has_variable_assignment: initial_has_variable_assignment,
+                    cached_has_expression: initial_calc_signals.has_expression,
+                    pathological_window_streak: 0,
+                    forced_full_recompute_remaining: 0,
+                },
+            ),
+            pending_session_edit: false,
             active_note,
             active_note_key_collection: None,
             scripts: scripts::ScriptState::new(app_core::config::load_script_config()),
             currency: Default::default(),
-            editor: EditorModel {
-                lines,
-                ..Default::default()
-            },
+            editor: note_session::Document::from_lines(lines),
+            view: ViewState::default(),
             mode: initial_mode,
             vim_enabled: vim_mode,
             key_depth: 0,
@@ -1180,7 +1102,6 @@ impl TerminalApp {
             background_tasks_enabled,
             note_creation_theme,
             daily_config: app_core::config::DailyNotesConfig::default(),
-            dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
             command_input: String::new(),
@@ -1190,8 +1111,6 @@ impl TerminalApp {
             command_history_index: None,
             quit: false,
             force_quit: false,
-            autosave_paused_at: None,
-            leave_refused_at: None,
             backup: BackupState::default(),
             background_save: None,
             date_picker: DatePickerState {
@@ -1210,27 +1129,7 @@ impl TerminalApp {
             cross_note_var_index,
             cross_note_eval_condvar: Arc::new(Condvar::new()),
             cross_note_db: db.clone(),
-            calc: CalcCache {
-                engine: calc_engine,
-                results: calc_data.line_results,
-                cell_results: calc_data.cell_results,
-                variable_names: calc_data.variable_names.into(),
-                range_context: Default::default(),
-                pending_result_splices: Vec::new(),
-                cross_note_refs_scan: None,
-                cross_note_refs_generation: None,
-                index_build: None,
-                range_context_build: None,
-                calc_dependency_index,
-                line_metadata: line_metadata.clone(),
-                prev_line_metadata: line_metadata,
-                stale: defer_initial_full_calc,
-                cached_has_builtin_formula: initial_has_builtin_formula,
-                cached_has_variable_assignment: initial_has_variable_assignment,
-                cached_has_expression: initial_calc_signals.has_expression,
-                pathological_window_streak: 0,
-                forced_full_recompute_remaining: 0,
-            },
+            calc_workers: CalcWorkers::default(),
             calc_runtime: CalcRuntime {
                 recompute_pending: defer_initial_full_calc,
                 recompute_due_at: None,
@@ -1240,13 +1139,8 @@ impl TerminalApp {
                 last_view_eval_range: None,
                 index_sync_pending: false,
             },
-            reminder_ghosts,
-            pending_line_edits: Vec::new(),
-            reminders_generation: 0,
-            persisted_reminders_generation: 0,
             last_reminder_check: Instant::now(),
             outside_change_checked_at: Instant::now(),
-            outside_change_reported: None,
             search: SearchState::default(),
             web_search: WebSearchState::default(),
             autosave_enabled,
@@ -1279,15 +1173,13 @@ impl TerminalApp {
                 status_visible: false,
                 dirty: true,
             },
-            folds: FoldingState::empty(Vec::new(), Vec::new()),
+            folds: FoldingState::empty(),
             command_bar_from_normal: false,
             clipboard_watch: ClipboardWatch {
                 enabled: false,
                 last_text: None,
                 last_poll: Instant::now(),
             },
-            history,
-            undo_policy: UndoPolicy::default(),
             perf_trace: PerfTraceState {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()
@@ -1300,6 +1192,8 @@ impl TerminalApp {
         if let Err(error) = &app.scripts.config {
             app.status = format!("script/keybinding config: {error}");
         }
+        app.session.start_lifetime(&app.active_note.id);
+        app.session.set_note_metadata(&app.active_note);
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();
@@ -1456,7 +1350,7 @@ impl TerminalApp {
     /// first, so they stay in the database the restore sets aside.
     fn apply_staged_restore(&mut self, db: &Db) -> Result<String, String> {
         self.poll_background_save(db, true);
-        if self.dirty {
+        if self.session.dirty() {
             self.save(db)?;
         }
         if !crate::commands::backup::apply_restore_in_session(db)? {
@@ -1487,8 +1381,7 @@ impl TerminalApp {
         }
 
         // Process any deferred fold recompute while the user is not typing.
-        if self.folds.rescan_pending {
-            self.folds.rescan_pending = false;
+        if self.session.take_fold_rescan() {
             self.recompute_folding_for_note_size();
             self.render_state.dirty = true;
         }
@@ -1503,10 +1396,10 @@ impl TerminalApp {
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
         self.poll_background_save(db, false);
-        if !self.autosave_enabled || self.autosave_paused_at == Some(self.last_edit) {
+        if !self.autosave_enabled || !self.session.autosave_allowed() {
             return Ok(());
         }
-        if (self.dirty || self.reminders_unsaved())
+        if (self.session.dirty() || self.reminders_unsaved())
             && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS)
         {
             self.start_background_autosave(db)?;
@@ -1518,7 +1411,7 @@ impl TerminalApp {
     /// that folding is off.
     fn recompute_folding_for_note_size(&mut self) {
         if self.large_note_reduced_features() {
-            self.recompute_folding_if_needed();
+            self.recompute_folding_if_needed(None);
         } else {
             self.recompute_folding();
         }
@@ -1551,13 +1444,12 @@ impl TerminalApp {
                 }
             }
             // Placed against the stored text: wait for unsaved edits to land.
-            if self.dirty {
+            if self.session.dirty() {
                 return;
             }
             let started = Instant::now();
             match self.load_reminders(db) {
                 Ok(()) => {
-                    self.history.set_marks(self.reminder_marks());
                     self.record_perf_duration(
                         "tui.idle.dispatch",
                         "startup_reminder_hydration",
@@ -1918,7 +1810,7 @@ pub fn run_terminal_session(
     }
     app.daily_config = crate::config::load_daily_notes_config();
     if opts.open_at_end {
-        app.editor.cursor_line = app.editor.lines.len().saturating_sub(1);
+        app.editor.cursor_line = app.editor.lines().len().saturating_sub(1);
         app.editor.cursor_col = crate::terminal::text_utils::line_char_len(app.current_line());
         app.adjust_cursor();
         app.adjust_scroll();

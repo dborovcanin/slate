@@ -53,12 +53,12 @@ fn cursor_on_continuation_row_is_placed_on_that_row() {
     let body = long_line("word", 20);
     let (db, mut app, path) = wrapped_app(&body);
     app.mode = UiMode::Editor;
-    app.editor.cursor_col = line_char_len(&app.editor.lines[0]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[0]);
     app.adjust_scroll();
 
     let (rows, cursor) = render_screen(&mut app);
     assert_eq!(
-        app.editor.scroll_col, 0,
+        app.view.scroll_col, 0,
         "wrapped lines never scroll horizontally"
     );
     let cursor_row = usize::from(cursor.row);
@@ -86,11 +86,11 @@ fn scrolls_until_wrapped_rows_above_leave_room_for_the_cursor_line() {
     app.editor.cursor_line = 20;
     app.editor.cursor_col = 0;
     app.adjust_scroll();
-    let logical_scroll = app.editor.scroll_line;
+    let logical_scroll = app.view.scroll_line;
 
     let (rows, cursor) = render_screen(&mut app);
     assert!(
-        app.editor.scroll_line > logical_scroll,
+        app.view.scroll_line > logical_scroll,
         "rendering should scroll further to fit wrapped rows"
     );
     let cursor_row = usize::from(cursor.row);
@@ -138,9 +138,9 @@ fn nowrap_mode_keeps_horizontal_scrolling() {
     let body = long_line("word", 20);
     let (db, mut app, path) = app_with_note(&body);
     app.mode = UiMode::Editor;
-    app.editor.cursor_col = line_char_len(&app.editor.lines[0]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[0]);
     app.adjust_scroll();
-    assert!(app.editor.scroll_col > 0);
+    assert!(app.view.scroll_col > 0);
     let rows = screen_rows(&mut app);
     assert!(editor_rows(&rows)[0].contains('<'));
 
@@ -228,16 +228,16 @@ fn line_taller_than_the_screen_scrolls_by_rows_to_the_cursor() {
     let (db, mut app, path) = wrapped_app(&body);
     app.mode = UiMode::Editor;
     app.editor.cursor_line = 1;
-    app.editor.cursor_col = line_char_len(&app.editor.lines[1]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[1]);
     app.adjust_scroll();
 
     let (rows, cursor) = render_screen(&mut app);
     assert_eq!(
-        app.editor.scroll_line, 1,
+        app.view.scroll_line, 1,
         "the tall cursor line becomes the top line"
     );
     assert!(
-        app.editor.scroll_row_offset > 0,
+        app.view.scroll_row_offset > 0,
         "rows above the cursor are skipped"
     );
     let cursor_row = usize::from(cursor.row);
@@ -252,7 +252,7 @@ fn line_taller_than_the_screen_scrolls_by_rows_to_the_cursor() {
     app.editor.cursor_col = 0;
     app.adjust_scroll();
     render_screen(&mut app);
-    assert_eq!(app.editor.scroll_row_offset, 0);
+    assert_eq!(app.view.scroll_row_offset, 0);
 
     drop(app);
     drop(db);

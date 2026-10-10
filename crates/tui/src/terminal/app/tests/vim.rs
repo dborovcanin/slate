@@ -31,7 +31,7 @@ fn vim_colon_substitute_replaces_current_line_only() {
     );
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["alpha alpha".to_string(), "omega alpha".to_string()]
     );
     assert_eq!(app.mode, UiMode::Normal);
@@ -73,7 +73,7 @@ fn vim_colon_percent_substitute_global_replaces_whole_document() {
     );
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["omega omega".to_string(), "omega omega".to_string()]
     );
     assert_eq!(app.mode, UiMode::Normal);
@@ -106,9 +106,9 @@ fn visual_colon_runs_command_on_preserved_selection() {
     );
 
     assert_eq!(app.mode, UiMode::Normal);
-    assert_eq!(app.editor.lines[0], "- [ ] alpha");
-    assert_eq!(app.editor.lines[1], "- [ ] beta");
-    assert_eq!(app.editor.lines[2], "gamma");
+    assert_eq!(app.editor.lines()[0], "- [ ] alpha");
+    assert_eq!(app.editor.lines()[1], "- [ ] beta");
+    assert_eq!(app.editor.lines()[2], "gamma");
 
     drop(app);
     drop(db);
@@ -158,9 +158,9 @@ fn visual_line_colon_runs_command_on_preserved_selection() {
     );
 
     assert_eq!(app.mode, UiMode::Normal);
-    assert_eq!(app.editor.lines[0], "1. alpha");
-    assert_eq!(app.editor.lines[1], "2. beta");
-    assert_eq!(app.editor.lines[2], "gamma");
+    assert_eq!(app.editor.lines()[0], "1. alpha");
+    assert_eq!(app.editor.lines()[1], "2. beta");
+    assert_eq!(app.editor.lines()[2], "gamma");
 
     drop(app);
     drop(db);
@@ -226,7 +226,7 @@ fn visual_mode_supports_counted_navigation_and_doc_motions() {
     run_keys(&mut app, &db, &[Key::Char('G')]);
     assert_eq!(
         app.editor.cursor_line,
-        app.editor.lines.len().saturating_sub(1)
+        app.editor.lines().len().saturating_sub(1)
     );
 
     run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('g')]);
@@ -305,7 +305,7 @@ fn vim_di_pipe_deletes_cell_contents() {
         &[Key::Char('d'), Key::Char('i'), Key::Char('|')],
     );
 
-    assert_eq!(app.editor.lines, vec!["|  | two |".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["|  | two |".to_string()]);
     assert_eq!(app.editor.cursor_col, 2);
 
     drop(app);
@@ -325,7 +325,7 @@ fn vim_daw_deletes_word_with_padding() {
         &[Key::Char('d'), Key::Char('a'), Key::Char('w')],
     );
 
-    assert_eq!(app.editor.lines, vec!["foo baz".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["foo baz".to_string()]);
     assert_eq!(app.editor.cursor_col, 4);
 
     drop(app);
@@ -345,7 +345,7 @@ fn vim_yaw_yanks_word_with_padding() {
         &[Key::Char('y'), Key::Char('a'), Key::Char('w')],
     );
 
-    assert_eq!(app.editor.lines, vec!["foo bar baz".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["foo bar baz".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "bar ");
 
@@ -361,14 +361,14 @@ fn vim_dollar_and_d0_delete_line_ranges() {
     app.editor.cursor_col = 6;
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('$')]);
-    assert_eq!(app.editor.lines, vec!["alpha ".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["alpha ".to_string()]);
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["alpha beta".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["alpha beta".to_string()]);
 
     app.editor.cursor_col = 6;
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('0')]);
-    assert_eq!(app.editor.lines, vec!["beta".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["beta".to_string()]);
 
     drop(app);
     drop(db);
@@ -384,7 +384,7 @@ fn vim_delete_updates_register_without_syncing_clipboard_watch_text() {
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('w')]);
 
-    assert_eq!(app.editor.lines, vec!["beta".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["beta".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "alpha ");
     assert_eq!(
@@ -408,7 +408,7 @@ fn visual_delete_updates_register_without_syncing_clipboard_watch_text() {
 
     assert!(app.apply_visual_selection_action(true));
 
-    assert_eq!(app.editor.lines, vec![" beta".to_string()]);
+    assert_eq!(app.editor.lines(), vec![" beta".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "alpha");
     assert_eq!(
@@ -492,7 +492,7 @@ fn vim_dw_deletes_across_newline_when_motion_crosses_lines() {
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('w')]);
 
-    assert_eq!(app.editor.lines, vec!["alphabeta".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["alphabeta".to_string()]);
     assert_eq!(app.editor.cursor_line, 0);
     assert_eq!(app.editor.cursor_col, 5);
 
@@ -513,7 +513,7 @@ fn vim_d2w_deletes_two_words_forward() {
         &[Key::Char('d'), Key::Char('2'), Key::Char('w')],
     );
 
-    assert_eq!(app.editor.lines, vec!["baz qux".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["baz qux".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "foo bar ");
     assert_eq!(app.editor.cursor_col, 0);
@@ -535,7 +535,7 @@ fn vim_d2b_deletes_two_words_backward() {
         &[Key::Char('d'), Key::Char('2'), Key::Char('b')],
     );
 
-    assert_eq!(app.editor.lines, vec!["baz".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["baz".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "foo bar ");
     assert_eq!(app.editor.cursor_col, 0);
@@ -552,17 +552,17 @@ fn vim_de_uses_word_end_semantics_distinct_from_dw() {
     app.editor.cursor_col = 0;
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('e')]);
-    assert_eq!(app.editor.lines, vec![" bar baz".to_string()]);
+    assert_eq!(app.editor.lines(), vec![" bar baz".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "foo");
     assert_eq!(app.editor.cursor_col, 0);
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["foo bar baz".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["foo bar baz".to_string()]);
 
     app.editor.cursor_col = 2;
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('e')]);
-    assert_eq!(app.editor.lines, vec!["fo baz".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["fo baz".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "o bar");
     assert_eq!(app.editor.cursor_col, 2);
@@ -584,7 +584,7 @@ fn vim_dt_deletes_until_before_target_char() {
         &[Key::Char('d'), Key::Char('t'), Key::Char('b')],
     );
 
-    assert_eq!(app.editor.lines, vec!["beta gamma".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["beta gamma".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "alpha ");
     assert_eq!(app.editor.cursor_col, 0);
@@ -611,7 +611,7 @@ fn vim_d2tx_targets_second_match_of_char() {
         ],
     );
 
-    assert_eq!(app.editor.lines, vec!["x c".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["x c".to_string()]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "a x b ");
     assert_eq!(app.editor.cursor_col, 0);
@@ -631,7 +631,7 @@ fn vim_yw_yanks_across_newline_when_motion_crosses_lines() {
     run_keys(&mut app, &db, &[Key::Char('y'), Key::Char('w')]);
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["alpha".to_string(), "beta".to_string()]
     );
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
@@ -658,7 +658,7 @@ fn vim_p_after_yy_pastes_linewise_below_cursor_line() {
     run_keys(&mut app, &db, &[Key::Char('p')]);
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "one".to_string(), "two".to_string()]
     );
     assert_eq!(app.editor.cursor_line, 1);
@@ -686,7 +686,7 @@ fn vim_counted_p_repeats_linewise_register_in_original_order() {
 
     run_keys(&mut app, &db, &[Key::Char('2'), Key::Char('p')]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec![
             "one".to_string(),
             "one".to_string(),
@@ -714,11 +714,11 @@ fn vim_p_after_dollar_uses_charwise_register() {
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('$')]);
     assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
     assert_eq!(app.clipboard.text, "beta");
-    assert_eq!(app.editor.lines, vec!["alpha ".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["alpha ".to_string()]);
 
     run_keys(&mut app, &db, &[Key::Char('p')]);
 
-    assert_eq!(app.editor.lines, vec!["alpha beta".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["alpha beta".to_string()]);
     assert_eq!(app.editor.cursor_line, 0);
     assert_eq!(app.editor.cursor_col, 10);
 
@@ -740,7 +740,7 @@ fn vim_p_charwise_newline_splits_line_when_register_contains_newline() {
 
     run_keys(&mut app, &db, &[Key::Char('p')]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["alpha".to_string(), "".to_string(), "beta".to_string()]
     );
     assert_eq!(app.editor.cursor_line, 1);
@@ -762,19 +762,19 @@ fn vim_normal_mode_undo_redo_roundtrip() {
         &[Key::Char('j'), Key::Char('d'), Key::Char('d')],
     );
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "three".to_string()]
     );
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "two".to_string(), "three".to_string()]
     );
 
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "three".to_string()]
     );
 
@@ -798,13 +798,13 @@ fn vim_paste_before_puts_lines_above_and_text_before_the_cursor() {
             Key::Char('P'),
         ],
     );
-    assert_eq!(app.editor.lines, vec!["one", "two", "three"]);
+    assert_eq!(app.editor.lines(), vec!["one", "two", "three"]);
     assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (1, 0));
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["one", "three"]);
+    assert_eq!(app.editor.lines(), vec!["one", "three"]);
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
-    assert_eq!(app.editor.lines, vec!["one", "two", "three"]);
+    assert_eq!(app.editor.lines(), vec!["one", "two", "three"]);
 
     // Charwise: `yw` then `P` at the start of "three".
     run_keys(
@@ -818,7 +818,7 @@ fn vim_paste_before_puts_lines_above_and_text_before_the_cursor() {
             Key::Char('P'),
         ],
     );
-    assert_eq!(app.editor.lines, vec!["one", "two", "twothree"]);
+    assert_eq!(app.editor.lines(), vec!["one", "two", "twothree"]);
     assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (2, 2));
 
     drop(app);
@@ -833,13 +833,13 @@ fn vim_redo_is_cleared_after_new_edit() {
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["two".to_string(), "three".to_string()]
     );
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "two".to_string(), "three".to_string()]
     );
 
@@ -849,14 +849,14 @@ fn vim_redo_is_cleared_after_new_edit() {
         &[Key::Char('j'), Key::Char('d'), Key::Char('d')],
     );
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "three".to_string()]
     );
 
     // New edit after undo should invalidate redo history.
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "three".to_string()]
     );
 
@@ -871,11 +871,14 @@ fn vim_undo_still_works_after_save() {
     app.mode = UiMode::Normal;
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
-    assert_eq!(app.editor.lines, vec!["two".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["two".to_string()]);
 
     app.save(&db).expect("save succeeds");
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["one".to_string(), "two".to_string()]);
+    assert_eq!(
+        app.editor.lines(),
+        vec!["one".to_string(), "two".to_string()]
+    );
 
     drop(app);
     drop(db);
@@ -891,13 +894,16 @@ fn undo_exhaustion_keeps_latest_cursor_location() {
 
     app.handle_editor_key(&db, Key::Char('x'))
         .expect("insert char");
-    assert_eq!(app.editor.lines[1], "txwo");
+    assert_eq!(app.editor.lines()[1], "txwo");
     assert_eq!(app.editor.cursor_line, 1);
     assert_eq!(app.editor.cursor_col, 2);
 
     app.undo(&db);
 
-    assert_eq!(app.editor.lines, vec!["one".to_string(), "two".to_string()]);
+    assert_eq!(
+        app.editor.lines(),
+        vec!["one".to_string(), "two".to_string()]
+    );
     assert_eq!(app.editor.cursor_line, 1);
     assert_eq!(app.editor.cursor_col, 2);
 
@@ -928,7 +934,7 @@ fn vim_remind_set_is_undoable_and_redoable() {
     assert_eq!(app.mode, UiMode::DatePicker);
 
     run_keys(&mut app, &db, &[Key::Enter]);
-    assert!(!app.reminder_ghosts.is_empty());
+    assert!(!app.session.reminders().is_empty());
     assert_eq!(
         db.list_reminders(&app.active_note.id)
             .expect("list reminders after remind set")
@@ -937,7 +943,7 @@ fn vim_remind_set_is_undoable_and_redoable() {
     );
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert!(app.reminder_ghosts.is_empty());
+    assert!(app.session.reminders().is_empty());
     assert!(db
         .list_reminders(&app.active_note.id)
         .expect("list reminders after undo")
@@ -1009,12 +1015,12 @@ fn vim_macros_record_and_replay_normal_mode_actions() {
         ],
     );
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["one".to_string(), "three".to_string()]
     );
 
     run_keys(&mut app, &db, &[Key::Char('@'), Key::Char('a')]);
-    assert_eq!(app.editor.lines, vec!["one".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["one".to_string()]);
 
     drop(app);
     drop(db);
@@ -1037,14 +1043,14 @@ fn vim_macros_support_counted_playback() {
             Key::Char('q'),
         ],
     );
-    assert_eq!(app.editor.lines, vec!["bcdef".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["bcdef".to_string()]);
 
     run_keys(
         &mut app,
         &db,
         &[Key::Char('2'), Key::Char('@'), Key::Char('a')],
     );
-    assert_eq!(app.editor.lines, vec!["def".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["def".to_string()]);
 
     drop(app);
     drop(db);
@@ -1069,10 +1075,10 @@ fn vim_macros_capture_and_replay_insert_mode_input() {
             Key::Char('q'),
         ],
     );
-    assert_eq!(app.editor.lines, vec!["xA".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["xA".to_string()]);
 
     run_keys(&mut app, &db, &[Key::Char('@'), Key::Char('a')]);
-    assert_eq!(app.editor.lines, vec!["xxA".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["xxA".to_string()]);
 
     drop(app);
     drop(db);
@@ -1083,7 +1089,7 @@ fn vim_macros_capture_and_replay_insert_mode_input() {
 fn w_and_b_step_through_table_cells_and_rows() {
     let body = "intro\n| sas   | sasa    | x   |\n| ----- | ------- | --- |\n| dusan | as dasd | y   |\n| ab    | cd      | ef  |\noutro";
     let (db, mut app, path) = app_with_note(body);
-    let lines = app.editor.lines.clone();
+    let lines = app.editor.lines().to_vec();
     let word = |line: usize, text: &str| (line, lines[line].find(text).unwrap());
     app.mode = UiMode::Normal;
     app.editor.cursor_line = 3;
@@ -1134,11 +1140,11 @@ fn word_operators_stay_inside_the_table_cell() {
         let (db, mut app, path) = app_with_note(body);
         app.mode = UiMode::Normal;
         app.editor.cursor_line = 2;
-        app.editor.cursor_col = app.editor.lines[2].find(at).unwrap();
+        app.editor.cursor_col = app.editor.lines()[2].find(at).unwrap();
         for ch in keys.chars() {
             app.handle_key(&db, Key::Char(ch)).expect("key");
         }
-        let line = app.editor.lines[2].clone();
+        let line = app.editor.lines()[2].clone();
         drop(app);
         drop(db);
         cleanup_db_files(&path);
@@ -1215,13 +1221,17 @@ fn gd_on_a_qualified_variable_of_the_open_note_keeps_unsaved_edits() {
     let (db, mut app, path) = app_with_note("rate := 42\nx := [[n1]].rate");
     assert_eq!(app.active_note.id, "n1");
     app.mode = UiMode::Normal;
-    app.editor.lines[0] = "rate := 43".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[0] = "rate := 43".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.mark_edited();
     app.editor.cursor_line = 1;
     app.editor.cursor_col = 13;
 
     run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
-    assert_eq!(app.editor.lines[0], "rate := 43");
+    assert_eq!(app.editor.lines()[0], "rate := 43");
     assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (0, 0));
     assert_eq!(app.status, "definition: rate");
 
@@ -1234,13 +1244,17 @@ fn gd_on_a_qualified_variable_of_the_open_note_keeps_unsaved_edits() {
 fn gd_on_a_link_to_the_open_note_keeps_unsaved_edits() {
     let (db, mut app, path) = app_with_note("intro\n## Totals\nsee [[n1#Totals]]");
     app.mode = UiMode::Normal;
-    app.editor.lines[0] = "intro edited".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[0] = "intro edited".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.mark_edited();
     app.editor.cursor_line = 2;
     app.editor.cursor_col = 7;
 
     run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
-    assert_eq!(app.editor.lines[0], "intro edited");
+    assert_eq!(app.editor.lines()[0], "intro edited");
     assert_eq!(app.editor.cursor_line, 1);
     assert!(app.status.ends_with("#Totals"), "{}", app.status);
 
@@ -1265,13 +1279,13 @@ fn vim_each_normal_command_is_its_own_undo_step() {
             Key::Char('p'),
         ],
     );
-    assert_eq!(app.editor.lines, vec!["one", "three", "two"]);
+    assert_eq!(app.editor.lines(), vec!["one", "three", "two"]);
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["one", "three"]);
+    assert_eq!(app.editor.lines(), vec!["one", "three"]);
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["one", "two", "three"]);
+    assert_eq!(app.editor.lines(), vec!["one", "two", "three"]);
     run_keys(&mut app, &db, &[Key::Ctrl('r'), Key::Ctrl('r')]);
-    assert_eq!(app.editor.lines, vec!["one", "three", "two"]);
+    assert_eq!(app.editor.lines(), vec!["one", "three", "two"]);
 
     drop(app);
     drop(db);
@@ -1288,17 +1302,17 @@ fn non_vim_typing_coalesces_until_a_pause_then_starts_a_new_step() {
     run_keys(&mut app, &db, &[Key::Char('b')]);
     app.last_edit = Instant::now() - Duration::from_millis(100);
     run_keys(&mut app, &db, &[Key::Char('c')]);
-    assert_eq!(app.history.undo_depth(), 1);
+    assert_eq!(app.session.history().undo_depth(), 1);
     app.last_edit = Instant::now() - Duration::from_secs(1);
     run_keys(&mut app, &db, &[Key::Char('d')]);
-    assert_eq!(app.history.undo_depth(), 2);
+    assert_eq!(app.session.history().undo_depth(), 2);
     app.undo(&db);
-    assert_eq!(app.editor.lines, vec!["abc"]);
+    assert_eq!(app.editor.lines(), vec!["abc"]);
     app.undo(&db);
-    assert_eq!(app.editor.lines, vec!["a"]);
+    assert_eq!(app.editor.lines(), vec!["a"]);
     app.redo(&db);
     app.redo(&db);
-    assert_eq!(app.editor.lines, vec!["abcd"]);
+    assert_eq!(app.editor.lines(), vec!["abcd"]);
     drop(app);
     drop(db);
     cleanup_db_files(&path);
@@ -1317,12 +1331,12 @@ fn vim_insert_session_is_one_undo_step_across_pauses() {
     // A pause longer than the typing debounce stays in the same step.
     app.last_edit = Instant::now() - Duration::from_secs(2);
     run_keys(&mut app, &db, &[Key::Char('b'), Key::Esc]);
-    assert_eq!(app.editor.lines, vec!["one ab"]);
+    assert_eq!(app.editor.lines(), vec!["one ab"]);
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["one"]);
+    assert_eq!(app.editor.lines(), vec!["one"]);
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
-    assert_eq!(app.editor.lines, vec!["one ab"]);
+    assert_eq!(app.editor.lines(), vec!["one ab"]);
 
     drop(app);
     drop(db);
@@ -1352,9 +1366,9 @@ fn counted_line_delete_on_a_large_note_reaches_past_the_old_scope() {
         ],
     );
 
-    assert_eq!(app.editor.lines.len(), 2800);
-    assert_eq!(app.editor.lines[999], "line 999");
-    assert_eq!(app.editor.lines[1000], "line 1200");
+    assert_eq!(app.editor.lines().len(), 2800);
+    assert_eq!(app.editor.lines()[999], "line 999");
+    assert_eq!(app.editor.lines()[1000], "line 1200");
 
     drop(app);
     drop(db);
@@ -1400,7 +1414,7 @@ fn counted_word_end_delete_over_blank_lines_on_a_large_note_matches_the_full_tex
         expected_text.replace_range(change.from..change.to, &change.insert);
     }
     assert_ne!(expected_text, full, "the motion deletes something");
-    assert_eq!(app.editor.lines.join("\n"), expected_text);
+    assert_eq!(app.editor.lines().join("\n"), expected_text);
 
     drop(app);
     drop(db);
@@ -1420,13 +1434,14 @@ fn app_with_reminder(body: &str, line: usize) -> (Db, TerminalApp, std::path::Pa
     )
     .expect("reminder");
     app.load_reminders(&db).expect("reminders");
-    app.history.set_marks(app.reminder_marks());
+    let marks = app.reminder_marks();
+    app.session.history_mut_for_tests().set_marks(marks);
     app.mode = UiMode::Normal;
     (db, app, path)
 }
 
 fn reminder_lines(app: &TerminalApp) -> Vec<usize> {
-    let mut lines: Vec<usize> = app.reminder_ghosts.keys().copied().collect();
+    let mut lines: Vec<usize> = app.session.reminders().keys().copied().collect();
     lines.sort_unstable();
     lines
 }
@@ -1436,8 +1451,11 @@ fn deleting_a_reminded_task_does_not_pass_the_reminder_to_the_next() {
     let (db, mut app, path) = app_with_reminder("- [ ] buy milk\n- [ ] buy eggs", 0);
     app.editor.cursor_line = 0;
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
-    assert_eq!(app.editor.lines, vec!["- [ ] buy eggs".to_string()]);
-    assert!(app.reminder_ghosts.is_empty(), "buy eggs gets no reminder");
+    assert_eq!(app.editor.lines(), vec!["- [ ] buy eggs".to_string()]);
+    assert!(
+        app.session.reminders().is_empty(),
+        "buy eggs gets no reminder"
+    );
 
     // Undo brings the line and its reminder back.
     run_keys(&mut app, &db, &[Key::Char('u')]);
@@ -1480,23 +1498,84 @@ fn large_note_visual_deletes_roundtrip_including_last_empty_line() {
     app.editor.cursor_col = 1;
     app.editor.selection_anchor = Some((2500, 0));
     assert!(app.apply_visual_selection_action(true));
-    assert_eq!(app.editor.lines[2500], "abc");
+    assert_eq!(app.editor.lines()[2500], "abc");
     app.undo(&db);
-    assert_eq!(app.editor.lines[2500], "é🙂abc");
+    assert_eq!(app.editor.lines()[2500], "é🙂abc");
     app.redo(&db);
-    assert_eq!(app.editor.lines[2500], "abc");
+    assert_eq!(app.editor.lines()[2500], "abc");
     app.mode = UiMode::VisualLine;
     app.editor.selection_anchor = Some((0, 0));
     app.editor.cursor_line = 5000;
     app.editor.cursor_col = 0;
     assert!(app.apply_visual_selection_action(true));
-    assert_eq!(app.editor.lines, [""]);
+    assert_eq!(app.editor.lines(), [""]);
     app.undo(&db);
-    assert_eq!(app.editor.lines.len(), 5001);
-    assert_eq!(app.editor.lines[2500], "abc");
+    assert_eq!(app.editor.lines().len(), 5001);
+    assert_eq!(app.editor.lines()[2500], "abc");
     app.redo(&db);
-    assert_eq!(app.editor.lines, [""]);
+    assert_eq!(app.editor.lines(), [""]);
     drop(app);
     drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn open_above_then_escape_records_the_empty_line_for_save_and_undo() {
+    let (db, mut app, path) = app_with_note("original");
+    app.mode = UiMode::Normal;
+    let seq = app.session.edit_seq();
+    run_keys(&mut app, &db, &[Key::Char('O'), Key::Esc]);
+    assert_eq!(app.editor.lines(), vec!["", "original"]);
+    assert!(app.session.dirty());
+    assert!(app.session.edit_seq() > seq);
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert_eq!(app.editor.lines(), vec!["original"]);
+    run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+    assert_eq!(app.editor.lines(), vec!["", "original"]);
+    app.save(&db).expect("save inserted line");
+    assert_eq!(
+        db.get_note(&app.active_note.id).unwrap().unwrap().body,
+        "\noriginal"
+    );
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn deleting_the_sole_empty_line_finalizes_reminder_ownership() {
+    let (db, mut app, path) = app_with_note("");
+    db.upsert_reminder("n1", 1, 1_900_000_000_000, "2030-03-10 09:00", "")
+        .unwrap();
+    app.load_reminders(&db).unwrap();
+    let marks = app.reminder_marks();
+    app.session.history_mut_for_tests().set_marks(marks);
+    app.mode = UiMode::Normal;
+    run_keys(&mut app, &db, &[Key::Char('V'), Key::Char('d')]);
+    assert!(app.session.reminders().is_empty());
+    assert!(app.session.history().current_marks().is_empty());
+    assert!(app.session.pending_line_edits().is_empty());
+    assert!(app.session.dirty());
+    app.save(&db).unwrap();
+    assert!(db.list_reminders("n1").unwrap().is_empty());
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn visual_yank_preserves_pending_calc_work() {
+    let (_db, mut app, path) = app_with_note("2 + 2");
+    app.mode = UiMode::Visual;
+    app.editor.selection_anchor = Some((0, 0));
+    app.editor.cursor_col = 1;
+    app.calc_runtime.recompute_pending = true;
+    app.calc_runtime.pending_viewport_pass = true;
+    app.calc_runtime.pending_full_pass = true;
+    assert!(app.apply_visual_selection_action(false));
+    assert!(app.calc_runtime.recompute_pending);
+    assert!(app.calc_runtime.pending_viewport_pass);
+    assert!(app.calc_runtime.pending_full_pass);
+    assert!(!app.session.dirty());
     cleanup_db_files(&path);
 }

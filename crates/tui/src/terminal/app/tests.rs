@@ -120,7 +120,7 @@ fn image_preview_dialog_opens_and_blocks_editor_input_until_escape() {
 
     app.handle_key(&db, Key::Char('x'))
         .expect("modal consumes key");
-    assert_eq!(app.editor.lines[0], body);
+    assert_eq!(app.editor.lines()[0], body);
     assert!(app.image_preview.is_some());
 
     app.handle_key(&db, Key::Esc).expect("close preview");
@@ -154,14 +154,14 @@ fn editor_right_arrow_exits_inline_formatting_boundary_before_advancing() {
         .expect("right advances while exiting boundary");
     assert_eq!(app.editor.cursor_col, 9);
     assert_eq!(
-        app.editor.markdown_formatting_right_boundary_exit,
+        app.view.markdown_formatting_right_boundary_exit,
         Some((0, 8))
     );
 
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("second right advances normally");
     assert_eq!(app.editor.cursor_col, 10);
-    assert_eq!(app.editor.markdown_formatting_right_boundary_exit, None);
+    assert_eq!(app.view.markdown_formatting_right_boundary_exit, None);
 
     drop(app);
     drop(db);
@@ -177,7 +177,7 @@ fn editor_right_arrow_snaps_at_formatting_boundary_when_no_forward_motion_exists
         .expect("right snaps boundary in no-move edge case");
     assert_eq!(app.editor.cursor_col, 8);
     assert_eq!(
-        app.editor.markdown_formatting_right_boundary_exit,
+        app.view.markdown_formatting_right_boundary_exit,
         Some((0, 8))
     );
 
@@ -237,7 +237,7 @@ fn editor_left_arrow_restores_inline_formatting_boundary_reveal() {
     app.handle_editor_key(&db, Key::ArrowLeft)
         .expect("left restores boundary reveal");
     assert_eq!(app.editor.cursor_col, 8);
-    assert_eq!(app.editor.markdown_formatting_right_boundary_exit, None);
+    assert_eq!(app.view.markdown_formatting_right_boundary_exit, None);
 
     drop(app);
     drop(db);
@@ -287,7 +287,7 @@ fn app_with_note_and_modules(
 fn wait_for_viewport_calc(app: &mut TerminalApp) {
     for _ in 0..30_000 {
         app.poll_viewport_calc_preparation();
-        if app.calc.range_context_build.is_none() {
+        if app.calc_workers.range_context_build.is_none() {
             return;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -301,7 +301,7 @@ fn settle_idle_calc(app: &mut TerminalApp) {
     app.maybe_recompute_calc_after_idle();
     for _ in 0..5_000 {
         app.maybe_sync_calc_index_after_idle();
-        if app.calc.index_build.is_none() && !app.calc_runtime.index_sync_pending {
+        if app.calc_workers.index_build.is_none() && !app.calc_runtime.index_sync_pending {
             return;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -464,12 +464,16 @@ fn run_vim_replay_case(case: &VimReplayCase) -> VimReplaySnapshot {
     let (db, mut app, path) = app_with_note(&case.initial_text);
     app.mode = ui_mode_from_vim_mode(case.initial_state.mode);
     app.vim_state = case.initial_state.clone();
-    if app.editor.lines.is_empty() {
-        app.editor.lines.push(String::new());
+    if app.editor.lines().is_empty() {
+        {
+            let mut replacement = app.editor.lines().to_vec();
+            replacement.push(String::new());
+            app.editor.set_text(&replacement.join("\n"));
+        };
     }
     app.editor.cursor_line = case
         .initial_cursor_line
-        .min(app.editor.lines.len().saturating_sub(1));
+        .min(app.editor.lines().len().saturating_sub(1));
     app.editor.cursor_col = case.initial_cursor_col;
     if matches!(app.mode, UiMode::Visual | UiMode::VisualLine) {
         app.editor.selection_anchor = Some((app.editor.cursor_line, app.editor.cursor_col));
@@ -488,7 +492,7 @@ fn run_vim_replay_case(case: &VimReplayCase) -> VimReplaySnapshot {
     app.adjust_cursor();
 
     let snapshot = VimReplaySnapshot {
-        lines: app.editor.lines.clone(),
+        lines: app.editor.lines().to_vec(),
         cursor_line: app.editor.cursor_line,
         cursor_col: app.editor.cursor_col,
         mode: app.mode,
@@ -507,12 +511,16 @@ fn run_vim_replay_case(case: &VimReplayCase) -> VimReplaySnapshot {
 fn run_markdown_replay_case(case: &MarkdownReplayCase) -> MarkdownReplaySnapshot {
     let (db, mut app, path) = app_with_note(&case.initial_text);
     app.mode = UiMode::Editor;
-    if app.editor.lines.is_empty() {
-        app.editor.lines.push(String::new());
+    if app.editor.lines().is_empty() {
+        {
+            let mut replacement = app.editor.lines().to_vec();
+            replacement.push(String::new());
+            app.editor.set_text(&replacement.join("\n"));
+        };
     }
     app.editor.cursor_line = case
         .initial_cursor_line
-        .min(app.editor.lines.len().saturating_sub(1));
+        .min(app.editor.lines().len().saturating_sub(1));
     app.editor.cursor_col = case.initial_cursor_col;
     app.adjust_cursor();
 
@@ -528,7 +536,7 @@ fn run_markdown_replay_case(case: &MarkdownReplayCase) -> MarkdownReplaySnapshot
     app.adjust_cursor();
 
     let snapshot = MarkdownReplaySnapshot {
-        lines: app.editor.lines.clone(),
+        lines: app.editor.lines().to_vec(),
         cursor_line: app.editor.cursor_line,
         cursor_col: app.editor.cursor_col,
     };
