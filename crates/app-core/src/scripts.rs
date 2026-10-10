@@ -240,6 +240,16 @@ pub fn run_script(
     request: &ScriptRequest,
     cancel: Arc<AtomicBool>,
 ) -> Result<ScriptResponse, String> {
+    let stdout = run_script_raw(script, request, cancel)?;
+    serde_json::from_slice(&stdout).map_err(|e| format!("invalid script response: {e}"))
+}
+
+/// Runs a script and returns its stdout, for callers with their own response shape.
+pub(crate) fn run_script_raw(
+    script: &ScriptDefinition,
+    request: &ScriptRequest,
+    cancel: Arc<AtomicBool>,
+) -> Result<Vec<u8>, String> {
     let input = serde_json::to_vec(request).map_err(|e| e.to_string())?;
     if input.len() > MAX_INPUT_BYTES {
         return Err("script input exceeds 16 MiB".into());
@@ -338,7 +348,7 @@ pub fn run_script(
         }
         _ => {}
     }
-    serde_json::from_slice(&stdout?).map_err(|e| format!("invalid script response: {e}"))
+    stdout
 }
 
 #[cfg(test)]

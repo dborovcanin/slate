@@ -933,6 +933,8 @@ fn note_options_key(options: &NoteEvaluationOptions) -> u64 {
         options.variables_enabled,
         options.table_enabled,
         options.cross_note_enabled,
+        // Results that convert currencies change with the installed rates.
+        crate::currency::generation(),
     )
         .hash(&mut hasher);
     // Order-independent: the caller may list extern values in any order.
@@ -1688,6 +1690,7 @@ fn new_context() -> fend_core::Context {
         use std::hash::{BuildHasher, Hasher};
         RandomState::new().build_hasher().finish() as u32
     });
+    ctx.set_exchange_rate_handler_v2(crate::currency::InstalledRates);
     ctx
 }
 
@@ -3033,6 +3036,60 @@ mod tests {
             .expect("spawn")
             .join()
             .expect("evaluation finishes without overflowing the stack")
+    }
+
+    /// One test owns the process-wide rates, so parallel tests cannot race.
+    #[test]
+    fn currencies_convert_with_installed_rates() {
+        fn install(usd: f64) -> bool {
+            crate::currency::install(crate::currency::ExchangeRates {
+                base: "EUR".into(),
+                rates: [("USD".to_string(), usd), ("RSD".to_string(), 117.1)]
+                    .into_iter()
+                    .collect(),
+                as_of: None,
+                fetched_at: 0,
+            })
+        }
+        let lines: Vec<String> = [
+            "10 USD to EUR",
+            "price := 20 EUR to USD",
+            "price * 2",
+            "5 XYZ to EUR",
+            "$10 + 5 EUR",
+            "10 EUR in RSD",
+        ]
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+        let options = NoteEvaluationOptions {
+            variables_enabled: true,
+            text_generation: Some(1),
+            ..Default::default()
+        };
+        let engine = CalcEngine::new();
+        let mut cache = NoteContextCache::default();
+        install(1.25);
+        let results = engine
+            .evaluate_note_context_cached(&lines, options.clone(), &mut cache)
+            .line_results;
+        assert_eq!(results[0].as_deref(), Some("8 EUR"));
+        assert_eq!(results[2].as_deref(), Some("50"));
+        assert_eq!(results[3], None);
+        assert_eq!(results[4].as_deref(), Some("$16.25"));
+        assert_eq!(results[5].as_deref(), Some("1171 RSD"));
+
+        // New rates invalidate the cached preparation and its variable values.
+        assert!(install(2.0));
+        // Identical rates change nothing, so cached results stay valid.
+        let generation = crate::currency::generation();
+        assert!(!install(2.0));
+        assert_eq!(crate::currency::generation(), generation);
+        let results = engine
+            .evaluate_note_context_cached(&lines, options, &mut cache)
+            .line_results;
+        assert_eq!(results[0].as_deref(), Some("5 EUR"));
+        assert_eq!(results[2].as_deref(), Some("80"));
     }
 
     fn table_with_rows(rows: impl Iterator<Item = String>) -> Vec<String> {

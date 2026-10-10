@@ -35,7 +35,7 @@ Explicit scripting added: registered external executables with a versioned JSON 
 7. **Computing query blocks** - a fenced `query` block that computes over notes, e.g. `sum(expense) where #food month:this` or open TODOs by tag. Builds on FTS and the cross-note variable index; results render as ghost rows and refresh off the input path.
 8. **Dates, money, time**
    - Date arithmetic: `next friday + 3 days`, `deadline - today`.
-   - Currency conversion with a local rate cache refreshed in the background.
+   - Currency conversion with a local rate cache refreshed in the background - done 2026-10-10: a `[currency]` script supplies rates, cached in `exchange_rates.json` (`app-core/src/currency.rs`), with one async startup fetch and `:currency refresh`. Rounding money results to two decimals is still open.
    - Time tracking: `09:10-11:45` ranges summed per day. Clock times, ranges and clock arithmetic in calculations done 2026-10-04 (`calc/temporal.rs`); summing per day (`:sum`, a total line) and duration variables written directly (`45min`) still open.
 9. **`slate calc "..."`** - one-shot evaluation from the shell (and `cmd | slate calc`), with access to exported note variables.
 10. **Dependency view** - for the value under the cursor, list the lines and notes that use it and the values it depends on, so cross-note calculations are easy to trust.

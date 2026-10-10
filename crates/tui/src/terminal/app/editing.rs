@@ -837,6 +837,27 @@ impl TerminalApp {
         true
     }
 
+    /// Re-evaluates every calc result after something note-wide changed,
+    /// such as the calc modules or the exchange rates.
+    pub(super) fn recompute_calc_whole_note(&mut self) {
+        self.calc_runtime.viewport_only = self.note_math_module_enabled()
+            && self.editor.lines.len() >= super::CALC_VIEWPORT_ONLY_MIN_LINES
+            && self.active_has_variable_assignments()
+            && !self.calc.cached_has_builtin_formula;
+        if self.note_math_module_enabled() {
+            self.calc.stale = true;
+            if self.calc_runtime.viewport_only {
+                self.clear_calc_cache();
+                let editor_height = self.editor_height();
+                self.ensure_calc_for_viewport(editor_height, true);
+            } else {
+                self.run_calc_recompute();
+            }
+        } else {
+            self.clear_calc_cache();
+        }
+    }
+
     pub(super) fn clear_calc_cache(&mut self) {
         self.calc.results = vec![None; self.editor.lines.len()];
         self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];

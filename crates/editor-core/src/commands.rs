@@ -320,6 +320,7 @@ pub fn execute_command(
         CommandId::ClipWatch => result_with_message("clip-watch on handled by host"),
         CommandId::ClipWatchStop => result_with_message("clip-watch off handled by host"),
         CommandId::PasteImage => result_with_message("paste-image handled by host"),
+        CommandId::CurrencyRefresh => result_with_message("currency refresh handled by host"),
         CommandId::Run | CommandId::RunCancel => result_with_message("scripts handled by host"),
         CommandId::Help => result_with_message("help handled by host"),
         CommandId::Fold => result_with_message("fold handled by host"),
@@ -412,6 +413,7 @@ mod tests {
             vec![
                 "run",
                 "run-cancel",
+                "currency refresh",
                 "sum",
                 "sum list",
                 "sum row",

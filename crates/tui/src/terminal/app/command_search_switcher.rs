@@ -1357,22 +1357,7 @@ impl TerminalApp {
                     || previous_modules.variables != self.active_note.modules.variables
                     || previous_modules.cross_note != self.active_note.modules.cross_note;
                 if calc_module_changed {
-                    self.calc_runtime.viewport_only = self.note_math_module_enabled()
-                        && self.editor.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
-                        && self.active_has_variable_assignments()
-                        && !self.calc.cached_has_builtin_formula;
-                    if self.note_math_module_enabled() {
-                        self.calc.stale = true;
-                        if self.calc_runtime.viewport_only {
-                            self.clear_calc_cache();
-                            let editor_height = self.editor_height();
-                            self.ensure_calc_for_viewport(editor_height, true);
-                        } else {
-                            self.run_calc_recompute();
-                        }
-                    } else {
-                        self.clear_calc_cache();
-                    }
+                    self.recompute_calc_whole_note();
 
                     if self.mode == UiMode::Editor
                         && self.note_math_module_enabled()
@@ -1815,6 +1800,10 @@ impl TerminalApp {
                             }
                         }
                     }
+                    return;
+                }
+                crate::editor_core::engine::HostCommandPlan::CurrencyRefresh => {
+                    self.refresh_currency();
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::Run { arguments } => {

@@ -1,8 +1,13 @@
 # Scripts and shortcuts
 
 Register local executables in `~/.config/slate/config.toml`. Scripts run only
-when invoked; there are no hooks or plugin runtime. Use trusted executables:
+when invoked; there are no hooks or plugin runtime. The one exception is the
+optional currency rates script (see "Currency rates" below), which Slate runs
+once in the background at startup and on `:currency refresh`. Use trusted executables:
 they run with your user permissions, including filesystem and network access.
+
+[`scripts/examples`](../scripts/examples/README.md) has ready-to-copy examples
+with setup steps, including an offline currency rates script.
 
 ```toml
 [scripts.uppercase]
@@ -104,6 +109,42 @@ large whole-note scripts are best invoked deliberately. On Unix, cancellation
 and timeout terminate the script process group, including ordinary descendants.
 On other platforms only the direct child is terminated. Detached processes
 are the script author's responsibility.
+
+## Currency rates
+
+Calculations convert currencies (`10 USD to EUR`, `$10 + 5 EUR`,
+`budget := 2000 RSD to EUR`) with rates from a script you configure:
+
+```toml
+[currency]
+argv = ["python3", "/absolute/path/to/slate/scripts/examples/rates.py", "EUR"]
+timeout_seconds = 30
+```
+
+The example uses open.er-api.com (about 160 currencies, updated daily; see
+its terms); `rates_fixed.py` is an offline alternative with invented rates. Any executable works: it gets the same v1 request with empty
+`text` and must print:
+
+```json
+{"base":"EUR","rates":{"USD":1.12,"RSD":117.4},"as_of":"2026-10-10"}
+```
+
+Each rate is how many units of that currency one unit of `base` buys. Codes
+are three letters (case does not matter); rates must be positive. `as_of` is
+optional and shown in the status message. Unknown fields are rejected.
+
+At startup Slate loads the last rates from `exchange_rates.json` in the data
+directory, so conversions work offline and from the first frame. It then
+attempts one asynchronous fetch; when the rates differ, visible results
+update, and identical rates leave results untouched. There are no periodic
+refreshes. Use `:currency refresh` to fetch again; only one fetch runs at a
+time. A failed refresh keeps the cached rates and reports the error in the
+status line. With `[startup] background_tasks_enabled = false`, startup uses
+only cached rates; the explicit command still works. Conversions involving a
+currency without a rate show no result. The command reads the current
+`[currency]` configuration.
+
+This script is not a registered script: `:run` cannot invoke it.
 
 ## Keybindings
 

@@ -107,7 +107,7 @@ Keep expensive indexing asynchronous and panels driven by cached state. Text-cha
 - [ ] Add `dt{char}`.
 - [ ] Consolidate commands autocompletion.
 - [ ] Link handling polish for `[text](url)` display behavior.
-- [ ] Currency conversion support with local cache and startup sync.
+- [x] Currency conversion support with local cache and startup sync.
 - [ ] Store format version in note.
 - [ ] Improve date-vs-list parsing edge cases.
 - [ ] Support multiple formulas in row/column contexts.

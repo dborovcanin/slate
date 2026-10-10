@@ -58,6 +58,7 @@ pub enum CommandId {
     Help,
     Run,
     RunCancel,
+    CurrencyRefresh,
     Fold,
     Unfold,
     FoldToggle,
@@ -359,7 +360,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 71] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 72] = [
     CommandDefinition {
         id: CommandId::Run,
         value: "run",
@@ -372,6 +373,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 71] = [
         value: "run-cancel",
         aliases: &[],
         description: "cancel the running script",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::CurrencyRefresh,
+        value: "currency refresh",
+        aliases: &[],
+        description: "refresh cached exchange rates",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
