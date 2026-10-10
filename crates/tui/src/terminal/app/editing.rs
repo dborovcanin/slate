@@ -21,16 +21,11 @@ use crate::terminal::input;
 use crate::terminal::text_utils::{
     byte_index, char_col_at_byte, cursor_render_char_col, viewport_col_for_display_col,
 };
-use app_core::calc::ExternVar;
 use std::cmp::min;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
-const CALC_PATHOLOGICAL_WINDOW_MIN_LINES: usize = 2000;
-const CALC_PATHOLOGICAL_WINDOW_PERCENT: usize = 85;
-const CALC_PATHOLOGICAL_WINDOW_STREAK_THRESHOLD: usize = 3;
-const CALC_FORCED_FULL_RECOMPUTE_CYCLES: usize = 2;
 
 fn is_image_path(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
@@ -190,6 +185,22 @@ impl TerminalApp {
                 .unwrap_or_default(),
             currency_generation: app_core::currency::generation(),
         }
+    }
+    /// Lines of an active visual or command-bar selection, whose calc
+    /// trailers stay as the user sees them.
+    fn calc_selection_range(&self) -> Option<(usize, usize)> {
+        if !matches!(
+            self.mode,
+            UiMode::Visual | UiMode::VisualLine | UiMode::CommandBar
+        ) {
+            return None;
+        }
+        self.editor.selection_anchor.map(|(line, _)| {
+            (
+                line.min(self.editor.cursor_line),
+                line.max(self.editor.cursor_line),
+            )
+        })
     }
     fn calc_inputs(&self) -> note_session::calc::CalcInputs {
         note_session::calc::CalcInputs {
@@ -729,14 +740,16 @@ impl TerminalApp {
             } else {
                 None
             };
-            let host = CalcHost {
+            let host = note_session::calc_provider::NoteCalcProvider {
                 base,
                 cross_note_enabled: self.calc_cross_note_enabled(),
                 table_enabled: self.note_table_module_enabled(),
-                note_id: &self.active_note.id,
-                index: &self.cross_note_var_index,
-                db: &self.cross_note_db,
-                condvar: &self.cross_note_eval_condvar,
+                cross_note: note_session::calc_provider::CrossNoteSource {
+                    note_id: &self.active_note.id,
+                    index: &self.cross_note_var_index,
+                    db: &self.cross_note_db,
+                    loaded: &self.cross_note_eval_condvar,
+                },
                 selection_range,
             };
             let effect = self.session.record_external_edit(
@@ -800,14 +813,16 @@ impl TerminalApp {
                 line.max(self.editor.cursor_line),
             )
         });
-        let host = CalcHost {
+        let host = note_session::calc_provider::NoteCalcProvider {
             base,
             cross_note_enabled: self.calc_cross_note_enabled(),
             table_enabled: self.note_table_module_enabled(),
-            note_id: &self.active_note.id,
-            index: &self.cross_note_var_index,
-            db: &self.cross_note_db,
-            condvar: &self.cross_note_eval_condvar,
+            cross_note: note_session::calc_provider::CrossNoteSource {
+                note_id: &self.active_note.id,
+                index: &self.cross_note_var_index,
+                db: &self.cross_note_db,
+                loaded: &self.cross_note_eval_condvar,
+            },
             selection_range,
         };
         let result = if redo {
@@ -894,54 +909,20 @@ impl TerminalApp {
             );
             return;
         }
-        let variables_enabled = self.calc_variables_enabled();
-        let cross_note_enabled = self.calc_cross_note_enabled();
-        let table_enabled = self.note_table_module_enabled();
-        if cross_note_enabled {
-            self.preload_cross_note_deps();
-        }
-        let selection_range = if matches!(
-            self.mode,
-            UiMode::Visual | UiMode::VisualLine | UiMode::CommandBar
-        ) {
-            self.editor.selection_anchor.map(|(line, _)| {
-                (
-                    line.min(self.editor.cursor_line),
-                    line.max(self.editor.cursor_line),
-                )
-            })
-        } else {
-            None
-        };
-        let index = std::sync::Arc::clone(&self.cross_note_var_index);
-        let note_id = self.active_note.id.clone();
-        let inputs = note_session::calc_recompute::CalcRecomputeInputs {
+        let selection_range = self.calc_selection_range();
+        let host = note_session::calc_provider::NoteCalcProvider {
             base: self.calc_inputs(),
-            variables_enabled,
-            cross_note_enabled,
-            table_enabled,
-            note_id: &note_id,
-            index: &index,
-            selection_range,
-            thresholds: note_session::calc_recompute::CalcThresholds {
-                calc_pathological_window_min_lines: CALC_PATHOLOGICAL_WINDOW_MIN_LINES,
-                calc_pathological_window_percent: CALC_PATHOLOGICAL_WINDOW_PERCENT,
-                calc_pathological_window_streak_threshold:
-                    CALC_PATHOLOGICAL_WINDOW_STREAK_THRESHOLD,
-                calc_forced_full_recompute_cycles: CALC_FORCED_FULL_RECOMPUTE_CYCLES,
+            cross_note_enabled: self.calc_cross_note_enabled(),
+            table_enabled: self.note_table_module_enabled(),
+            cross_note: note_session::calc_provider::CrossNoteSource {
+                note_id: &self.active_note.id,
+                index: &self.cross_note_var_index,
+                db: &self.cross_note_db,
+                loaded: &self.cross_note_eval_condvar,
             },
+            selection_range,
         };
-        let outcome = self
-            .session
-            .recompute_calc(&mut self.editor, inputs, &mut |lines| {
-                let refs = app_core::calc::scan_cross_note_refs(lines);
-                if let Ok(mut index) = index.lock() {
-                    index.update_deps(&note_id, &refs);
-                    index.extern_vars_for(&note_id)
-                } else {
-                    Vec::new()
-                }
-            });
+        let outcome = self.session.recompute_calc_with(&mut self.editor, &host);
         self.calc_runtime.recompute_pending = false;
         self.calc_runtime.recompute_due_at = None;
         self.calc_runtime.pending_viewport_pass = false;
@@ -1085,14 +1066,16 @@ impl TerminalApp {
         } else {
             None
         };
-        let host = CalcHost {
+        let host = note_session::calc_provider::NoteCalcProvider {
             base,
             cross_note_enabled: self.calc_cross_note_enabled(),
             table_enabled: self.note_table_module_enabled(),
-            note_id: &self.active_note.id,
-            index: &self.cross_note_var_index,
-            db: &self.cross_note_db,
-            condvar: &self.cross_note_eval_condvar,
+            cross_note: note_session::calc_provider::CrossNoteSource {
+                note_id: &self.active_note.id,
+                index: &self.cross_note_var_index,
+                db: &self.cross_note_db,
+                loaded: &self.cross_note_eval_condvar,
+            },
             selection_range,
         };
         let outcome = self.session.apply_with_upkeep(
@@ -2439,23 +2422,6 @@ impl TerminalApp {
         }
     }
 
-    /// Ensure f64 export values for every cross-note dep in the current note
-    /// are in the index. Guarded by `was_full_eval_attempted` so it's O(1)
-    /// after the first call per dep per session.
-    fn preload_cross_note_deps(&self) {
-        let refs = app_core::calc::scan_cross_note_refs(self.editor.lines());
-        self.preload_cross_note_deps_for_refs(&refs);
-    }
-
-    fn preload_cross_note_deps_for_refs(&self, refs: &[app_core::calc::CrossNoteRef]) {
-        preload_calc_refs(
-            refs,
-            &self.cross_note_var_index,
-            &self.cross_note_eval_condvar,
-            &self.cross_note_db,
-        );
-    }
-
     pub(super) fn recompute_calc_range(&mut self, eval_from: usize, eval_to: usize) {
         if !self.note_math_module_enabled() {
             self.clear_calc_cache();
@@ -2467,39 +2433,20 @@ impl TerminalApp {
         // The dependency index only supplies variable names here; syncing it
         // walks the whole note, so leave that to the idle tick.
         self.calc_runtime.index_sync_pending = true;
-        let vars_enabled = self.calc_variables_enabled();
-        let cross_note_enabled = self.calc_cross_note_enabled();
-        let extern_vars: Vec<ExternVar> = if cross_note_enabled {
-            let note_id = self.active_note.id.clone();
-            // Viewport evaluations repeat on every scroll step and edit;
-            // rescan only the lines that changed since the last scan.
-            let generation = self.editor.text_generation();
-            let (line_hashes, refs) = self.session.calc.cross_note_refs(&self.editor);
-            self.preload_cross_note_deps_for_refs(&refs);
-            let extern_vars = if let Ok(mut index) = self.cross_note_var_index.lock() {
-                index.update_deps(&note_id, &refs);
-                index.extern_vars_for(&note_id)
-            } else {
-                Vec::new()
-            };
-            self.session.calc.cross_note_refs_scan = Some((line_hashes, refs));
-            self.session.calc.cross_note_refs_generation = Some(generation);
-            extern_vars
-        } else {
-            Vec::new()
-        };
-        self.session.calc.evaluate_range(
-            &self.editor,
-            eval_from,
-            eval_to,
-            app_core::calc::NoteEvaluationOptions {
-                variables_enabled: vars_enabled,
-                cross_note_enabled,
-                table_enabled: self.note_table_module_enabled(),
-                extern_vars,
-                ..Default::default()
+        let host = note_session::calc_provider::NoteCalcProvider {
+            base: self.calc_inputs(),
+            cross_note_enabled: self.calc_cross_note_enabled(),
+            table_enabled: self.note_table_module_enabled(),
+            cross_note: note_session::calc_provider::CrossNoteSource {
+                note_id: &self.active_note.id,
+                index: &self.cross_note_var_index,
+                db: &self.cross_note_db,
+                loaded: &self.cross_note_eval_condvar,
             },
-        );
+            selection_range: None,
+        };
+        self.session
+            .evaluate_calc_range(&self.editor, eval_from, eval_to, &host);
     }
 
     /// Starts preparing a large viewport note's calc off the input thread:
@@ -3314,107 +3261,4 @@ fn column_on_screen_row(
         }
     }
     best.map(|(idx, _)| idx).or(first).unwrap_or(0)
-}
-
-struct CalcHost<'a> {
-    base: note_session::calc::CalcInputs,
-    cross_note_enabled: bool,
-    table_enabled: bool,
-    note_id: &'a str,
-    index: &'a std::sync::Arc<std::sync::Mutex<app_core::cross_note::CrossNoteVarIndex>>,
-    db: &'a Db,
-    condvar: &'a std::sync::Arc<std::sync::Condvar>,
-    selection_range: Option<(usize, usize)>,
-}
-impl note_session::calc_upkeep::CalcProvider for CalcHost<'_> {
-    fn inputs(
-        &self,
-        calc: &note_session::calc::CalcState,
-    ) -> note_session::calc_recompute::CalcRecomputeInputs<'_> {
-        note_session::calc_recompute::CalcRecomputeInputs {
-            base: self.base,
-            variables_enabled: self.base.math_enabled
-                && self.base.mask.variables_enabled
-                && calc.cached_has_variable_assignment,
-            cross_note_enabled: self.cross_note_enabled,
-            table_enabled: self.table_enabled,
-            note_id: self.note_id,
-            index: self.index,
-            selection_range: self.selection_range,
-            thresholds: note_session::calc_recompute::CalcThresholds {
-                calc_pathological_window_min_lines: CALC_PATHOLOGICAL_WINDOW_MIN_LINES,
-                calc_pathological_window_percent: CALC_PATHOLOGICAL_WINDOW_PERCENT,
-                calc_pathological_window_streak_threshold:
-                    CALC_PATHOLOGICAL_WINDOW_STREAK_THRESHOLD,
-                calc_forced_full_recompute_cycles: CALC_FORCED_FULL_RECOMPUTE_CYCLES,
-            },
-        }
-    }
-    fn preload_refs(&self, refs: &[app_core::calc::CrossNoteRef]) {
-        preload_calc_refs(refs, self.index, self.condvar, self.db);
-    }
-    fn extern_vars(&self, lines: &[String]) -> Vec<ExternVar> {
-        let refs = app_core::calc::scan_cross_note_refs(lines);
-        if let Ok(mut index) = self.index.lock() {
-            index.update_deps(self.note_id, &refs);
-            index.extern_vars_for(self.note_id)
-        } else {
-            Vec::new()
-        }
-    }
-}
-
-fn preload_calc_refs(
-    refs: &[app_core::calc::CrossNoteRef],
-    index: &std::sync::Arc<std::sync::Mutex<app_core::cross_note::CrossNoteVarIndex>>,
-    condvar: &std::sync::Arc<std::sync::Condvar>,
-    db: &Db,
-) {
-    if refs.is_empty() {
-        return;
-    }
-    // Partition deps: truly missing (need sync load) vs. in-flight (bg thread
-    // is already loading them). For in-flight deps we do a short bounded wait
-    // so the recompute following a Tab press can still get correct values when
-    // the autocomplete background thread is nearly done.
-    let (missing, in_flight): (Vec<String>, Vec<String>) = {
-        let dep_ids: rustc_hash::FxHashSet<String> =
-            refs.iter().map(|r| r.note_id.clone()).collect();
-        match index.lock() {
-            Ok(index) => {
-                let mut missing = Vec::new();
-                let mut in_flight = Vec::new();
-                for sid in dep_ids {
-                    if index.was_full_eval_attempted(&sid) {
-                        // already done
-                    } else if index.is_eval_done_or_in_flight(&sid) {
-                        in_flight.push(sid);
-                    } else {
-                        missing.push(sid);
-                    }
-                }
-                (missing, in_flight)
-            }
-            Err(_) => (Vec::new(), Vec::new()),
-        }
-    };
-
-    // Park the event-loop thread until all in-flight background evals signal
-    // completion (or until the 200 ms deadline). The background thread calls
-    // cross_note_eval_condvar.notify_all() after mark_full_eval_attempted fires,
-    // so we wake up as soon as the data is ready instead of burning fixed intervals.
-    if !in_flight.is_empty() {
-        if let Ok(lock) = index.lock() {
-            let _ = condvar.wait_timeout_while(lock, Duration::from_millis(200), |index| {
-                in_flight
-                    .iter()
-                    .any(|sid| !index.was_full_eval_attempted(sid))
-            });
-        }
-    }
-
-    // Sync-load any deps that have no background thread covering them.
-    for dep_id in missing {
-        preload_cross_note_dep_value(&dep_id, index, &app_core::calc::CalcEngine::new(), db);
-    }
 }

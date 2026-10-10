@@ -23,6 +23,8 @@ pub mod calc_recompute;
 
 pub mod calc_upkeep;
 
+pub mod calc_provider;
+
 pub mod jobs;
 
 pub mod folds;

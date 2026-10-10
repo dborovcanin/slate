@@ -158,14 +158,7 @@ impl NoteSession {
                             effect.work = CalcWork::Idle;
                             return effect;
                         };
-                        let recompute_inputs = provider.inputs(&self.calc);
-                        if recompute_inputs.cross_note_enabled {
-                            let refs = app_core::calc::scan_cross_note_refs(doc.lines());
-                            provider.preload_refs(&refs);
-                        }
-                        self.recompute_calc(doc, recompute_inputs, &mut |lines| {
-                            provider.extern_vars(lines)
-                        });
+                        self.recompute_calc_with(doc, provider);
                     }
                 }
             }
