@@ -157,8 +157,12 @@ impl Browser {
                 };
                 let hits =
                     crate::sidebar_search::search_in(host, &self.scope_notes, collection, &query);
+                // Body search is limited to one collection by the database;
+                // `Unsorted` has none, so keep to the notes listed here.
+                let in_scope = |id: &str| self.scope_notes.iter().any(|n| n.id == id);
+                let restrict = matches!(self.entries[self.scope].scope, Scope::Unsorted);
                 let mut notes = Vec::new();
-                for hit in hits {
+                for hit in hits.into_iter().filter(|h| !restrict || in_scope(&h.id)) {
                     if let Ok(Some(meta)) = host.db.get_note_meta(&hit.id) {
                         if let Some(snippet) = hit.snippet {
                             self.snippets.insert(hit.id.clone(), snippet);
@@ -686,6 +690,35 @@ mod tests {
         b.query.clear();
         b.apply_query(&host);
         assert_eq!(b.notes.len(), all);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_search_keeps_to_the_selected_scope() {
+        let dir = std::env::temp_dir().join(format!("slate-gui-scope-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = app_core::storage::Db::open(dir.join("notes.db")).unwrap();
+        let work = db.create_collection("Work", "").unwrap();
+        db.create_note_with_context("w", Default::default(), None, Some(&work.id))
+            .unwrap();
+        db.save_note("w", "# Plan\nthe lisbon offsite").unwrap();
+        db.create_note_with_context("u", Default::default(), None, None)
+            .unwrap();
+        db.save_note("u", "# Trip\nlisbon flights").unwrap();
+        let host = NoteHost::open(db, Some("u")).unwrap();
+        let mut b = Browser::open(&host).unwrap();
+        let search = |b: &mut Browser, scope: Scope| {
+            b.scope = b.entries.iter().position(|e| e.scope == scope).unwrap();
+            b.load_notes(&host);
+            b.mode = Mode::Search;
+            b.query = "lisbon".into();
+            b.apply_query(&host);
+            b.notes.iter().map(|n| n.id.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(search(&mut b, Scope::Unsorted), ["u"]);
+        assert_eq!(search(&mut b, Scope::Collection(work.id.clone())), ["w"]);
+        let all = search(&mut b, Scope::All);
+        assert!(all.contains(&"u".to_string()) && all.contains(&"w".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
