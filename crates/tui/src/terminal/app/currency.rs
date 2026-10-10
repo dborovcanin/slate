@@ -1,5 +1,5 @@
 //! Exchange rates for calc: cached rates at startup, then a background
-//! refresh through the configured `[currency]` script when they are stale.
+//! refresh through the configured `[currency]` script, also available on demand.
 use super::TerminalApp;
 use app_core::currency::{self, ExchangeRates};
 use std::sync::{
@@ -31,8 +31,7 @@ pub(super) struct CurrencyState {
     refresh: Option<Refresh>,
 }
 impl CurrencyState {
-    /// Installs cached rates, then starts a refresh when they are missing or
-    /// older than `refresh_hours`. Returns a startup problem to report.
+    /// Installs cached rates, then starts one refresh. Returns a startup problem.
     pub(super) fn start(background_tasks_enabled: bool) -> (Self, Option<String>) {
         let config = match app_core::config::load_currency_config() {
             Ok(Some(config)) => config,
@@ -43,6 +42,14 @@ impl CurrencyState {
             Ok(path) => path,
             Err(error) => return (Self::default(), Some(format!("currency: {error}"))),
         };
+        Self::start_with_config(config, path, background_tasks_enabled)
+    }
+
+    pub(super) fn start_with_config(
+        config: currency::CurrencyConfig,
+        path: std::path::PathBuf,
+        background_tasks_enabled: bool,
+    ) -> (Self, Option<String>) {
         // A broken cache is refetched, not fatal.
         let mut problem = None;
         match currency::load_cache(&path) {
@@ -50,12 +57,14 @@ impl CurrencyState {
             Ok(None) => {}
             Err(error) => problem = Some(format!("currency: {error}")),
         }
-        let fresh = currency::installed().is_some_and(|rates| {
-            !rates.is_stale(config.refresh_hours, currency::now_unix_seconds())
-        });
-        if fresh || !background_tasks_enabled {
-            return (Self::default(), problem);
+        let mut state = Self::default();
+        if background_tasks_enabled {
+            state.fetch(config, path);
         }
+        (state, problem)
+    }
+
+    fn fetch(&mut self, config: currency::CurrencyConfig, path: std::path::PathBuf) {
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let worker_cancel = cancel.clone();
@@ -66,17 +75,21 @@ impl CurrencyState {
             });
             let _ = tx.send(result);
         });
-        let refresh = Refresh {
+        self.refresh = Some(Refresh {
             cancel,
             rx,
             worker: Some(worker),
-        };
-        (
-            Self {
-                refresh: Some(refresh),
-            },
-            problem,
-        )
+        });
+    }
+
+    fn request_refresh(&mut self) -> Result<(), String> {
+        if self.refresh.is_some() {
+            return Err("exchange rates refresh already running".into());
+        }
+        let config = app_core::config::load_currency_config()?
+            .ok_or("currency: configure [currency] argv first")?;
+        self.fetch(config, currency::cache_path()?);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -94,6 +107,13 @@ impl CurrencyState {
 }
 
 impl TerminalApp {
+    pub(super) fn refresh_currency(&mut self) {
+        self.status = match self.currency.request_refresh() {
+            Ok(()) => "refreshing exchange rates".into(),
+            Err(error) => error,
+        };
+    }
+
     pub(super) fn poll_currency_refresh(&mut self) {
         // Like script results, wait until no dialog or command bar is open.
         if super::scripts::mode_name(self.mode).is_none() {
@@ -113,7 +133,16 @@ impl TerminalApp {
             Ok(Fetched { rates, save_error }) => {
                 let as_of = rates.as_of.clone();
                 currency::install(rates);
-                self.recompute_calc_whole_note();
+                if let Ok(mut index) = self.cross_note_var_index.lock() {
+                    index.invalidate_calculations();
+                }
+                // Discard preparation made with the previous rates/exports.
+                self.calc.range_context_build = None;
+                if !self.start_viewport_calc_preparation() {
+                    self.recompute_calc_whole_note();
+                } else {
+                    self.clear_calc_cache();
+                }
                 self.status = match (save_error, as_of) {
                     (Some(error), _) => format!("exchange rates updated; not cached: {error}"),
                     (None, Some(as_of)) => format!("exchange rates updated ({as_of})"),
@@ -122,5 +151,46 @@ impl TerminalApp {
             }
             Err(error) => self.status = format!("exchange rates: {error}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn worker_fetches_once_and_rejects_overlapping_requests() {
+        let dir = std::env::temp_dir().join(format!("slate-refresh-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("exchange_rates.json");
+        let config = currency::CurrencyConfig {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                r#"printf '{"base":"EUR","rates":{"USD":1.5}}'"#.into(),
+            ],
+            refresh_hours: 12,
+            timeout_seconds: 5,
+        };
+        let mut state = CurrencyState::default();
+        state.fetch(config, path.clone());
+        assert_eq!(
+            state.request_refresh().unwrap_err(),
+            "exchange rates refresh already running"
+        );
+        let fetched = state
+            .refresh
+            .as_ref()
+            .unwrap()
+            .rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.rates.rates["USD"], 1.5);
+        assert!(fetched.save_error.is_none());
+        assert_eq!(currency::load_cache(&path).unwrap(), Some(fetched.rates));
+        drop(state);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

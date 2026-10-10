@@ -47,6 +47,15 @@ impl CrossNoteVarIndex {
         };
     }
 
+    /// Forgets calculated values after exchange rates change. Keep names and
+    /// dependencies, and fence loads that began with the previous values.
+    pub fn invalidate_calculations(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.exports.clear();
+        self.evaluated.clear();
+        self.eval_in_flight_ids.clear();
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
@@ -446,6 +455,26 @@ mod tests {
         assert_eq!(export(&index, "note-a", "x"), None);
         assert_eq!(export(&index, "note-b", "y"), None);
 
+        drop(db);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn invalidating_calculations_preserves_names_and_fences_old_loads() {
+        let (db, path) = temp_db();
+        db.save_note("note-a", "x := 5").unwrap();
+        let index = Mutex::new(CrossNoteVarIndex::default());
+        let engine = CalcEngine::new();
+        load_note_exports(&db, &engine, &index, "note-a");
+        let old_epoch = index.lock().unwrap().epoch();
+        index.lock().unwrap().invalidate_calculations();
+        assert!(!index.lock().unwrap().exports_for_note("note-a").is_empty());
+        assert_eq!(export(&index, "note-a", "x"), None);
+        load_from_epoch(&db, &engine, &index, "note-a", old_epoch);
+        assert_eq!(export(&index, "note-a", "x"), None);
+        db.save_note("note-a", "x := 10").unwrap();
+        load_note_exports(&db, &engine, &index, "note-a");
+        assert_eq!(export(&index, "note-a", "x"), Some(10.0));
         drop(db);
         cleanup(&path);
     }

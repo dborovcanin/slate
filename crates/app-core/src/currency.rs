@@ -14,6 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[serde(deny_unknown_fields)]
 pub struct CurrencyConfig {
     pub argv: Vec<String>,
+    /// Legacy startup freshness setting; accepted for config compatibility.
+    /// Startup now always attempts one refresh.
     #[serde(default = "default_refresh_hours")]
     pub refresh_hours: u64,
     #[serde(default = "default_timeout")]

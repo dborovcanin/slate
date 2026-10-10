@@ -102,10 +102,9 @@ const DEFAULT_CONFIG: &str = r##"# Slate configuration
 # "<C-r>" = "run meeting 'Project X'"
 #
 # Exchange rates for currency conversion in calculations, fetched in the
-# background at startup when the cached rates are older than refresh_hours.
+# background once at startup, or explicitly with :currency refresh.
 # [currency]
 # argv = ["python3", "/absolute/path/to/slate/scripts/examples/rates.py", "EUR"]
-# refresh_hours = 12
 
 [theme]
 # Visual theme palette.

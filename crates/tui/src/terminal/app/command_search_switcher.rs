@@ -1802,6 +1802,10 @@ impl TerminalApp {
                     }
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::CurrencyRefresh => {
+                    self.refresh_currency();
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::Run { arguments } => {
                     self.start_script(&arguments);
                     return;

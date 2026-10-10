@@ -148,6 +148,7 @@ pub enum HostCommandPlan {
         arguments: String,
     },
     RunCancel,
+    CurrencyRefresh,
     NoteSecurity {
         action: NoteSecurityAction,
     },
@@ -187,6 +188,12 @@ impl EditorEngine {
 
     pub fn plan_host_command(mode: CommandMode, raw_input: &str) -> Option<HostCommandPlan> {
         let raw = raw_input.trim().trim_start_matches(':').trim();
+        if matches!(
+            command_catalog::resolve_command(mode, raw).map(|command| command.id),
+            Some(command_catalog::CommandId::CurrencyRefresh)
+        ) {
+            return Some(HostCommandPlan::CurrencyRefresh);
+        }
         if raw.eq_ignore_ascii_case("run-cancel") {
             return Some(HostCommandPlan::RunCancel);
         }
@@ -438,6 +445,25 @@ fn apply_module_mutation(current: ModuleState, mutation: ModuleMutation) -> Modu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn currency_refresh_is_a_host_command_in_both_modes() {
+        for mode in [CommandMode::Vim, CommandMode::Editor] {
+            for command in [":currency refresh", "CURRENTCY refresh"] {
+                assert_eq!(
+                    EditorEngine::plan_host_command(mode, command),
+                    Some(HostCommandPlan::CurrencyRefresh)
+                );
+            }
+            assert!(EditorEngine::list_command_suggestions(mode, "currency")
+                .iter()
+                .any(|suggestion| suggestion.value == "currency refresh"));
+            assert_eq!(
+                EditorEngine::plan_host_command(mode, "currency refresh extra"),
+                None
+            );
+        }
+    }
 
     #[test]
     fn script_commands_preserve_argument_case_and_quotes() {

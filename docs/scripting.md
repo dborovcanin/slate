@@ -3,7 +3,7 @@
 Register local executables in `~/.config/slate/config.toml`. Scripts run only
 when invoked; there are no hooks or plugin runtime. The one exception is the
 optional currency rates script (see "Currency rates" below), which Slate runs
-in the background at startup when its cached rates are stale. Use trusted executables:
+once in the background at startup and on `:currency refresh`. Use trusted executables:
 they run with your user permissions, including filesystem and network access.
 
 ```toml
@@ -115,7 +115,6 @@ Calculations convert currencies (`10 USD to EUR`, `$10 + 5 EUR`,
 ```toml
 [currency]
 argv = ["python3", "/absolute/path/to/slate/scripts/examples/rates.py", "EUR"]
-refresh_hours = 12
 timeout_seconds = 30
 ```
 
@@ -132,13 +131,16 @@ are three letters (case does not matter); rates must be positive. `as_of` is
 optional and shown in the status message. Unknown fields are rejected.
 
 At startup Slate loads the last rates from `exchange_rates.json` in the data
-directory, so conversions work offline and from the first frame. When those
-rates are missing or older than `refresh_hours` (1–8760, default 12), the
-script runs in the background; when it finishes, visible results update. A
-failed refresh keeps the cached rates and reports the error in the status
-line. With `[startup] background_tasks_enabled = false`, the script never
-runs and only cached rates are used. Conversions involving a currency
-without a rate show no result. Restart Slate to change `[currency]`.
+directory, so conversions work offline and from the first frame. It then
+attempts one asynchronous fetch; when it finishes, visible results update.
+There are no periodic refreshes. Use `:currency refresh` to fetch again
+(`:currentcy refresh` is also accepted). Only one fetch runs at a time.
+A failed refresh keeps the cached rates and reports the error in the status
+line. With `[startup] background_tasks_enabled = false`, startup uses only
+cached rates; the explicit command still works. Conversions involving a
+currency without a rate show no result. The command reads the current
+`[currency]` configuration. The old `refresh_hours` setting is accepted for
+compatibility but no longer controls fetching.
 
 This script is not a registered script: `:run` cannot invoke it.
 
