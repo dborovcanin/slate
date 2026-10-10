@@ -405,6 +405,43 @@ pub fn splice_cross_note_refs(
     spliced
 }
 
+impl CalcState {
+    /// Catch an index up to current text; return whether the variable-name view changed.
+    /// Hosts call this after idle debounce, never on every key.
+    pub fn sync_index_after_idle(
+        &mut self,
+        doc: &crate::Document,
+        mask: editor_core::calc_plan::CalcFeatureMask,
+        viewport_only: bool,
+    ) -> bool {
+        if viewport_only && self.results.len() == doc.lines().len() {
+            editor_core::calc_plan::sync_line_metadata(&mut self.line_metadata, doc.lines(), mask);
+        }
+        editor_core::calc_plan::sync_calc_dependency_index(
+            &mut self.calc_dependency_index,
+            doc.lines(),
+            0,
+            doc.lines().len(),
+            mask,
+        );
+        let Some(revision) = self
+            .calc_dependency_index
+            .as_ref()
+            .map(|index| index.revision())
+        else {
+            return false;
+        };
+        if self.variable_names.source_revision() == Some(revision) {
+            return false;
+        }
+        let names = editor_core::calc_plan::variable_names_from_calc_dependency_index(
+            self.calc_dependency_index.as_ref(),
+        );
+        self.variable_names.set_from_revision(names, revision);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

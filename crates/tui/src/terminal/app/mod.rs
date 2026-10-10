@@ -1243,6 +1243,7 @@ impl TerminalApp {
         if let Err(error) = &app.scripts.config {
             app.status = format!("script/keybinding config: {error}");
         }
+        app.session.start_lifetime(&app.active_note.id);
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();

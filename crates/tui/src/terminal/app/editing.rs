@@ -179,6 +179,19 @@ mod tests {
 
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
+    pub(super) fn calc_job_inputs(&self) -> note_session::jobs::CalcJobInputs {
+        note_session::jobs::CalcJobInputs {
+            mask: self.calc_feature_mask(),
+            variables_enabled: self.calc_variables_enabled(),
+            cross_note_enabled: self.calc_cross_note_enabled(),
+            epoch: self
+                .cross_note_var_index
+                .lock()
+                .map(|index| index.epoch())
+                .unwrap_or_default(),
+            currency_generation: app_core::currency::generation(),
+        }
+    }
     fn calc_inputs(&self) -> note_session::calc::CalcInputs {
         note_session::calc::CalcInputs {
             mask: self.calc_feature_mask(),
@@ -2630,51 +2643,14 @@ impl TerminalApp {
         {
             return false;
         }
-        let lines = self.editor.lines().to_vec();
-        let note_id = self.active_note.id.clone();
-        let variables_enabled = self.calc_variables_enabled();
-        let cross_note_enabled = self.calc_cross_note_enabled();
-        let table_enabled = self.note_table_module_enabled();
+        let job = self
+            .session
+            .prepare_calc_job(&self.editor, self.calc_job_inputs());
         let index = std::sync::Arc::clone(&self.cross_note_var_index);
-        let index_epoch = index.lock().map(|index| index.epoch()).unwrap_or_default();
         let db = self.cross_note_db.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let engine = app_core::calc::CalcEngine::new();
-            let (extern_vars, refs_scan) = if cross_note_enabled {
-                let refs = app_core::calc::scan_cross_note_refs(&lines);
-                let dep_ids: rustc_hash::FxHashSet<&str> =
-                    refs.iter().map(|r| r.note_id.as_str()).collect();
-                for dep_id in dep_ids {
-                    preload_cross_note_dep_value(dep_id, &index, &engine, &db);
-                }
-                let extern_vars = match index.lock() {
-                    // Not after a restore reset the index: these lines are
-                    // from the replaced database.
-                    Ok(mut index) if index.epoch() == index_epoch => {
-                        index.update_deps(&note_id, &refs);
-                        index.extern_vars_for(&note_id)
-                    }
-                    _ => Vec::new(),
-                };
-                let hashes = crate::editor_core::calc_plan::hash_lines(&lines);
-                (extern_vars, Some((hashes, refs)))
-            } else {
-                (Vec::new(), None)
-            };
-            let options = app_core::calc::NoteEvaluationOptions {
-                variables_enabled,
-                cross_note_enabled,
-                table_enabled,
-                extern_vars,
-                ..Default::default()
-            };
-            let context = engine.prepare_note_context(&lines, &options);
-            let _ = tx.send(crate::terminal::calc_cache::RangeContextBuild {
-                note_id,
-                context,
-                refs_scan,
-            });
+            let _ = tx.send(note_session::jobs::run_prepare_calc(job, &db, &index));
         });
         self.calc_workers.range_context_build = Some(rx);
         true
@@ -2695,14 +2671,9 @@ impl TerminalApp {
             }
         };
         self.calc_workers.range_context_build = None;
-        if build.note_id == self.active_note.id {
-            self.session.calc.range_context = build.context;
-            if build.refs_scan.is_some() {
-                self.session.calc.cross_note_refs_scan = build.refs_scan;
-                // Built from a snapshot; check it against the text once.
-                self.session.calc.cross_note_refs_generation = None;
-            }
-        }
+        let inputs = self.calc_job_inputs();
+        self.session
+            .complete(&self.editor, build, inputs, &self.cross_note_var_index);
         self.calc_runtime.last_view_eval_range = None;
         true
     }
@@ -2744,58 +2715,24 @@ impl TerminalApp {
         {
             // The first build reads every line; do it off the input thread
             // and catch up with any edits made meanwhile when it lands.
-            let lines = self.editor.lines().to_vec();
+            let job = self
+                .session
+                .build_calc_index_job(&self.editor, self.calc_job_inputs());
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let index =
-                    crate::editor_core::calc_plan::build_calc_dependency_index(&lines, mask);
-                let metadata =
-                    crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(&lines, mask);
-                let _ = tx.send((index, metadata));
+                let _ = tx.send(note_session::jobs::run_build_calc_index(job));
             });
             self.calc_workers.index_build = Some(rx);
             return;
         }
         self.calc_runtime.index_sync_pending = false;
-        if self.calc_runtime.viewport_only
-            && self.session.calc.results.len() == self.editor.lines().len()
-        {
-            // Lets later structural edits shift results instead of clearing them.
-            crate::editor_core::calc_plan::sync_line_metadata(
-                &mut self.session.calc.line_metadata,
-                self.editor.lines(),
-                mask,
-            );
-        }
-        crate::editor_core::calc_plan::sync_calc_dependency_index(
-            &mut self.session.calc.calc_dependency_index,
-            self.editor.lines(),
-            0,
-            self.editor.lines().len(),
+        if !self.session.calc.sync_index_after_idle(
+            &self.editor,
             mask,
-        );
-        let Some(revision) = self
-            .session
-            .calc
-            .calc_dependency_index
-            .as_ref()
-            .map(|index| index.revision())
-        else {
-            return;
-        };
-        if self.session.calc.variable_names.source_revision() == Some(revision) {
+            self.calc_runtime.viewport_only,
+        ) {
             return;
         }
-        let variable_names =
-            crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
-                self.session.calc.calc_dependency_index.as_ref(),
-            );
-        // An empty list is applied too: deleting the last assignment must
-        // drop its name.
-        self.session
-            .calc
-            .variable_names
-            .set_from_revision(variable_names, revision);
         self.render_state.dirty = true;
     }
 
@@ -2806,7 +2743,7 @@ impl TerminalApp {
         let Some(rx) = self.calc_workers.index_build.as_ref() else {
             return true;
         };
-        let (index, metadata) = match rx.try_recv() {
+        let result = match rx.try_recv() {
             Ok(built) => built,
             Err(std::sync::mpsc::TryRecvError::Empty) => return false,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -2815,24 +2752,13 @@ impl TerminalApp {
             }
         };
         self.calc_workers.index_build = None;
-        if self.session.calc.calc_dependency_index.is_none() {
-            self.session.calc.calc_dependency_index = index;
-        }
-        if self.session.calc.line_metadata.is_empty() {
-            self.session.calc.line_metadata = metadata;
-            let mask = self.calc_feature_mask();
-            crate::editor_core::calc_plan::sync_line_metadata(
-                &mut self.session.calc.line_metadata,
-                self.editor.lines(),
-                mask,
-            );
-            for (idx, line) in self.editor.lines().iter().enumerate() {
-                let hash = crate::editor_core::calc_plan::hash_line(line);
-                if self.session.calc.line_metadata[idx].hash != hash {
-                    self.session.calc.line_metadata[idx] =
-                        crate::editor_core::calc_plan::line_metadata_with_mask(line, mask);
-                }
-            }
+        let inputs = self.calc_job_inputs();
+        if self
+            .session
+            .complete(&self.editor, result, inputs, &self.cross_note_var_index)
+            == note_session::jobs::Completion::Installed
+        {
+            self.render_state.dirty = true;
         }
         true
     }

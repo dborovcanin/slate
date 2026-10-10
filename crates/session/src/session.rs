@@ -3,6 +3,8 @@ use editor_core::history::policy::UndoPolicy;
 use editor_core::history::LineHistory;
 use rustc_hash::FxHashMap;
 pub struct NoteSession {
+    pub session_id: u64,
+    pub note_id: String,
     pub calc: crate::calc::CalcState,
     pub history: LineHistory<ReminderMarks>,
     pub undo_policy: UndoPolicy<ReminderUndoEntry>,
@@ -20,6 +22,8 @@ impl NoteSession {
         calc: crate::calc::CalcState,
     ) -> Self {
         Self {
+            session_id: 0,
+            note_id: String::new(),
             calc,
             history,
             reminder_ghosts,

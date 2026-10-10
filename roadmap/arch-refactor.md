@@ -545,7 +545,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 8: private document text.
 - [x] Step 9: shared calc state.
 - [x] Step 10: session calc upkeep.
-- [ ] Step 11: calc preparation/index jobs.
+- [x] Step 11: calc preparation/index jobs.
 - [ ] Step 12: session fold structure.
 - [ ] Step 13: open/reload/outside-change/leave policy.
 - [ ] Step 14: save and autosave jobs/policy.
@@ -1079,3 +1079,12 @@ table import, visual-yank scheduling, pruning/replacement redo cursors, unchange
 completion and disabled math without a provider. All 1,326 workspace tests pass,
 no new clippy warnings. Release large-note gates pass with no 30k/100k
 investigation thresholds crossed; final alternating main comparisons remain.
+
+Step 11: owned calc preparation/index jobs and runners now live in the session.
+Tickets fence note lifetimes, config masks, currency generation and database
+epochs. Prepared contexts retain engine text revalidation; stale scans cannot
+publish active-note dependencies. Export loading pins the dispatch epoch through
+recursive reads and publication. Late indexes catch up before exposing names;
+accepted completions repaint. Five shared race/Send tests and a repaint
+regression pass, as do workspace checks (no new warnings). Release large-note
+gates pass (13.32 s); no 30k/100k investigation threshold crossed.

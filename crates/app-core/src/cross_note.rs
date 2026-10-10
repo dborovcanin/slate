@@ -152,6 +152,27 @@ impl CrossNoteVarIndex {
         result
     }
 
+    /// Snapshot values for refs without publishing the caller's dependencies.
+    pub fn extern_vars_for_refs(&self, refs: &[CrossNoteRef]) -> Vec<ExternVar> {
+        let ids: FxHashSet<&str> = refs
+            .iter()
+            .map(|reference| reference.note_id.as_str())
+            .collect();
+        let mut result = Vec::new();
+        for id in ids {
+            if let Some(exports) = self.exports.get(id) {
+                for (name, &value) in exports {
+                    result.push(ExternVar {
+                        note_id: id.to_owned(),
+                        var_normalized: name.clone(),
+                        value,
+                    });
+                }
+            }
+        }
+        result
+    }
+
     /// Return exported variable entries for `note_id` (for cross-note autocomplete).
     pub fn exports_for_note(&self, note_id: &str) -> &[VariableIndexEntry] {
         self.export_entries
@@ -248,7 +269,8 @@ pub fn load_note_exports(
 }
 
 /// [`load_note_exports`] for a load that began at `epoch`.
-fn load_from_epoch(
+/// Load exports only while the dispatch epoch remains current, including publication.
+pub fn load_from_epoch(
     db: &Db,
     engine: &CalcEngine,
     index: &Mutex<CrossNoteVarIndex>,

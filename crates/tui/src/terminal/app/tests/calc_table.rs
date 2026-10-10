@@ -2336,6 +2336,32 @@ fn large_note_deleting_the_last_assignment_drops_its_name_on_the_idle_tick() {
 }
 
 #[test]
+fn background_index_completion_requests_repaint_after_installing_names() {
+    let (db, mut app, path) = app_with_note("fresh := 7\nfresh * 2");
+    let inputs = app.calc_job_inputs();
+    let job = app.session.build_calc_index_job(&app.editor, inputs);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(note_session::jobs::run_build_calc_index(job))
+        .unwrap();
+    app.session.calc.calc_dependency_index = None;
+    app.session.calc.variable_names.clear();
+    app.calc_workers.index_build = Some(rx);
+    app.calc_runtime.index_sync_pending = true;
+    app.render_state.dirty = false;
+    app.maybe_sync_calc_index_after_idle();
+    assert!(app.render_state.dirty);
+    assert!(app
+        .session
+        .calc
+        .variable_names
+        .iter()
+        .any(|name| name == "fresh"));
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn background_index_build_catches_up_with_edits_made_while_it_runs() {
     let mut lines = vec!["base := 1".to_string()];
     lines.extend((0..2_500).map(|i| format!("v{i} := base + {i}")));

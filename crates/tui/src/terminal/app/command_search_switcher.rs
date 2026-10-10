@@ -3056,6 +3056,7 @@ impl TerminalApp {
         } else {
             db.note_key_collection_name(&note.id)?
         };
+        self.session.start_lifetime(&note.id);
         self.active_note = note;
         let (render_plain_text_file, render_file_language) =
             super::file_render_syntax_for_note_id(&self.active_note.id);
