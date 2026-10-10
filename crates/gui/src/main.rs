@@ -1,7 +1,11 @@
 //! `slate-gui`: the desktop front end. See docs/gui.md.
+mod browser;
+mod commands;
 mod editor_lines;
+mod history;
 mod keys;
 mod note_view;
+mod overlays;
 mod theme;
 mod window;
 
@@ -68,11 +72,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let theme = if args.light {
-        theme::Theme::light()
-    } else {
-        theme::Theme::dark()
-    };
+    let light = args.light;
     Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
         cx.open_window(
@@ -86,7 +86,9 @@ fn main() {
                     sans: pick_font(&installed, &SANS_FONTS),
                     mono: pick_font(&installed, &MONO_FONTS),
                 };
-                cx.new(|_| window::SlateWindow::new(host, theme, fonts))
+                let view = cx.new(|cx| window::SlateWindow::new(host, light, fonts, cx));
+                window.focus(view.read(cx).focus_handle());
+                view
             },
         )
         .expect("open window");

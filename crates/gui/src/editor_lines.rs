@@ -1,7 +1,9 @@
 //! Painting one editor line from a `LineView`.
 use crate::note_view::{LineKind, LineView, Run, TableCell};
 use crate::theme::Theme;
-use gpui::{div, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString, StyledText};
+use gpui::{
+    div, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString, StyledText,
+};
 use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +24,12 @@ pub struct LineStyle<'a> {
 
 /// Styled text for `runs`, with the selection and a block cursor drawn as
 /// highlights. A bar cursor is drawn between two texts by the caller.
-fn styled(runs: &[Run], selection: Option<&Range<usize>>, block: Option<usize>, s: &LineStyle) -> StyledText {
+fn styled(
+    runs: &[Run],
+    selection: Option<&Range<usize>>,
+    block: Option<usize>,
+    s: &LineStyle,
+) -> StyledText {
     let t = s.theme;
     let mut text = String::new();
     let mut char_bytes = Vec::new();
@@ -116,9 +123,19 @@ fn split_runs(runs: &[Run], at: usize) -> (Vec<Run>, Vec<Run>) {
             right.push(run.clone());
         } else {
             let k = at - seen;
-            let byte = run.text.char_indices().nth(k).map_or(run.text.len(), |(b, _)| b);
-            left.push(Run { text: run.text[..byte].to_string(), style: run.style });
-            right.push(Run { text: run.text[byte..].to_string(), style: run.style });
+            let byte = run
+                .text
+                .char_indices()
+                .nth(k)
+                .map_or(run.text.len(), |(b, _)| b);
+            left.push(Run {
+                text: run.text[..byte].to_string(),
+                style: run.style,
+            });
+            right.push(Run {
+                text: run.text[byte..].to_string(),
+                style: run.style,
+            });
         }
         seen += n;
     }
@@ -135,11 +152,11 @@ fn text_with_cursor(line: &LineView, s: &LineStyle) -> AnyElement {
     match (line.cursor, s.cursor) {
         (Some(c), CursorShape::Bar) => {
             let (left, right) = split_runs(&line.runs, c);
-            let caret = div()
-                .w(px(2.0))
-                .h(px(18.0))
-                .flex_none()
-                .bg(if s.focused { s.theme.blue } else { s.theme.faint });
+            let caret = div().w(px(2.0)).h(px(18.0)).flex_none().bg(if s.focused {
+                s.theme.blue
+            } else {
+                s.theme.faint
+            });
             div()
                 .flex()
                 .items_center()
@@ -153,7 +170,10 @@ fn text_with_cursor(line: &LineView, s: &LineStyle) -> AnyElement {
 }
 
 fn ghost(text: &str, t: &Theme) -> impl IntoElement {
-    div().pl(px(24.0)).text_color(t.amber).child(text.trim().to_string())
+    div()
+        .pl(px(24.0))
+        .text_color(t.amber)
+        .child(text.trim().to_string())
 }
 
 fn checkbox(checked: bool, t: &Theme) -> impl IntoElement {
@@ -177,7 +197,9 @@ fn table_row(cells: &[TableCell], header: bool, t: &Theme) -> AnyElement {
         .flex()
         .border_b_1()
         .border_color(t.border)
-        .when(header, |d| d.text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD))
+        .when(header, |d| {
+            d.text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD)
+        })
         .children(cells.iter().enumerate().map(|(i, cell)| {
             let color: Hsla = if header {
                 t.muted
@@ -250,7 +272,10 @@ mod tests {
     use note_session::display::semantic::SemanticStyle;
 
     fn run(text: &str) -> Run {
-        Run { text: text.into(), style: SemanticStyle::default() }
+        Run {
+            text: text.into(),
+            style: SemanticStyle::default(),
+        }
     }
 
     #[test]
@@ -264,7 +289,10 @@ mod tests {
     #[test]
     fn merge_applies_overlays_on_whole_ranges() {
         let base = vec![(0..4, HighlightStyle::default())];
-        let over = HighlightStyle { fade_out: Some(0.5), ..Default::default() };
+        let over = HighlightStyle {
+            fade_out: Some(0.5),
+            ..Default::default()
+        };
         let merged = merge(base, vec![(1..2, over)]);
         let ranges: Vec<_> = merged.iter().map(|(r, _)| r.clone()).collect();
         assert_eq!(ranges, vec![0..1, 1..2, 2..4]);

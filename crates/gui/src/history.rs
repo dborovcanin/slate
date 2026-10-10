@@ -6,9 +6,7 @@ use crate::window::SlateWindow;
 use app_core::history::{line_changes, LineChange};
 use app_core::storage::NoteVersion;
 use editor_core::types::{EditOperation, TextChange};
-use gpui::{
-    div, prelude::*, px, AnyElement, Context, FontWeight, KeyDownEvent, SharedString,
-};
+use gpui::{div, prelude::*, px, AnyElement, Context, FontWeight, KeyDownEvent, SharedString};
 
 /// Lines of unchanged text kept around each change in the preview.
 const CONTEXT_LINES: usize = 3;
@@ -54,7 +52,9 @@ impl History {
     }
 
     fn version(&self) -> Option<&NoteVersion> {
-        self.selected.checked_sub(1).and_then(|i| self.versions.get(i))
+        self.selected
+            .checked_sub(1)
+            .and_then(|i| self.versions.get(i))
     }
 
     fn refresh(&mut self, host: &NoteHost) {
@@ -179,7 +179,9 @@ fn age(saved_at: &str) -> String {
     let Ok(t) = chrono::DateTime::parse_from_rfc3339(saved_at) else {
         return String::new();
     };
-    let secs = (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds().max(0);
+    let secs = (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
+        .num_seconds()
+        .max(0);
     match secs {
         0..=59 => "now".into(),
         60..=3599 => format!("{}m", secs / 60),
@@ -191,52 +193,80 @@ fn age(saved_at: &str) -> String {
 pub fn render(win: &SlateWindow, h: &History, cx: &mut Context<SlateWindow>) -> AnyElement {
     let t = win.theme;
     let mono = win.fonts.mono.clone();
-    let rows = std::iter::once(("Current".to_string(), String::new(), String::new(), "now".to_string()))
-        .chain(h.versions.iter().map(|v| {
-            (
-                label(&v.saved_at),
-                format!("+{}", v.lines_added),
-                format!("−{}", v.lines_removed),
-                age(&v.saved_at),
+    let rows = std::iter::once((
+        "Current".to_string(),
+        String::new(),
+        String::new(),
+        "now".to_string(),
+    ))
+    .chain(h.versions.iter().map(|v| {
+        (
+            label(&v.saved_at),
+            format!("+{}", v.lines_added),
+            format!("−{}", v.lines_removed),
+            age(&v.saved_at),
+        )
+    }))
+    .enumerate()
+    .map(|(i, (name, add, del, ago))| {
+        let on = i == h.selected;
+        div()
+            .id(SharedString::from(format!("ver-{i}")))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .h(px(32.0))
+            .px(px(10.0))
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .when(on, |d| d.bg(t.active).border_1().border_color(t.blue))
+            .hover(|s| s.bg(t.active))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let host = &this.host;
+                if let crate::overlays::Overlay::History(h) = &mut this.overlay {
+                    h.step(host, i as isize - h.selected as isize);
+                }
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .font_family(mono.clone())
+                    .text_size(px(12.5))
+                    .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
+                    .text_color(if on { t.heading } else { t.text })
+                    .child(name),
             )
-        }))
-        .enumerate()
-        .map(|(i, (name, add, del, ago))| {
-            let on = i == h.selected;
-            div()
-                .id(SharedString::from(format!("ver-{i}")))
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .h(px(32.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .cursor_pointer()
-                .when(on, |d| d.bg(t.active).border_1().border_color(t.blue))
-                .hover(|s| s.bg(t.active))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let host = &this.host;
-                    if let crate::overlays::Overlay::History(h) = &mut this.overlay {
-                        h.step(host, i as isize - h.selected as isize);
-                    }
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .font_family(mono.clone())
-                        .text_size(px(12.5))
-                        .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
-                        .text_color(if on { t.heading } else { t.text })
-                        .child(name),
-                )
-                .child(div().w(px(34.0)).font_family(mono.clone()).text_size(px(12.0)).text_color(t.blue).child(add))
-                .child(div().w(px(34.0)).font_family(mono.clone()).text_size(px(12.0)).text_color(t.amber).child(del))
-                .child(div().w(px(30.0)).text_size(px(11.5)).text_color(t.faint).child(ago))
-        });
+            .child(
+                div()
+                    .w(px(34.0))
+                    .font_family(mono.clone())
+                    .text_size(px(12.0))
+                    .text_color(t.blue)
+                    .child(add),
+            )
+            .child(
+                div()
+                    .w(px(34.0))
+                    .font_family(mono.clone())
+                    .text_size(px(12.0))
+                    .text_color(t.amber)
+                    .child(del),
+            )
+            .child(
+                div()
+                    .w(px(30.0))
+                    .text_size(px(11.5))
+                    .text_color(t.faint)
+                    .child(ago),
+            )
+    });
 
     let (heading, sub) = match h.version() {
-        None => ("Current version".to_string(), format!("{} · {} lines", h.title, win.host.doc.lines().len())),
+        None => (
+            "Current version".to_string(),
+            format!("{} · {} lines", h.title, win.host.doc.lines().len()),
+        ),
         Some(v) => (
             label(&v.saved_at),
             if h.confirm_restore {
@@ -429,7 +459,25 @@ fn diff_row(
         .font_family(mono.clone())
         .when_some(bg, |d, bg| d.bg(bg))
         .text_color(color)
-        .child(div().w(px(34.0)).flex_none().flex().justify_center().text_color(sign_color).child(sign.to_string()))
-        .child(div().min_w_0().whitespace_nowrap().pr(px(18.0)).child(if text.is_empty() { " ".to_string() } else { text.to_string() }))
+        .child(
+            div()
+                .w(px(34.0))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .text_color(sign_color)
+                .child(sign.to_string()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .whitespace_nowrap()
+                .pr(px(18.0))
+                .child(if text.is_empty() {
+                    " ".to_string()
+                } else {
+                    text.to_string()
+                }),
+        )
         .into_any_element()
 }

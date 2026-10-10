@@ -133,6 +133,9 @@ impl SlateWindow {
                 }
                 self.reload_lines();
                 self.list.scroll_to_reveal_item(0);
+                if self.host.locked() {
+                    crate::overlays::open_prompt(self, crate::overlays::PromptKind::Unlock, "", cx);
+                }
             }
             Err(err) => self.set_status(err),
         }
@@ -587,24 +590,29 @@ impl SlateWindow {
                     .border_2()
                     .border_color(t.blue),
             )
-            .child(div().flex().gap(px(2.0)).children(MENUS.iter().map(|label| {
-                let label = *label;
-                let open = crate::overlays::menu_open(self, label);
+            .child(
                 div()
-                    .id(SharedString::from(format!("menu-{label}")))
-                    .px(px(9.0))
-                    .py(px(4.0))
-                    .rounded(px(5.0))
-                    .text_size(px(12.5))
-                    .text_color(if open { t.heading } else { t.muted })
-                    .when(open, |d| d.bg(t.active))
-                    .hover(|s| s.bg(t.active))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        crate::overlays::toggle_menu(this, label, cx)
-                    }))
-                    .child(label)
-            })))
+                    .flex()
+                    .gap(px(2.0))
+                    .children(MENUS.iter().map(|label| {
+                        let label = *label;
+                        let open = crate::overlays::menu_open(self, label);
+                        div()
+                            .id(SharedString::from(format!("menu-{label}")))
+                            .px(px(9.0))
+                            .py(px(4.0))
+                            .rounded(px(5.0))
+                            .text_size(px(12.5))
+                            .text_color(if open { t.heading } else { t.muted })
+                            .when(open, |d| d.bg(t.active))
+                            .hover(|s| s.bg(t.active))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                crate::overlays::toggle_menu(this, label, cx)
+                            }))
+                            .child(label)
+                    })),
+            )
             .child(div().w(px(1.0)).h(px(16.0)).bg(t.border))
             .child(
                 div()
@@ -694,13 +702,7 @@ impl SlateWindow {
             .and_then(|l| l.as_ref())
             .and_then(|l| l.ghost.as_deref())
             .map(|g| g.trim().trim_start_matches(['=', '→']).trim().to_string());
-        let chip = |label: &'static str| {
-            div()
-                .px(px(7.0))
-                .rounded(px(9.0))
-                .bg(t.chip)
-                .child(label)
-        };
+        let chip = |label: &'static str| div().px(px(7.0)).rounded(px(9.0)).bg(t.chip).child(label);
         let (pill, pill_bg) = match self.host.input.mode() {
             VimMode::Normal => ("NORMAL", t.blue),
             VimMode::Insert => ("INSERT", t.amber),
@@ -789,6 +791,50 @@ impl SlateWindow {
     }
 }
 
+impl SlateWindow {
+    /// Stand-in for the text of an encrypted note that is not unlocked.
+    fn locked_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(12.0))
+            .font_family(self.fonts.sans.clone())
+            .child(div().text_size(px(34.0)).child("🔒"))
+            .child(
+                div()
+                    .text_size(px(16.0))
+                    .text_color(t.heading)
+                    .child("This note is encrypted"),
+            )
+            .child(
+                div()
+                    .id("unlock")
+                    .h(px(32.0))
+                    .px(px(16.0))
+                    .flex()
+                    .items_center()
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .bg(t.blue)
+                    .text_color(t.on_accent)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        crate::overlays::open_prompt(
+                            this,
+                            crate::overlays::PromptKind::Unlock,
+                            "",
+                            cx,
+                        )
+                    }))
+                    .child("Unlock"),
+            )
+    }
+}
+
 impl Render for SlateWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
@@ -801,13 +847,18 @@ impl Render for SlateWindow {
             .text_size(px(14.0))
             .line_height(px(26.0))
             .text_color(t.text)
-            .child(
-                list(
-                    self.list.clone(),
-                    cx.processor(|this, ix, window, cx| this.render_line(ix, window, cx)),
+            .map(|d| {
+                if self.host.locked() {
+                    return d.child(self.locked_view(cx));
+                }
+                d.child(
+                    list(
+                        self.list.clone(),
+                        cx.processor(|this, ix, window, cx| this.render_line(ix, window, cx)),
+                    )
+                    .size_full(),
                 )
-                .size_full(),
-            );
+            });
         div()
             .id("slate")
             .track_focus(&self.focus)
@@ -829,6 +880,7 @@ impl Render for SlateWindow {
                     .when(self.sidebar, |d| d.child(self.sidebar(cx)))
                     .child(editor),
             )
+            .children(crate::overlays::which_key(self))
             .child(self.status_bar())
             .children(crate::overlays::render(self, window, cx))
     }

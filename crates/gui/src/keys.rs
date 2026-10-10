@@ -13,14 +13,21 @@ pub enum EditingMode {
 }
 
 /// What a keystroke asks the window to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyCommand {
     /// Send to the session's input pipeline.
     Vim(VimKey),
     /// Move the cursor; `select` extends the selection (Shift).
-    Move { key: VimKey, select: bool },
-    Home { select: bool },
-    End { select: bool },
+    Move {
+        key: VimKey,
+        select: bool,
+    },
+    Home {
+        select: bool,
+    },
+    End {
+        select: bool,
+    },
     Undo,
     Redo,
     Copy,
@@ -164,10 +171,22 @@ mod tests {
 
     #[test]
     fn vim_mode_sends_keys_to_the_engine() {
-        assert_eq!(map(&key("j"), EditingMode::Vim), KeyCommand::Vim(VimKey::Char('j')));
-        assert_eq!(map(&key("shift-g"), EditingMode::Vim), KeyCommand::Vim(VimKey::Char('G')));
-        assert_eq!(map(&key("escape"), EditingMode::Vim), KeyCommand::Vim(VimKey::Esc));
-        assert_eq!(map(&key("ctrl-r"), EditingMode::Vim), KeyCommand::Vim(VimKey::Ctrl('r')));
+        assert_eq!(
+            map(&key("j"), EditingMode::Vim),
+            KeyCommand::Vim(VimKey::Char('j'))
+        );
+        assert_eq!(
+            map(&key("shift-g"), EditingMode::Vim),
+            KeyCommand::Vim(VimKey::Char('G'))
+        );
+        assert_eq!(
+            map(&key("escape"), EditingMode::Vim),
+            KeyCommand::Vim(VimKey::Esc)
+        );
+        assert_eq!(
+            map(&key("ctrl-r"), EditingMode::Vim),
+            KeyCommand::Vim(VimKey::Ctrl('r'))
+        );
     }
 
     #[test]

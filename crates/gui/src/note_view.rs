@@ -8,7 +8,12 @@
 use app_core::cross_note::CrossNoteVarIndex;
 use app_core::storage::{Db, Note, NoteModules, NoteSummary};
 use editor_core::calc_plan::CalcFeatureMask;
+use editor_core::command_catalog::CommandId;
+use editor_core::history::policy::{UndoGrouping, UndoSession};
 use editor_core::markdown_tokens::{self, FenceState};
+use editor_core::types::{
+    CommandMode, EditOperation, EditorContextSnapshot, SelectionSnapshot, TextRange,
+};
 use editor_core::vim::{VimAction, VimKey, VimMode};
 use editor_core::vim_actions::VimRegisterValue;
 use note_session::calc::CalcInputs;
@@ -25,11 +30,6 @@ use note_session::display::table::{format_formula_display_value, is_markdown_tab
 use note_session::input::{InputContext, InputOptions, InputOutcome, InputState};
 use note_session::save::{run_save, SaveCompletion, SaveContext};
 use note_session::{Document, NoteSession};
-use editor_core::command_catalog::CommandId;
-use editor_core::history::policy::{UndoGrouping, UndoSession};
-use editor_core::types::{
-    CommandMode, EditOperation, EditorContextSnapshot, SelectionSnapshot, TextRange,
-};
 use note_session::{EditContext, SessionEdit};
 use std::ops::Range;
 use std::sync::{Arc, Condvar, Mutex};
@@ -192,7 +192,8 @@ impl NoteHost {
     pub fn open_note(&mut self, note: Note) {
         self.session.open(&note, &mut self.doc);
         if let Ok(reminders) = self.db.list_reminders(&note.id) {
-            self.session.install_reminders(reminder_ghosts(&reminders, self.doc.lines()));
+            self.session
+                .install_reminders(reminder_ghosts(&reminders, self.doc.lines()));
         }
         self.input = InputState::default();
         self.modules = note.modules;
@@ -228,7 +229,8 @@ impl NoteHost {
         let reset = self.session.reset_calc_after_open(&mut self.doc, &provider);
         if reset.refresh_viewport {
             let to = self.doc.lines().len().min(FIRST_SCREEN_LINES);
-            self.session.evaluate_calc_range(&self.doc, 0, to, &provider);
+            self.session
+                .evaluate_calc_range(&self.doc, 0, to, &provider);
         }
     }
 
@@ -250,7 +252,12 @@ impl NoteHost {
 
     fn run_input(
         &mut self,
-        f: impl FnOnce(&mut NoteSession, &mut Document, &mut InputState, &InputContext<'_>) -> InputOutcome,
+        f: impl FnOnce(
+            &mut NoteSession,
+            &mut Document,
+            &mut InputState,
+            &InputContext<'_>,
+        ) -> InputOutcome,
     ) -> InputOutcome {
         let note_id = self.session.note_id().to_string();
         let provider = provider(self.modules, &note_id, &self.index, &self.db, &self.loaded);
@@ -259,7 +266,9 @@ impl NoteHost {
                 tables: self.modules.table,
                 ..Default::default()
             },
-            since_last_edit: self.last_edit.map_or(std::time::Duration::MAX, |t| t.elapsed()),
+            since_last_edit: self
+                .last_edit
+                .map_or(std::time::Duration::MAX, |t| t.elapsed()),
             calc: Some((
                 CalcEditInputs {
                     base: provider.base,
@@ -280,11 +289,15 @@ impl NoteHost {
             let len = self.doc.lines().len();
             let (from, to) = if len >= CALC_VIEWPORT_ONLY_MIN_LINES {
                 let c = self.doc.cursor_line;
-                (c.saturating_sub(FIRST_SCREEN_LINES), (c + FIRST_SCREEN_LINES).min(len))
+                (
+                    c.saturating_sub(FIRST_SCREEN_LINES),
+                    (c + FIRST_SCREEN_LINES).min(len),
+                )
             } else {
                 (0, len)
             };
-            self.session.evaluate_calc_range(&self.doc, from, to, &provider);
+            self.session
+                .evaluate_calc_range(&self.doc, from, to, &provider);
         }
         outcome
     }
@@ -315,11 +328,14 @@ impl NoteHost {
     /// Byte offsets of `(line, col)` in the note joined with `\n`.
     fn byte_offset(&self, line: usize, col: usize) -> usize {
         let lines = self.doc.lines();
-        let before: usize = lines[..line.min(lines.len())].iter().map(|l| l.len() + 1).sum();
+        let before: usize = lines[..line.min(lines.len())]
+            .iter()
+            .map(|l| l.len() + 1)
+            .sum();
         before
-            + lines
-                .get(line)
-                .map_or(0, |l| note_session::display::mapping::scalar_to_byte(l, col))
+            + lines.get(line).map_or(0, |l| {
+                note_session::display::mapping::scalar_to_byte(l, col)
+            })
     }
 
     /// The selection as byte offsets, end exclusive: Visual modes include
@@ -328,7 +344,11 @@ impl NoteHost {
     pub fn selection_bytes(&self) -> Option<(usize, usize)> {
         let anchor = self.doc.selection_anchor?;
         let cursor = (self.doc.cursor_line, self.doc.cursor_col);
-        let (start, end) = if anchor <= cursor { (anchor, cursor) } else { (cursor, anchor) };
+        let (start, end) = if anchor <= cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
         let lines = self.doc.lines();
         let line_len = |l: usize| lines.get(l).map_or(0, |t| t.chars().count());
         let (from, to) = match self.input.mode() {
@@ -351,7 +371,9 @@ impl NoteHost {
     pub fn selected_text(&mut self) -> Option<String> {
         let (from, to) = self.selection_bytes()?;
         self.doc.ensure_joined_text();
-        self.doc.joined_text_cached().map(|t| t[from..to].to_string())
+        self.doc
+            .joined_text_cached()
+            .map(|t| t[from..to].to_string())
     }
 
     /// The whole note with the selection (or cursor), as commands read it.
@@ -360,7 +382,11 @@ impl NoteHost {
         let (anchor, head) = self.selection_bytes().unwrap_or((cursor, cursor));
         self.doc.ensure_joined_text();
         EditorContextSnapshot {
-            text: self.doc.joined_text_cached().unwrap_or_default().to_string(),
+            text: self
+                .doc
+                .joined_text_cached()
+                .unwrap_or_default()
+                .to_string(),
             selection: SelectionSnapshot { anchor, head },
             changed_range: None,
         }
@@ -420,12 +446,15 @@ impl NoteHost {
     /// back as `CommandRun::Host` for the window to handle.
     pub fn run_command(&mut self, raw: &str) -> CommandRun {
         let raw = raw.trim().trim_start_matches(':').trim();
-        let id = editor_core::engine::EditorEngine::resolve_command(CommandMode::Vim, raw)
-            .map(|c| c.id);
+        let id =
+            editor_core::engine::EditorEngine::resolve_command(CommandMode::Vim, raw).map(|c| c.id);
         let snapshot = self.snapshot();
         let result = editor_core::commands::execute_command(&snapshot, raw, CommandMode::Vim);
         if result.message.ends_with("handled by host") {
-            return CommandRun::Host { id, raw: raw.to_string() };
+            return CommandRun::Host {
+                id,
+                raw: raw.to_string(),
+            };
         }
         let mut changed = false;
         for op in &result.operations {
@@ -517,7 +546,10 @@ impl NoteHost {
         &mut self,
         script: &app_core::scripts::ScriptDefinition,
         args: Vec<String>,
-    ) -> Option<(note_session::scripts::ScriptTicket, app_core::scripts::ScriptRequest)> {
+    ) -> Option<(
+        note_session::scripts::ScriptTicket,
+        app_core::scripts::ScriptRequest,
+    )> {
         use app_core::scripts::{ScriptInput, ScriptOutput};
         let selection = self.selection_bytes();
         let cursor = self.byte_offset(self.doc.cursor_line, self.doc.cursor_col);
@@ -563,11 +595,15 @@ impl NoteHost {
             .session
             .accept_script_result(&self.doc, ticket, response)
             .map_err(|r| match r {
-                note_session::scripts::ScriptRejection::Lifetime => "the note was closed".to_string(),
+                note_session::scripts::ScriptRejection::Lifetime => {
+                    "the note was closed".to_string()
+                }
                 note_session::scripts::ScriptRejection::TextChanged => {
                     "the text changed while it ran; result dropped".to_string()
                 }
-                note_session::scripts::ScriptRejection::NotEditable => "the note is locked".to_string(),
+                note_session::scripts::ScriptRejection::NotEditable => {
+                    "the note is locked".to_string()
+                }
             })?;
         let Some(edit) = edit else {
             return Ok(InputOutcome::default());
@@ -597,7 +633,8 @@ impl NoteHost {
         let note_id = self.session.note_id().to_string();
         let provider = provider(self.modules, &note_id, &self.index, &self.db, &self.loaded);
         let len = self.doc.lines().len();
-        self.session.evaluate_calc_range(&self.doc, 0, len, &provider);
+        self.session
+            .evaluate_calc_range(&self.doc, 0, len, &provider);
     }
 
     /// Unsaved edits older than the autosave delay.
@@ -648,7 +685,11 @@ impl NoteHost {
     fn selection_on(&self, line: usize, len: usize) -> Option<Option<Range<usize>>> {
         let anchor = self.doc.selection_anchor?;
         let cursor = (self.doc.cursor_line, self.doc.cursor_col);
-        let (start, end) = if anchor <= cursor { (anchor, cursor) } else { (cursor, anchor) };
+        let (start, end) = if anchor <= cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
         if line < start.0 || line > end.0 {
             return None;
         }
@@ -656,7 +697,11 @@ impl NoteHost {
             VimMode::VisualLine => Some(None),
             VimMode::Visual => {
                 let from = if line == start.0 { start.1 } else { 0 };
-                let to = if line == end.0 { (end.1 + 1).min(len) } else { len };
+                let to = if line == end.0 {
+                    (end.1 + 1).min(len)
+                } else {
+                    len
+                };
                 Some(Some(from..to.max(from)))
             }
             // Standard editing: the selection ends before the cursor.

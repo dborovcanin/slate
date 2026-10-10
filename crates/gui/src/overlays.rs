@@ -46,14 +46,24 @@ const fn it(label: &'static str, std: &'static str, vim: &'static str, act: Act)
 }
 const SEP: Item = it("", "", "", Act::Palette);
 
-pub fn menu_items(name: &str) -> &'static [Item] {
+pub fn menu_items(name: &str) -> Vec<Item> {
     use Act::*;
     match name {
-        "File" => &[
+        "File" => vec![
             it("New note", "Ctrl+N", "", Key(KeyCommand::NewNote)),
             it("Today's note", "", ":today", Cmd("today")),
-            it("Browse collections…", "Ctrl+O", ":browse", Key(KeyCommand::CollectionBrowser)),
-            it("History…", "Ctrl+Shift+H", ":history", Key(KeyCommand::History)),
+            it(
+                "Browse collections…",
+                "Ctrl+O",
+                ":browse",
+                Key(KeyCommand::CollectionBrowser),
+            ),
+            it(
+                "History…",
+                "Ctrl+Shift+H",
+                ":history",
+                Key(KeyCommand::History),
+            ),
             SEP,
             it("Save", "Ctrl+S", ":w", Key(KeyCommand::Save)),
             it("Reload from disk", "", ":reload", Cmd("reload")),
@@ -62,7 +72,7 @@ pub fn menu_items(name: &str) -> &'static [Item] {
             SEP,
             it("Quit", "Ctrl+Q", ":q", Key(KeyCommand::Quit)),
         ],
-        "Edit" => &[
+        "Edit" => vec![
             it("Undo", "Ctrl+Z", "u", Intent(VimIntent::Undo)),
             it("Redo", "Ctrl+Shift+Z", "Ctrl+R", Intent(VimIntent::Redo)),
             SEP,
@@ -73,14 +83,14 @@ pub fn menu_items(name: &str) -> &'static [Item] {
             SEP,
             it("Command palette…", "Ctrl+Shift+P", ":", Palette),
         ],
-        "View" => &[
+        "View" => vec![
             it("Sidebar", "Ctrl+\\", "", Key(KeyCommand::ToggleSidebar)),
             it("Theme", "", "", Sub("theme")),
             it("Editing mode", "", "", Sub("editing")),
             SEP,
             it("Keys and commands", "F1", ":help", Cmd("help")),
         ],
-        "Format" => &[
+        "Format" => vec![
             it("Bold", "Ctrl+B", ":bold", Cmd("format bold")),
             it("Italic", "Ctrl+I", ":italic", Cmd("format italic")),
             it("Strikethrough", "", ":strike", Cmd("format strike")),
@@ -94,7 +104,7 @@ pub fn menu_items(name: &str) -> &'static [Item] {
             it("Clear formatting", "", ":unformat", Cmd("format clear")),
             it("Format document", "", ":format", Cmd("format")),
         ],
-        "Calc" => &[
+        "Calc" => vec![
             it("Sum paragraph", "", ":sum", Cmd("sum")),
             it("Sum column", "", ":sum column", Cmd("sum column")),
             it("Average column", "", ":avg column", Cmd("avg column")),
@@ -105,44 +115,54 @@ pub fn menu_items(name: &str) -> &'static [Item] {
             it("Run script…", "", ":run", Prompt(PromptKind::Run)),
             it("Modules", "", "", Sub("modules")),
         ],
-        "Help" => &[
+        "Help" => vec![
             it("Keys and commands", "F1", ":help", Cmd("help")),
             it("Command palette", "Ctrl+Shift+P", ":", Palette),
         ],
-        "export" => &[
+        "export" => vec![
             it("Markdown", "", ":export md", Cmd("export md")),
             it("Plain text", "", ":export txt", Cmd("export txt")),
             it("PDF", "", ":export pdf", Cmd("export pdf")),
         ],
-        "security" => &[
+        "security" => vec![
             it("Encrypt note…", "", ":encrypt", Prompt(PromptKind::Encrypt)),
             it("Decrypt note…", "", ":decrypt", Prompt(PromptKind::Decrypt)),
         ],
-        "theme" => &[it("Dark", "", "", Theme), it("Light", "", "", Theme)],
-        "editing" => &[
+        "theme" => vec![it("Dark", "", "", Theme), it("Light", "", "", Theme)],
+        "editing" => vec![
             it("Vim", "", "", Mode(EditingMode::Vim)),
             it("Standard", "", "", Mode(EditingMode::Standard)),
         ],
-        "modules" => &[
+        "modules" => vec![
             it("Math", "", ":module math", Cmd("module toggle math")),
-            it("Variables", "", ":module variables", Cmd("module toggle variables")),
+            it(
+                "Variables",
+                "",
+                ":module variables",
+                Cmd("module toggle variables"),
+            ),
             it("Tables", "", ":module table", Cmd("module toggle table")),
             it("Styling", "", ":module style", Cmd("module toggle style")),
-            it("Cross-note values", "", ":module cross-note", Cmd("module toggle cross-note")),
+            it(
+                "Cross-note values",
+                "",
+                ":module cross-note",
+                Cmd("module toggle cross-note"),
+            ),
         ],
-        "format" => &[
+        "format" => vec![
             it("Bold", "Ctrl+B", ":bold", Cmd("format bold")),
             it("Italic", "Ctrl+I", ":italic", Cmd("format italic")),
             it("Strikethrough", "", ":strike", Cmd("format strike")),
             it("Inline code", "", ":icode", Cmd("format code")),
         ],
-        "turn" => &[
+        "turn" => vec![
             it("Heading", "", ":title", Cmd("paragraph title")),
             it("Checklist", "", ":clist", Cmd("paragraph clist")),
             it("Bulleted list", "", ":ulist", Cmd("paragraph ulist")),
             it("Numbered list", "", ":olist", Cmd("paragraph olist")),
         ],
-        "table" => &[
+        "table" => vec![
             it("Insert row above", "", "O", TableRowAbove),
             it("Insert row below", "", "o", TableRowBelow),
             it("Insert column right", "", "", TableColumnRight),
@@ -152,7 +172,7 @@ pub fn menu_items(name: &str) -> &'static [Item] {
             it("Sum column", "", ":sum column", Cmd("sum column")),
             it("Average column", "", ":avg column", Cmd("avg column")),
         ],
-        _ => &[],
+        _ => vec![],
     }
 }
 
@@ -258,7 +278,12 @@ pub fn open_palette(win: &mut SlateWindow, initial: &str, cx: &mut Context<Slate
     cx.notify();
 }
 
-pub fn open_prompt(win: &mut SlateWindow, kind: PromptKind, extra: &str, cx: &mut Context<SlateWindow>) {
+pub fn open_prompt(
+    win: &mut SlateWindow,
+    kind: PromptKind,
+    extra: &str,
+    cx: &mut Context<SlateWindow>,
+) {
     win.overlay = Overlay::Prompt(Prompt {
         kind,
         text: String::new(),
@@ -449,7 +474,12 @@ fn menu_row(
 ) -> AnyElement {
     let t = win.theme;
     if item.label.is_empty() {
-        return div().h(px(1.0)).mx(px(6.0)).my(px(4.0)).bg(t.border).into_any_element();
+        return div()
+            .h(px(1.0))
+            .mx(px(6.0))
+            .my(px(4.0))
+            .bg(t.border)
+            .into_any_element();
     }
     let vim = win.mode == EditingMode::Vim;
     let (key, alt) = if vim && !item.vim.is_empty() {
@@ -487,7 +517,12 @@ fn menu_row(
         .when(highlighted, |d| d.bg(t.active))
         .hover(|s| s.bg(t.active))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, act, cx)))
-        .child(div().w(px(14.0)).text_color(t.blue).child(if checked { "✓" } else { "" }))
+        .child(
+            div()
+                .w(px(14.0))
+                .text_color(t.blue)
+                .child(if checked { "✓" } else { "" }),
+        )
         .child(div().flex_1().whitespace_nowrap().child(item.label))
         .child(
             div()
@@ -507,7 +542,11 @@ fn menu_row(
             div()
                 .w(px(8.0))
                 .text_color(t.muted)
-                .child(if matches!(item.act, Act::Sub(_)) { "›" } else { "" }),
+                .child(if matches!(item.act, Act::Sub(_)) {
+                    "›"
+                } else {
+                    ""
+                }),
         )
         .into_any_element()
 }
@@ -637,8 +676,18 @@ fn palette(win: &SlateWindow, query: &str, selected: usize) -> AnyElement {
                         .border_color(t.border)
                         .font_family(win.fonts.mono.clone())
                         .text_size(px(16.0))
-                        .child(div().text_color(t.blue).font_weight(FontWeight::SEMIBOLD).child(":"))
-                        .child(div().flex_1().text_color(t.heading).child(format!("{query}▏")))
+                        .child(
+                            div()
+                                .text_color(t.blue)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(":"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(t.heading)
+                                .child(format!("{query}▏")),
+                        )
                         .child(
                             div()
                                 .font_family(win.fonts.sans.clone())
@@ -830,13 +879,17 @@ pub fn which_key(win: &SlateWindow) -> Option<AnyElement> {
     )
 }
 
-pub fn render(win: &SlateWindow, window: &mut Window, cx: &mut Context<SlateWindow>) -> Vec<AnyElement> {
+pub fn render(
+    win: &SlateWindow,
+    window: &mut Window,
+    cx: &mut Context<SlateWindow>,
+) -> Vec<AnyElement> {
     let _ = window;
     match &win.overlay {
         Overlay::None => Vec::new(),
         Overlay::Palette { query, selected } => vec![palette(win, query, *selected)],
         Overlay::Menu { name, sub } => {
-            menu_panels(win, menu_items(name), *sub, menu_left(name), 34.0, cx)
+            menu_panels(win, &menu_items(name), *sub, menu_left(name), 34.0, cx)
         }
         Overlay::Context { pos, table, sub } => {
             let items = context_items(*table);

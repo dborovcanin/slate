@@ -6,10 +6,12 @@
 use crate::overlays::{self, Prompt, PromptKind};
 use crate::window::SlateWindow;
 use app_core::storage::NoteModules;
-use chrono::{Datelike, Duration as ChronoDuration, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
+use chrono::{
+    Datelike, Duration as ChronoDuration, Local, NaiveDate, NaiveTime, TimeZone, Timelike,
+};
 use editor_core::command_catalog::{
-    parse_backup_command, parse_collection_command, parse_export_command,
-    parse_web_search_command, CollectionCommandAction, CommandId, ExportFormat,
+    parse_backup_command, parse_collection_command, parse_export_command, parse_web_search_command,
+    CollectionCommandAction, CommandId, ExportFormat,
 };
 use gpui::Context;
 use note_session::input::InputOutcome;
@@ -20,7 +22,11 @@ fn notify_status(win: &mut SlateWindow, msg: impl Into<String>, cx: &mut Context
 }
 
 fn not_yet(win: &mut SlateWindow, what: &str, cx: &mut Context<SlateWindow>) {
-    notify_status(win, format!("{what} is not in the desktop app yet (use `slate`)"), cx);
+    notify_status(
+        win,
+        format!("{what} is not in the desktop app yet (use `slate`)"),
+        cx,
+    );
 }
 
 /// Arguments after the command word, e.g. `foo bar` in `run foo bar`.
@@ -83,10 +89,21 @@ pub fn run_host_command(
                 cx,
             );
         }
-        ModuleOnMath | ModuleOffMath | ModuleToggleMath | ModuleOnTable | ModuleOffTable
-        | ModuleToggleTable | ModuleOnVariables | ModuleOffVariables | ModuleToggleVariables
-        | ModuleOnStyle | ModuleOffStyle | ModuleToggleStyle | ModuleOnCrossNote
-        | ModuleOffCrossNote | ModuleToggleCrossNote => set_module(win, id, cx),
+        ModuleOnMath
+        | ModuleOffMath
+        | ModuleToggleMath
+        | ModuleOnTable
+        | ModuleOffTable
+        | ModuleToggleTable
+        | ModuleOnVariables
+        | ModuleOffVariables
+        | ModuleToggleVariables
+        | ModuleOnStyle
+        | ModuleOffStyle
+        | ModuleToggleStyle
+        | ModuleOnCrossNote
+        | ModuleOffCrossNote
+        | ModuleToggleCrossNote => set_module(win, id, cx),
         ChooseCollection | ClearCollection | CreateCollection | DeleteCollection
         | UpdateCollection | PurgeCollection | AddToCollection | RemoveFromCollection => {
             collection_command(win, raw, cx)
@@ -223,7 +240,11 @@ fn set_module(win: &mut SlateWindow, id: CommandId, cx: &mut Context<SlateWindow
 
 fn collection_command(win: &mut SlateWindow, raw: &str, cx: &mut Context<SlateWindow>) {
     let Some(cmd) = parse_collection_command(raw) else {
-        notify_status(win, "usage: collection create|delete|join|leave|choose|clear <name>", cx);
+        notify_status(
+            win,
+            "usage: collection create|delete|join|leave|choose|clear <name>",
+            cx,
+        );
         return;
     };
     let db = &win.host.db;
@@ -235,14 +256,18 @@ fn collection_command(win: &mut SlateWindow, raw: &str, cx: &mut Context<SlateWi
     };
     let result: Result<String, String> = match cmd.action {
         CollectionCommandAction::Create => match cmd.collection.as_deref() {
-            Some(name) => db.create_collection(name, "").map(|c| format!("created {}", c.name)),
+            Some(name) => db
+                .create_collection(name, "")
+                .map(|c| format!("created {}", c.name)),
             None => {
                 overlays::open_prompt(win, PromptKind::NewCollection, "", cx);
                 return;
             }
         },
-        CollectionCommandAction::Delete => find(&cmd.collection)
-            .and_then(|c| db.delete_collection(&c.id).map(|_| format!("deleted {}", c.name))),
+        CollectionCommandAction::Delete => find(&cmd.collection).and_then(|c| {
+            db.delete_collection(&c.id)
+                .map(|_| format!("deleted {}", c.name))
+        }),
         CollectionCommandAction::Purge => find(&cmd.collection).and_then(|c| {
             db.purge_collection(&c.id)
                 .map(|n| format!("purged {} ({n} notes)", c.name))
@@ -326,7 +351,8 @@ pub fn parse_when(input: &str, now: chrono::DateTime<Local>) -> Option<chrono::D
         let h: u32 = digits.trim().parse().ok()?;
         NaiveTime::from_hms_opt(if pm { h % 12 + 12 } else { h % 12 }, 0, 0)
     };
-    let at = |date: NaiveDate, time: NaiveTime| Local.from_local_datetime(&date.and_time(time)).single();
+    let at =
+        |date: NaiveDate, time: NaiveTime| Local.from_local_datetime(&date.and_time(time)).single();
     if let Some(rest) = s.strip_prefix("tomorrow") {
         let date = now.date_naive() + ChronoDuration::days(1);
         let time = if rest.trim().is_empty() {
@@ -363,11 +389,19 @@ fn set_reminder(win: &mut SlateWindow, when: &str, cx: &mut Context<SlateWindow>
         line_text: win.host.doc.lines()[line].clone(),
         reminded_at_ms: None,
     };
-    if win.host.session.set_reminder(&win.host.doc, line, Some(mark), true) {
+    if win
+        .host
+        .session
+        .set_reminder(&win.host.doc, line, Some(mark), true)
+    {
         let before = win.snapshot_cursor();
         win.after_input(before, InputOutcome::default(), cx);
         win.save(cx);
-        notify_status(win, format!("reminder set for {}", at.format("%b %-d, %H:%M")), cx);
+        notify_status(
+            win,
+            format!("reminder set for {}", at.format("%b %-d, %H:%M")),
+            cx,
+        );
     } else {
         notify_status(win, "a reminder needs an editable note", cx);
     }
@@ -375,7 +409,11 @@ fn set_reminder(win: &mut SlateWindow, when: &str, cx: &mut Context<SlateWindow>
 
 fn clear_reminder(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) {
     let line = win.host.doc.cursor_line;
-    if win.host.session.set_reminder(&win.host.doc, line, None, true) {
+    if win
+        .host
+        .session
+        .set_reminder(&win.host.doc, line, None, true)
+    {
         let before = win.snapshot_cursor();
         win.after_input(before, InputOutcome::default(), cx);
         win.save(cx);
@@ -402,7 +440,11 @@ fn run_script(win: &mut SlateWindow, args: &str, cx: &mut Context<SlateWindow>) 
         } else {
             names.join(", ")
         };
-        return notify_status(win, format!("no script {}; scripts: {known}", parsed[0]), cx);
+        return notify_status(
+            win,
+            format!("no script {}; scripts: {known}", parsed[0]),
+            cx,
+        );
     };
     let Some((ticket, request)) = win.host.script_request(&script, parsed[1..].to_vec()) else {
         return notify_status(win, "this script needs a selection", cx);
@@ -566,7 +608,10 @@ mod tests {
     fn relative_and_absolute_reminder_times() {
         let n = now();
         assert_eq!(parse_when("in 2h", n), Some(n + ChronoDuration::hours(2)));
-        assert_eq!(parse_when("in 30m", n), Some(n + ChronoDuration::minutes(30)));
+        assert_eq!(
+            parse_when("in 30m", n),
+            Some(n + ChronoDuration::minutes(30))
+        );
         let t = parse_when("tomorrow 9am", n).unwrap();
         assert_eq!((t.day(), t.hour()), (11, 9));
         let t = parse_when("2026-10-14 09:00", n).unwrap();

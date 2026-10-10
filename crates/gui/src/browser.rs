@@ -4,9 +4,7 @@ use crate::note_view::NoteHost;
 use crate::overlays::{self, Overlay, PromptKind};
 use crate::window::SlateWindow;
 use app_core::storage::{NoteAccessMode, NoteSummary};
-use gpui::{
-    div, prelude::*, px, AnyElement, Context, FontWeight, KeyDownEvent, SharedString,
-};
+use gpui::{div, prelude::*, px, AnyElement, Context, FontWeight, KeyDownEvent, SharedString};
 
 const PREVIEW_LINES: usize = 40;
 const NOTE_ROWS: usize = 500;
@@ -97,7 +95,11 @@ impl Browser {
             Scope::Collection(id) if entry.unlocked => host.db.list_notes_meta_filtered(Some(id)),
             Scope::Collection(_) => Ok(Vec::new()),
         };
-        self.notes = notes.unwrap_or_default().into_iter().take(NOTE_ROWS).collect();
+        self.notes = notes
+            .unwrap_or_default()
+            .into_iter()
+            .take(NOTE_ROWS)
+            .collect();
         self.note = 0;
     }
 
@@ -251,7 +253,9 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
             .rounded(px(6.0))
             .cursor_pointer()
             .when(on, |d| d.bg(t.active))
-            .when(on && b.column == Column::Collections, |d| d.border_1().border_color(t.blue))
+            .when(on && b.column == Column::Collections, |d| {
+                d.border_1().border_color(t.blue)
+            })
             .hover(|s| s.bg(t.active))
             .on_click(cx.listener(move |this, _, _, cx| {
                 let host = &this.host;
@@ -265,9 +269,18 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                 div()
                     .flex_1()
                     .text_color(if on { t.heading } else { t.text })
-                    .child(format!("{}{}", if e.encrypted { "🔒 " } else { "" }, e.name)),
+                    .child(format!(
+                        "{}{}",
+                        if e.encrypted { "🔒 " } else { "" },
+                        e.name
+                    )),
             )
-            .child(div().text_size(px(11.0)).text_color(t.faint).child(e.count.to_string()))
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(t.faint)
+                    .child(e.count.to_string()),
+            )
     });
     let notes = b.notes.iter().enumerate().map(|(i, n)| {
         let on = i == b.note;
@@ -282,7 +295,9 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
             .rounded(px(6.0))
             .cursor_pointer()
             .when(on, |d| d.bg(t.active))
-            .when(on && b.column == Column::Notes, |d| d.border_1().border_color(t.blue))
+            .when(on && b.column == Column::Notes, |d| {
+                d.border_1().border_color(t.blue)
+            })
             .hover(|s| s.bg(t.active))
             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                 let host = &this.host;
@@ -290,7 +305,7 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                     b.column = Column::Notes;
                     b.pick_note(host, i);
                 }
-                if ev.down.click_count >= 2 {
+                if ev.click_count() >= 2 {
                     open_selected(this, cx);
                 }
                 cx.notify();
@@ -305,11 +320,21 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                     .child(format!(
                         "{}{}",
                         if locked { "🔒 " } else { "" },
-                        if n.title.is_empty() { "Untitled" } else { &n.title }
+                        if n.title.is_empty() {
+                            "Untitled"
+                        } else {
+                            &n.title
+                        }
                     )),
             )
     });
-    let hints = [("h j k l", "move"), ("Enter", "open"), ("n", "new note"), ("c", "new collection"), ("Esc", "close")];
+    let hints = [
+        ("h j k l", "move"),
+        ("Enter", "open"),
+        ("n", "new note"),
+        ("c", "new collection"),
+        ("Esc", "close"),
+    ];
     div()
         .absolute()
         .top(px(38.0))
@@ -405,7 +430,11 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                                     )
                                 })
                                 .children(b.preview.iter().map(|l| {
-                                    div().whitespace_nowrap().child(if l.is_empty() { " ".to_string() } else { l.clone() })
+                                    div().whitespace_nowrap().child(if l.is_empty() {
+                                        " ".to_string()
+                                    } else {
+                                        l.clone()
+                                    })
                                 })),
                         ),
                 )
@@ -420,7 +449,11 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
                         .text_size(px(11.5))
                         .text_color(t.muted)
                         .children(hints.iter().map(|(k, v)| {
-                            div().flex().gap(px(5.0)).child(div().text_color(t.text).child(*k)).child(*v)
+                            div()
+                                .flex()
+                                .gap(px(5.0))
+                                .child(div().text_color(t.text).child(*k))
+                                .child(*v)
                         })),
                 ),
         )
