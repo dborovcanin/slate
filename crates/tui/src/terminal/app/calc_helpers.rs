@@ -1,7 +1,7 @@
 use crate::storage::Db;
 #[cfg(test)]
 use crate::terminal::text_utils::line_display_cols;
-use app_core::calc::{CalcEngine, ExternVar, VariableIndexEntry};
+use app_core::calc::{CalcEngine, VariableIndexEntry};
 use app_core::cross_note::CrossNoteVarIndex;
 use std::sync::{Arc, Mutex};
 
@@ -136,34 +136,6 @@ pub(super) fn preload_cross_note_dep_value(
     db: &Db,
 ) {
     app_core::cross_note::load_note_exports(db, engine, cross_note_var_index, note_id);
-}
-
-/// Values for the `[[ID]].var` references in `lines`, loading each
-/// linked note on first use, so the first calc pass after opening a note
-/// already shows cross-note results.
-pub(super) fn startup_cross_note_extern_vars(
-    db: &Db,
-    engine: &CalcEngine,
-    cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
-    note_id: &str,
-    lines: &[String],
-) -> Vec<ExternVar> {
-    let refs = app_core::calc::scan_cross_note_refs(lines);
-    if refs.is_empty() {
-        return Vec::new();
-    }
-    app_core::cross_note::refresh_referenced_notes(db, cross_note_var_index, lines);
-    let dep_ids: rustc_hash::FxHashSet<&str> = refs.iter().map(|r| r.note_id.as_str()).collect();
-    for dep_id in dep_ids {
-        preload_cross_note_dep_value(dep_id, cross_note_var_index, engine, db);
-    }
-    match cross_note_var_index.lock() {
-        Ok(mut index) => {
-            index.update_deps(note_id, &refs);
-            index.extern_vars_for(note_id)
-        }
-        Err(_) => Vec::new(),
-    }
 }
 
 /// If the text before `cursor_col` ends with `[[ID]].partial`, return

@@ -188,7 +188,7 @@ impl TerminalApp {
     }
     /// Lines of an active visual or command-bar selection, whose calc
     /// trailers stay as the user sees them.
-    fn calc_selection_range(&self) -> Option<(usize, usize)> {
+    pub(super) fn calc_selection_range(&self) -> Option<(usize, usize)> {
         if !matches!(
             self.mode,
             UiMode::Visual | UiMode::VisualLine | UiMode::CommandBar
@@ -202,7 +202,7 @@ impl TerminalApp {
             )
         })
     }
-    fn calc_inputs(&self) -> note_session::calc::CalcInputs {
+    pub(super) fn calc_inputs(&self) -> note_session::calc::CalcInputs {
         note_session::calc::CalcInputs {
             mask: self.calc_feature_mask(),
             math_enabled: self.note_math_module_enabled(),
@@ -244,11 +244,6 @@ impl TerminalApp {
             .get(self.editor.cursor_line)
             .map(|s| s.as_str())
             .unwrap_or("")
-    }
-
-    pub(super) fn rescan_calc_flags(&mut self) {
-        let inputs = self.calc_inputs();
-        self.session.calc.rescan_calc_flags(&self.editor, inputs);
     }
 
     fn rebuild_calc_line_metadata(&mut self) {
@@ -341,20 +336,6 @@ impl TerminalApp {
         self.note_math_module_enabled() && self.note_cross_note_module_enabled()
     }
 
-    fn calc_signal_flags(&self) -> crate::editor_core::calc_plan::CalcSignalFlags {
-        crate::editor_core::calc_plan::CalcSignalFlags {
-            has_builtin_formula: self.session.calc.cached_has_builtin_formula,
-            has_variable_assignment: self.active_has_variable_assignments(),
-            has_expression: self.session.calc.cached_has_expression,
-        }
-    }
-    pub(super) fn should_defer_calc_recompute(&self) -> bool {
-        crate::editor_core::calc_plan::should_defer_after_edit(
-            self.editor.lines().len(),
-            self.calc_signal_flags(),
-            LARGE_DOC_CALC_DEFER_LINES,
-        )
-    }
     fn calc_recompute_debounce_duration(&self) -> Duration {
         Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS)
     }
@@ -369,27 +350,40 @@ impl TerminalApp {
     /// Re-evaluates every calc result after something note-wide changed,
     /// such as the calc modules or the exchange rates.
     pub(super) fn recompute_calc_whole_note(&mut self) {
-        self.calc_runtime.viewport_only = self.note_math_module_enabled()
-            && self.editor.lines().len() >= super::CALC_VIEWPORT_ONLY_MIN_LINES
-            && self.active_has_variable_assignments()
-            && !self.session.calc.cached_has_builtin_formula;
-        if self.note_math_module_enabled() {
-            self.session.calc.stale = true;
-            if self.calc_runtime.viewport_only {
-                self.clear_calc_cache();
-                let editor_height = self.editor_height();
-                self.ensure_calc_for_viewport(editor_height, true);
-            } else {
-                self.run_calc_recompute();
-            }
-        } else {
-            self.clear_calc_cache();
+        let host = note_session::calc_provider::NoteCalcProvider {
+            base: self.calc_inputs(),
+            cross_note_enabled: self.calc_cross_note_enabled(),
+            table_enabled: self.note_table_module_enabled(),
+            cross_note: note_session::calc_provider::CrossNoteSource {
+                note_id: &self.active_note.id,
+                index: &self.cross_note_var_index,
+                db: &self.cross_note_db,
+                loaded: &self.cross_note_eval_condvar,
+            },
+            selection_range: self.calc_selection_range(),
+        };
+        let reset = self
+            .session
+            .reset_calc_after_note_wide_change(&mut self.editor, &host);
+        self.calc_runtime.viewport_only = reset.viewport_only;
+        self.reset_calc_schedule();
+        if reset.cleared {
+            self.calc_runtime.last_view_eval_range = None;
+        }
+        if reset.refresh_viewport {
+            let editor_height = self.editor_height();
+            self.ensure_calc_for_viewport(editor_height, true);
         }
     }
 
     pub(super) fn clear_calc_cache(&mut self) {
-        self.session.calc.clear(&self.editor);
+        self.session.clear_calc(&self.editor);
         self.calc_runtime.last_view_eval_range = None;
+        self.reset_calc_schedule();
+    }
+
+    /// No calc pass is pending after a reset or a completed recomputation.
+    pub(super) fn reset_calc_schedule(&mut self) {
         self.calc_runtime.recompute_pending = false;
         self.calc_runtime.recompute_due_at = None;
         self.calc_runtime.pending_viewport_pass = false;

@@ -2090,7 +2090,10 @@ fn cross_note_values_show_in_viewport_evaluated_large_notes() {
         "cost := 10".to_string(),
         "cost * [[01ABCDEFGHJKMNPQRSTVWXYZ00]].vat".to_string(),
     ];
-    lines.extend((0..super::super::CALC_VIEWPORT_ONLY_MIN_LINES).map(|i| format!("x{i} := {i}")));
+    lines.extend(
+        (0..note_session::calc_provider::CALC_VIEWPORT_ONLY_MIN_LINES)
+            .map(|i| format!("x{i} := {i}")),
+    );
     let (db, mut app, path) =
         app_with_linked_notes(&lines.join("\n"), &[(RATES_NOTE_ID, RATES_NOTE_BODY)]);
     assert!(app.calc_runtime.viewport_only);

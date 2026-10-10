@@ -180,3 +180,30 @@ impl NoteSession {
         );
     }
 }
+
+/// Values for the first note shown at startup: referenced notes are refreshed
+/// and loaded synchronously, before any background loader exists.
+pub fn load_extern_vars_at_startup(
+    db: &Db,
+    engine: &CalcEngine,
+    index: &Arc<Mutex<CrossNoteVarIndex>>,
+    note_id: &str,
+    lines: &[String],
+) -> Vec<ExternVar> {
+    let refs = app_core::calc::scan_cross_note_refs(lines);
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    app_core::cross_note::refresh_referenced_notes(db, index, lines);
+    let dep_ids: rustc_hash::FxHashSet<&str> = refs.iter().map(|r| r.note_id.as_str()).collect();
+    for dep_id in dep_ids {
+        app_core::cross_note::load_note_exports(db, engine, index, dep_id);
+    }
+    match index.lock() {
+        Ok(mut index) => {
+            index.update_deps(note_id, &refs);
+            index.extern_vars_for(note_id)
+        }
+        Err(_) => Vec::new(),
+    }
+}

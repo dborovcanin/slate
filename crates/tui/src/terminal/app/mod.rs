@@ -52,7 +52,7 @@ enum BackupThreadResult {
 const CALC_RECOMPUTE_DEBOUNCE_MS: u64 = 90;
 const CALC_RECOMPUTE_PENDING_RETRY_MS: u64 = 35;
 const CALC_IDLE_EVAL_BUDGET_MS: u64 = 6;
-const CALC_ASYNC_MIN_LINES: usize = 2_000;
+use note_session::calc_reset::CALC_ASYNC_MIN_LINES;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
 const FOLD_PREFIX_TIMEOUT_MS: u64 = 900;
 const TITLE_ROW: usize = 1;
@@ -61,8 +61,7 @@ const GUTTER_WIDTH: usize = 6;
 const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
 const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
-const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
-const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
+use note_session::calc_provider::LARGE_DOC_CALC_DEFER_LINES;
 /// Viewport notes this long prepare calc off the input thread when opened;
 /// below it the preparation takes a few milliseconds and runs inline.
 #[cfg(not(test))]
@@ -953,24 +952,26 @@ impl TerminalApp {
             );
         let initial_has_builtin_formula = initial_calc_signals.has_builtin_formula;
         let initial_has_variable_assignment = initial_calc_signals.has_variable_assignment;
-        let active_has_expression = note_math_enabled && initial_calc_signals.has_expression;
-        let active_has_builtin_formula = note_math_enabled && initial_has_builtin_formula;
         let active_has_variable_assignment =
             note_math_enabled && note_variables_enabled && initial_has_variable_assignment;
-        let calc_viewport_only = note_math_enabled
-            && lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
-            && active_has_variable_assignment
-            && !active_has_builtin_formula;
-        let skip_initial_calc = calc_viewport_only
-            || (!active_has_builtin_formula
-                && !active_has_variable_assignment
-                && !active_has_expression);
+        let initial_plan = note_session::calc_reset::initial_calc_plan(
+            lines.len(),
+            initial_calc_signals,
+            note_session::calc::CalcInputs {
+                mask: crate::editor_core::calc_plan::CalcFeatureMask {
+                    math_enabled: note_math_enabled,
+                    table_enabled: note_table_enabled,
+                    variables_enabled: note_variables_enabled,
+                },
+                math_enabled: note_math_enabled,
+                viewport_only: false,
+            },
+        );
+        let calc_viewport_only = initial_plan.viewport_only;
+        let skip_initial_calc = initial_plan.skip;
         // Keep startup responsive for larger notes by deferring full calc
         // evaluation to the first idle ticks after initial paint.
-        let defer_initial_full_calc = note_math_enabled
-            && lines.len() >= CALC_ASYNC_MIN_LINES
-            && active_has_builtin_formula
-            && active_has_variable_assignment;
+        let defer_initial_full_calc = initial_plan.defer;
         let calc_begin = Instant::now();
         let calc_data = if skip_initial_calc || defer_initial_full_calc {
             CalcData {
@@ -981,7 +982,7 @@ impl TerminalApp {
             }
         } else {
             let extern_vars = if active_note.modules.cross_note {
-                startup_cross_note_extern_vars(
+                note_session::calc_provider::load_extern_vars_at_startup(
                     db,
                     &calc_engine,
                     &cross_note_var_index,

@@ -3,7 +3,7 @@ use super::{
     CommandCompletionMenuState, CommandCompletionOption, ContentSearchResponse, DatePickerAction,
     Db, Key, Note, NotePasswordDialog, NoteSearchResult, SwitcherDeleteConfirm,
     SwitcherOpenConfirm, TerminalApp, UiMode, WebSearchResponse, WebSearchState,
-    CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS, CONTENT_SEARCH_DEBOUNCE_MS,
+    COMMAND_COMPLETION_MAX_OPTIONS, CONTENT_SEARCH_DEBOUNCE_MS,
     CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::browser::step_selection;
@@ -2980,44 +2980,26 @@ impl TerminalApp {
         self.render_caches.wiki_link_line_render_cache.clear();
         self.render_state.fence_checkpoints.truncate(1);
         self.render_state.fence_checkpoints_valid_through = 0;
-        if self.calc_cross_note_enabled() && self.editor.lines().iter().any(|l| l.contains("[[")) {
-            // Values read from other notes may have changed since.
-            app_core::cross_note::refresh_referenced_notes(
-                &self.cross_note_db,
-                &self.cross_note_var_index,
-                self.editor.lines(),
-            );
-        }
-        self.rescan_calc_flags();
-        self.calc_runtime.viewport_only = self.editor.lines().len() >= CALC_VIEWPORT_ONLY_MIN_LINES
-            && self.active_has_variable_assignments()
-            && !self.session.calc.cached_has_builtin_formula;
+        let host = note_session::calc_provider::NoteCalcProvider {
+            base: self.calc_inputs(),
+            cross_note_enabled: self.calc_cross_note_enabled(),
+            table_enabled: self.note_table_module_enabled(),
+            cross_note: note_session::calc_provider::CrossNoteSource {
+                note_id: &self.active_note.id,
+                index: &self.cross_note_var_index,
+                db: &self.cross_note_db,
+                loaded: &self.cross_note_eval_condvar,
+            },
+            selection_range: self.calc_selection_range(),
+        };
+        let reset = self.session.reset_calc_after_open(&mut self.editor, &host);
+        self.calc_runtime.viewport_only = reset.viewport_only;
         self.calc_runtime.last_view_eval_range = None;
-        if self.calc_runtime.viewport_only
-            || (!self.session.calc.cached_has_builtin_formula
-                && !self.active_has_variable_assignments()
-                && !self.session.calc.cached_has_expression)
-        {
-            self.session.calc.clear(&self.editor);
-            self.session.calc.stale = false;
-            self.calc_runtime.recompute_pending = false;
-            self.calc_runtime.recompute_due_at = None;
-            self.calc_runtime.pending_viewport_pass = false;
-            self.calc_runtime.pending_full_pass = false;
-        } else if self.should_defer_calc_recompute() {
-            self.session.calc.clear(&self.editor);
-            self.session.calc.stale = true;
-            self.calc_runtime.recompute_pending = false;
-            self.calc_runtime.recompute_due_at = None;
-            self.calc_runtime.pending_viewport_pass = false;
-            self.calc_runtime.pending_full_pass = false;
-        } else {
-            self.run_calc_recompute();
-        }
+        self.reset_calc_schedule();
         self.recompute_folding();
         self.adjust_cursor();
         self.adjust_scroll();
-        if self.calc_runtime.viewport_only && !self.start_viewport_calc_preparation() {
+        if reset.refresh_viewport && !self.start_viewport_calc_preparation() {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);
         }
