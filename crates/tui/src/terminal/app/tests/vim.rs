@@ -1470,3 +1470,33 @@ fn reminders_follow_lines_opened_above_and_edits_in_place() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn large_note_visual_deletes_roundtrip_including_last_empty_line() {
+    let body = vec!["é🙂abc"; 5001].join("\n");
+    let (db, mut app, path) = app_with_note(&body);
+    app.mode = UiMode::Visual;
+    app.editor.cursor_line = 2500;
+    app.editor.cursor_col = 1;
+    app.editor.selection_anchor = Some((2500, 0));
+    assert!(app.apply_visual_selection_action(true));
+    assert_eq!(app.editor.lines[2500], "abc");
+    app.undo(&db);
+    assert_eq!(app.editor.lines[2500], "é🙂abc");
+    app.redo(&db);
+    assert_eq!(app.editor.lines[2500], "abc");
+    app.mode = UiMode::VisualLine;
+    app.editor.selection_anchor = Some((0, 0));
+    app.editor.cursor_line = 5000;
+    app.editor.cursor_col = 0;
+    assert!(app.apply_visual_selection_action(true));
+    assert_eq!(app.editor.lines, [""]);
+    app.undo(&db);
+    assert_eq!(app.editor.lines.len(), 5001);
+    assert_eq!(app.editor.lines[2500], "abc");
+    app.redo(&db);
+    assert_eq!(app.editor.lines, [""]);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

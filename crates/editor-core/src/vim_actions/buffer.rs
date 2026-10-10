@@ -7,6 +7,7 @@ pub struct VisualSelectionPlan {
     pub register: VimRegisterValue,
     pub cursor: BufferCursor,
     pub delta: EditDelta,
+    pub text_changed: bool,
     pub exact_edit: Option<ExactTextEdit>,
     pub deleted_lines: Option<(usize, usize)>,
     replacement: Option<Vec<String>>,
@@ -106,6 +107,7 @@ pub fn prepare_visual_selection(
         };
         (selected.join("\n"), replacement)
     };
+    let text_changed = delete && (!yanked.is_empty() || (linewise && lines.len() > 1));
     Some(VisualSelectionPlan {
         register: VimRegisterValue {
             text: yanked,
@@ -119,8 +121,15 @@ pub fn prepare_visual_selection(
         delta: EditDelta {
             start_line,
             old_span: end_line - start_line + 1,
-            new_span: if linewise { 0 } else { 1 },
+            new_span: if !delete {
+                end_line - start_line + 1
+            } else if linewise {
+                usize::from(end_line - start_line + 1 == lines.len())
+            } else {
+                1
+            },
         },
+        text_changed,
         exact_edit,
         deleted_lines,
         replacement,
@@ -163,10 +172,10 @@ pub fn horizontal_motion(
     forward: bool,
     neighbour: Option<usize>,
 ) -> BufferCursor {
-    let len = lines
-        .get(cursor.line)
-        .map_or(0, |line| line.chars().count());
     if forward {
+        let len = lines
+            .get(cursor.line)
+            .map_or(0, |line| line.chars().count());
         if cursor.column < len {
             BufferCursor {
                 column: cursor.column + 1,
@@ -192,6 +201,15 @@ pub fn insert_empty_line_above(lines: &mut Vec<String>, line: usize) {
     lines.insert(line, String::new());
 }
 
+/// Paste-after insertion starts after the current character, clamped at line end.
+pub fn paste_after_column(column: usize, line_len: usize) -> usize {
+    if column < line_len {
+        column + 1
+    } else {
+        line_len
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +233,14 @@ mod tests {
         let plan =
             prepare_visual_selection(&lines, cursor(1, 0), cursor(0, 0), true, true).unwrap();
         assert_eq!(plan.deleted_lines, Some((0, 1)));
+        assert_eq!(
+            plan.delta,
+            EditDelta {
+                start_line: 0,
+                old_span: 2,
+                new_span: 1
+            }
+        );
         let (register, pos) = plan.apply(&mut lines);
         assert_eq!(register.text, "one\ntwo");
         assert_eq!(lines, [""]);
@@ -225,6 +251,7 @@ mod tests {
         let mut lines = vec!["é🙂abc".into()];
         let plan =
             prepare_visual_selection(&lines, cursor(0, 2), cursor(0, 0), false, false).unwrap();
+        assert_eq!(plan.delta.old_span, plan.delta.new_span);
         let (register, pos) = plan.apply(&mut lines);
         assert_eq!(register.text, "é🙂a");
         assert_eq!(lines, ["é🙂abc"]);
@@ -253,11 +280,28 @@ mod tests {
     }
 }
 
-/// Paste-after insertion starts after the current character, clamped at line end.
-pub fn paste_after_column(column: usize, line_len: usize) -> usize {
-    if column < line_len {
-        column + 1
-    } else {
-        line_len
+#[cfg(test)]
+mod visual_metadata_tests {
+    use super::*;
+    #[test]
+    fn empty_visual_delete_is_not_a_text_change_and_multiline_yank_has_no_delta() {
+        let lines = vec![String::new()];
+        let cursor = BufferCursor { line: 0, column: 0 };
+        for linewise in [false, true] {
+            let plan = prepare_visual_selection(&lines, cursor, cursor, linewise, true).unwrap();
+            assert!(!plan.text_changed);
+            assert_eq!(plan.delta.old_span, plan.delta.new_span);
+        }
+        let lines = vec!["one".into(), "two".into()];
+        let plan = prepare_visual_selection(
+            &lines,
+            BufferCursor { line: 1, column: 1 },
+            cursor,
+            true,
+            false,
+        )
+        .unwrap();
+        assert!(!plan.text_changed);
+        assert_eq!(plan.delta.old_span, plan.delta.new_span);
     }
 }

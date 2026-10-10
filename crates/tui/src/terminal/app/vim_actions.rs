@@ -306,6 +306,7 @@ impl TerminalApp {
         ) else {
             return false;
         };
+        let history_delta = plan.text_changed.then_some(plan.delta);
         if let Some((start, end)) = plan.deleted_lines {
             self.note_deleted_lines(start, end);
         }
@@ -341,7 +342,10 @@ impl TerminalApp {
             "-- NORMAL -- (yanked)"
         });
         if delete {
-            self.mark_edited();
+            self.mark_edited_from_line_with_span(
+                history_delta.map_or(self.editor.cursor_line, |delta| delta.start_line),
+                history_delta.map(|delta| (delta.start_line, delta.old_span, delta.new_span)),
+            );
         }
         true
     }
