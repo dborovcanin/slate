@@ -1,60 +1,13 @@
 use crate::editor_core::markdown_tokens;
 use crate::terminal::canvas::{contrast_fg_for_bg, is_light_bg};
 pub use crate::terminal::markdown_view::collapse_markdown_line_for_cursor_with_formatting_boundary_exit;
-use crate::terminal::markdown_view::{hidden_line_prefix_marker_ranges, normalize_hidden_ranges};
+use crate::terminal::render_styles::CharStyle;
 pub use crate::terminal::render_styles::VariableNames;
-use crate::terminal::render_styles::{
-    apply_code_token_styles, apply_inline_token_styles, apply_line_styles_from_info,
-    apply_variable_styles, CharStyle,
-};
 pub use crate::terminal::theme::RenderPalette;
+use note_session::display::semantic::{SemanticContext, SemanticRole, SemanticStyle};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Style};
-use rustc_hash::FxHashMap;
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::sync::Arc;
-
 pub const TAB_WIDTH: usize = 4;
-const INLINE_TOKEN_CACHE_MAX_ENTRIES: usize = 512;
-
-struct InlineTokenCache {
-    entries: FxHashMap<String, Arc<Vec<markdown_tokens::InlineToken>>>,
-    order: VecDeque<String>,
-}
-
-impl InlineTokenCache {
-    fn new() -> Self {
-        Self {
-            entries: FxHashMap::default(),
-            order: VecDeque::new(),
-        }
-    }
-
-    fn get(&mut self, text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
-        if let Some(tokens) = self.entries.get(text) {
-            return Arc::clone(tokens);
-        }
-        let tokens = Arc::new(markdown_tokens::tokenize_inline_markdown(text));
-        self.entries.insert(text.to_string(), Arc::clone(&tokens));
-        self.order.push_back(text.to_string());
-        while self.entries.len() > INLINE_TOKEN_CACHE_MAX_ENTRIES {
-            let Some(evict_key) = self.order.pop_front() else {
-                break;
-            };
-            self.entries.remove(evict_key.as_str());
-        }
-        tokens
-    }
-}
-
-thread_local! {
-    static INLINE_TOKEN_CACHE: RefCell<InlineTokenCache> = RefCell::new(InlineTokenCache::new());
-}
-
-fn cached_inline_tokens(text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
-    INLINE_TOKEN_CACHE.with(|cache| cache.borrow_mut().get(text))
-}
 
 #[derive(Clone)]
 pub struct RenderContext {
@@ -250,192 +203,50 @@ impl RenderContext {
     /// Computes per-char styles, hidden marker ranges and ghost prefix for a
     /// line, advancing fenced-code state.
     fn style_line(&mut self, text: &str, deco: &LineDecorations<'_>) -> StyledLine {
-        let LineDecorations {
-            calc_ghost,
-            reminder_ghost: _,
-            reminder_strikethrough: _,
-            search_ranges,
-            current_search_ranges,
-            variable_names,
-            dim_ranges,
-            selection_ranges: reverse_ranges,
-            accent_ranges: red_ranges,
-            underline_ranges,
-            active_cursor_col,
-        } = *deco;
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len();
-        let is_table_row = text.trim_start().starts_with('|');
-        let is_table_continuation_line =
-            crate::editor_core::table::is_table_continuation_line(text);
-        let info = if self.render_as_plain_code {
-            None
-        } else {
-            Some(markdown_tokens::classify_markdown_line(text))
+        let mut context = SemanticContext {
+            fence: std::mem::take(&mut self.fence),
+            render_as_plain_code: self.render_as_plain_code,
+            forced_code_lang: self.forced_code_lang.clone(),
         };
-        // A fence line here is one that opens a block or closes the open one.
-        let is_fence_line = info.is_some() && markdown_tokens::is_fence_line(&self.fence, text);
-        let is_code_block_line =
-            !self.render_as_plain_code && (self.fence.in_code_block || is_fence_line);
-        let base_style = CharStyle {
-            fg: Some(self.palette.text_fg()),
-            bg: Some(if is_code_block_line {
-                self.palette.code_block_bg
-            } else {
-                self.palette.surface_bg()
-            }),
-            ..Default::default()
-        };
-        let mut styles = vec![base_style; len];
-        let mut hidden_ranges: Vec<(usize, usize)> = Vec::new();
-        if self.render_as_plain_code {
-            if let Some(lang) = self.forced_code_lang.as_deref() {
-                let code_tokens = markdown_tokens::tokenize_code_line(text, Some(lang));
-                apply_code_token_styles(&code_tokens, &mut styles, self.palette);
-            }
-            apply_variable_styles(&chars, &mut styles, variable_names, self.palette.variable);
-        } else if is_table_continuation_line {
-            // `|>` is a structural continuation marker, not editable cell content.
-            if let Some(style) = styles.get_mut(1) {
-                style.dim = true;
-                style.italic = true;
-                style.fg = Some(self.palette.code_comment);
-            }
-            if text.chars().nth(2).is_some_and(|ch| ch == ' ') {
-                if let Some(style) = styles.get_mut(2) {
-                    style.dim = true;
-                    style.italic = true;
-                    style.fg = Some(self.palette.code_comment);
-                }
-            }
+        let line = context.style_line(
+            text,
+            &note_session::display::semantic::LineDecorations {
+                calc_ghost: deco.calc_ghost,
+                reminder_ghost: deco.reminder_ghost,
+                reminder_strikethrough: deco.reminder_strikethrough,
+                search_ranges: deco.search_ranges,
+                current_search_ranges: deco.current_search_ranges,
+                variable_names: deco.variable_names,
+                dim_ranges: deco.dim_ranges,
+                selection_ranges: deco.selection_ranges,
+                accent_ranges: deco.accent_ranges,
+                underline_ranges: deco.underline_ranges,
+                active_cursor_col: deco.active_cursor_col,
+            },
+        );
+        self.fence = context.fence;
+        if let Some(map) = deco.source_map {
+            debug_assert_eq!(map.display_len, line.chars.len());
         }
-
-        if self.render_as_plain_code {
-            // Skip markdown semantic styling when a file has a fixed syntax mode.
-        } else if is_fence_line {
-            for s in &mut styles {
-                s.dim = true;
-            }
-            markdown_tokens::advance_fence_state(&mut self.fence, text);
-        } else if self.fence.in_code_block {
-            let code_tokens =
-                markdown_tokens::tokenize_code_line(text, self.fence.code_fence_lang.as_deref());
-            apply_code_token_styles(&code_tokens, &mut styles, self.palette);
-        } else {
-            let info = info.as_ref().expect("markdown info present");
-            apply_line_styles_from_info(info, &mut styles);
-            hidden_ranges.extend(hidden_line_prefix_marker_ranges(
-                info,
-                len,
-                active_cursor_col.is_some(),
-            ));
-            let inline_tokens = cached_inline_tokens(text);
-            // Inside table rows, single-asterisk Emphasis (`*x*`) is ambiguous
-            // with formula markers (`value*`, `value***`) and can leak across
-            // cell boundaries — always filter it.
-            //
-            // Strong (bold, `**x**`) uses double asterisks that wrap content;
-            // this is visually unambiguous when the token stays within one cell.
-            // Allow it unless the token spans a `|` character (cross-cell).
-            let filtered_tokens: Vec<markdown_tokens::InlineToken>;
-            let inline_tokens_to_apply: &[markdown_tokens::InlineToken] = if is_table_row {
-                filtered_tokens = inline_tokens
-                    .iter()
-                    .filter(|t| {
-                        if matches!(t.kind, markdown_tokens::InlineTokenType::Emphasis) {
-                            return false;
-                        }
-                        if matches!(t.kind, markdown_tokens::InlineTokenType::Strong) {
-                            // Drop bold that spans a pipe (cross-cell ambiguity).
-                            // Scan the chars slice directly — no Vec allocation.
-                            let from = t.from.min(len);
-                            let to = t.to.min(len);
-                            return !chars[from..to].iter().any(|&c| c == '|');
-                        }
-                        true
-                    })
-                    .cloned()
-                    .collect();
-                &filtered_tokens
-            } else {
-                inline_tokens.as_ref()
-            };
-            apply_inline_token_styles(
-                inline_tokens_to_apply,
-                &mut styles,
-                &mut hidden_ranges,
-                active_cursor_col,
-            );
-            apply_variable_styles(&chars, &mut styles, variable_names, self.palette.variable);
-        }
-
-        for &(start, end) in dim_ranges {
-            for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
-                s.dim = true;
-                s.fg = Some(self.palette.code_comment);
-            }
-        }
-        if !self.render_as_plain_code && is_table_row && text.contains('*') {
-            apply_table_formula_marker_styles(&chars, &mut styles, self.palette.code_comment);
-        }
-
-        for &(start, end) in search_ranges {
-            for s in styles.iter_mut().take(end.min(len)).skip(start) {
-                s.fg = Some(self.palette.search_match);
-            }
-        }
-
-        for &(start, end) in current_search_ranges {
-            for s in styles.iter_mut().take(end.min(len)).skip(start) {
-                s.bold = true;
-                s.fg = Some(self.palette.search_current);
-            }
-        }
-
-        for &(start, end) in red_ranges {
-            for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
-                s.fg = Some(self.palette.primary);
-                s.bold = true;
-                s.dim = false;
-            }
-        }
-
-        for &(start, end) in underline_ranges {
-            for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
-                s.underline = true;
-            }
-        }
-
-        hidden_ranges = normalize_hidden_ranges(hidden_ranges, len);
         let selection_bg = self
             .palette
             .selection_bg
             .unwrap_or_else(|| selection_bg_for_surface(self.palette.surface_bg()));
-        let selection_fg = contrast_fg_for_bg(selection_bg);
-        let selection_style = (!reverse_ranges.is_empty()).then_some(SelectionStyle {
-            bg: selection_bg,
-            fg: selection_fg,
-            plain_fg: self.palette.text_fg(),
-        });
-
-        let calc_prefix = if calc_ghost
-            .map(|ghost| ghost.trim_start().starts_with('*'))
-            .unwrap_or(false)
-        {
-            " "
-        } else if contains_assignment_operator(text) {
-            " = "
-        } else {
-            " → "
-        };
-
         StyledLine {
-            chars,
-            styles,
-            hidden_ranges,
-            base_style,
-            selection_style,
-            calc_prefix,
+            chars: line.chars,
+            styles: line
+                .styles
+                .into_iter()
+                .map(|style| terminal_style(style, self.palette))
+                .collect(),
+            hidden_ranges: line.hidden_ranges,
+            base_style: terminal_style(line.base_style, self.palette),
+            selection_style: (!deco.selection_ranges.is_empty()).then_some(SelectionStyle {
+                bg: selection_bg,
+                fg: contrast_fg_for_bg(selection_bg),
+                plain_fg: self.palette.text_fg(),
+            }),
+            calc_prefix: line.calc_prefix,
         }
     }
 }
@@ -475,6 +286,8 @@ pub struct WrapOutcome {
 /// Ranges are char indices into the line text.
 #[derive(Clone, Copy, Default)]
 pub struct LineDecorations<'a> {
+    /// Original source to transformed scalar columns, before hidden markers.
+    pub source_map: Option<&'a note_session::display::mapping::SourceDisplayMap>,
     pub calc_ghost: Option<&'a str>,
     pub reminder_ghost: Option<&'a str>,
     pub reminder_strikethrough: bool,
@@ -493,65 +306,34 @@ fn selection_bg_for_surface(surface_bg: Color) -> Color {
     Color::Indexed(if is_light_bg(surface_bg) { 236 } else { 252 })
 }
 
-fn contains_assignment_operator(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    if bytes.len() < 2 {
-        return false;
-    }
-
-    for i in 0..bytes.len() - 1 {
-        if bytes[i] != b':' || bytes[i + 1] != b'=' {
-            continue;
+fn terminal_style(style: SemanticStyle, palette: RenderPalette) -> CharStyle {
+    let color = |role| match role {
+        SemanticRole::Text | SemanticRole::Heading | SemanticRole::HiddenMarker => {
+            palette.text_fg()
         }
-
-        if i > 0 && matches!(bytes[i - 1], b':' | b'!' | b'<' | b'>' | b'=') {
-            continue;
-        }
-        if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
-            continue;
-        }
-
-        return true;
-    }
-
-    false
-}
-
-fn apply_table_formula_marker_styles(
-    chars: &[char],
-    styles: &mut [CharStyle],
-    marker_color: Color,
-) {
-    let len = chars.len();
-    let mut i = 0usize;
-    while i < len {
-        if chars[i] != '*' {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < len && chars[i] == '*' {
-            i += 1;
-        }
-        let end = i;
-        let prev = if start > 0 {
-            Some(chars[start - 1])
-        } else {
-            None
-        };
-        let next = if end < len { Some(chars[end]) } else { None };
-        let prev_ok = prev
-            .map(|ch| ch.is_ascii_digit() || ch == '.' || ch == ')')
-            .unwrap_or(false);
-        let next_ok = next
-            .map(|ch| ch == '|' || ch.is_whitespace())
-            .unwrap_or(true);
-        if prev_ok && next_ok {
-            for s in styles.iter_mut().take(end).skip(start) {
-                s.dim = true;
-                s.fg = Some(marker_color);
-            }
-        }
+        SemanticRole::CalcResult => palette.code_comment,
+        SemanticRole::Surface => palette.surface_bg(),
+        SemanticRole::CodeBlock => palette.code_block_bg,
+        SemanticRole::Variable => palette.variable,
+        SemanticRole::CodeKeyword => palette.code_keyword,
+        SemanticRole::CodeString => palette.code_string,
+        SemanticRole::CodeNumber => palette.code_number,
+        SemanticRole::CodeComment => palette.code_comment,
+        SemanticRole::CodeFunction => palette.code_function,
+        SemanticRole::CodeType => palette.code_type,
+        SemanticRole::SearchMatch => palette.search_match,
+        SemanticRole::SearchCurrent => palette.search_current,
+        SemanticRole::Primary => palette.primary,
+    };
+    CharStyle {
+        bold: style.bold,
+        italic: style.italic,
+        dim: style.dim,
+        strikethrough: style.strikethrough,
+        underline: style.underline,
+        reverse: style.reverse,
+        fg: style.fg.map(color),
+        bg: style.bg.map(color),
     }
 }
 

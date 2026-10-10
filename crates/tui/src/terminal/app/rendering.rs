@@ -1,9 +1,8 @@
 use super::{
     cell_visible_width, contrast_fg_for_bg, cursor_cell_typing_width, cursor_render_char_col,
     display_cell_pipe_positions, display_cols_prefix_and_total, draw_framed_surface,
-    draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
-    formula_marker_token, is_markdown_table_line, line_display_cols, min,
-    reformat_table_cursor_row_raw, reformat_table_row_for_display, table_cell_content_start_char,
+    draw_row_at_styled, find_table_formula_segments, formula_marker_token, is_markdown_table_line,
+    line_display_cols, min, reformat_table_row_for_display, table_cell_content_start_char,
     table_cell_info_at_char, table_cursor_cell_index, viewport_col_for_display_col,
     DatePickerAction, SelectionStatsKey, TableFormulaSegment, TerminalApp, TextStyle, UiMode,
     EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER, OVERFLOW_RIGHT_MARKER, TITLE_ROW,
@@ -22,6 +21,7 @@ use crate::terminal::text_utils::{
     compute_line_viewport, derive_title_from_lines, display_cols_for_prefix, line_char_len,
 };
 use crate::terminal::{date_picker, input, media_sources, notifications, switcher, text_input};
+use note_session::display::mapping::{MappedLineBuilder, Provenance, SourceDisplayMap};
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 use ratatui::Frame;
@@ -29,71 +29,12 @@ use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 /// How long a status message stays visible in the editor status bar.
+type WikiDisplay = (String, Vec<(usize, usize)>, SourceDisplayMap);
 const STATUS_MESSAGE_TTL: Duration = Duration::from_secs(5);
 use std::collections::VecDeque;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {
-    fn table_error_text(
-        error_kind: Option<&app_core::calc::TableCellErrorKind>,
-        value: &str,
-    ) -> Option<String> {
-        match error_kind {
-            Some(app_core::calc::TableCellErrorKind::OutOfBounds) => {
-                Some(String::from("table error: out_of_bounds"))
-            }
-            Some(app_core::calc::TableCellErrorKind::NonNumeric) => {
-                Some(String::from("table error: non_numeric"))
-            }
-            Some(app_core::calc::TableCellErrorKind::SelfReference) => {
-                Some(String::from("table error: self_reference"))
-            }
-            Some(app_core::calc::TableCellErrorKind::Cycle) => {
-                Some(String::from("table error: cycle"))
-            }
-            Some(app_core::calc::TableCellErrorKind::Unknown) => {
-                if let Some(code) = value.strip_prefix("!ERROR#") {
-                    Some(format!("table error: {code}"))
-                } else {
-                    Some(String::from("table error: unknown"))
-                }
-            }
-            None => None,
-        }
-    }
-
-    fn masked_formula_value<'a>(value: &'a str, is_error: bool) -> Cow<'a, str> {
-        // Keep table columns aligned while avoiding long `!ERROR#...` payloads
-        // that get awkwardly cut inside narrow cells.
-        if is_error {
-            Cow::Borrowed("!ERROR")
-        } else {
-            Cow::Borrowed(value)
-        }
-    }
-
-    /// Value shown for a formula cell: its formatted result, or `…` while it
-    /// is still being computed.
-    fn formula_cell_value(eval: Option<&app_core::calc::TableCellEvaluation>) -> String {
-        eval.map(|entry| format_formula_display_value(&entry.value))
-            .unwrap_or_else(|| String::from("…"))
-    }
-
-    /// Text a formula cell shows while not focused: its value followed by its
-    /// `*` marker.
-    fn resting_formula_cell_text(
-        eval: Option<&app_core::calc::TableCellEvaluation>,
-        marker: &str,
-    ) -> String {
-        let value = Self::formula_cell_value(eval);
-        let has_error = eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
-        let masked = Self::masked_formula_value(&value, has_error);
-        let mut out = String::with_capacity(masked.len() + marker.len());
-        out.push_str(&masked);
-        out.push_str(marker);
-        out
-    }
-
     fn push_rendered_segment_with_count(out: &mut String, segment: &str, char_count: &mut usize) {
         out.push_str(segment);
         *char_count += segment.chars().count();
@@ -171,10 +112,7 @@ impl TerminalApp {
         (display, broken)
     }
 
-    fn wiki_link_line_cache_entry(
-        &mut self,
-        line_text: &str,
-    ) -> Option<(String, Vec<(usize, usize)>)> {
+    fn wiki_link_line_cache_entry(&mut self, line_text: &str) -> Option<WikiDisplay> {
         let Some(entry) = self
             .render_caches
             .wiki_link_line_render_cache
@@ -184,7 +122,11 @@ impl TerminalApp {
         };
         if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_LINE_RENDER_CACHE_TTL_MS
         {
-            return Some((entry.rendered_line.clone(), entry.underline_ranges.clone()));
+            return Some((
+                entry.rendered_line.clone(),
+                entry.underline_ranges.clone(),
+                entry.source_map.clone(),
+            ));
         }
         self.render_caches
             .wiki_link_line_render_cache
@@ -210,6 +152,7 @@ impl TerminalApp {
         line_text: &str,
         rendered_line: &str,
         underline_ranges: &[(usize, usize)],
+        source_map: &SourceDisplayMap,
     ) {
         let is_new = !self
             .render_caches
@@ -218,6 +161,7 @@ impl TerminalApp {
         self.render_caches.wiki_link_line_render_cache.insert(
             line_text.to_string(),
             super::WikiLinkLineRenderCacheEntry {
+                source_map: source_map.clone(),
                 rendered_line: rendered_line.to_string(),
                 underline_ranges: underline_ranges.to_vec(),
                 cached_at: std::time::Instant::now(),
@@ -340,7 +284,7 @@ impl TerminalApp {
                     .iter()
                     .find(|entry| entry.cell_index == seg.cell_index);
                 out.push_str(&line[last_byte..seg.from_byte]);
-                out.push_str(&Self::resting_formula_cell_text(
+                out.push_str(&note_session::display::formula::resting_formula_cell_text(
                     eval,
                     &formula_marker_token(fi),
                 ));
@@ -402,17 +346,22 @@ impl TerminalApp {
         Some(layout)
     }
 
-    fn render_wiki_link_display_line(&mut self, line_text: &str) -> (String, Vec<(usize, usize)>) {
+    fn render_wiki_link_display_line(&mut self, line_text: &str) -> WikiDisplay {
         if let Some(cached) = self.wiki_link_line_cache_entry(line_text) {
             return cached;
         }
         let links = crate::editor_core::markdown_tokens::find_wiki_link_matches(line_text);
         if links.is_empty() {
-            return (line_text.to_string(), Vec::new());
+            return (
+                line_text.to_string(),
+                Vec::new(),
+                SourceDisplayMap::identity(line_text),
+            );
         }
 
         let chars: Vec<char> = line_text.chars().collect();
-        let mut out = String::with_capacity(line_text.len() + 16);
+        let mut mapped = MappedLineBuilder::new(chars.len());
+        let out = &mut mapped.text;
         let mut underline_ranges: Vec<(usize, usize)> = Vec::new();
         let mut cursor = 0usize;
         let mut out_char_count = 0usize;
@@ -421,13 +370,14 @@ impl TerminalApp {
             if link.title.is_some() || link.from < cursor || link.to > chars.len() {
                 continue;
             }
-            Self::push_rendered_chars_segment(
-                &mut out,
-                &chars,
-                cursor,
-                link.from,
-                &mut out_char_count,
-            );
+            Self::push_rendered_chars_segment(out, &chars, cursor, link.from, &mut out_char_count);
+            mapped
+                .map
+                .segments
+                .push(note_session::display::mapping::Segment {
+                    display: out_char_count - (link.from - cursor)..out_char_count,
+                    provenance: Provenance::Copied(cursor..link.from),
+                });
             let (base, broken) = self.wiki_link_cache_entry(&link.note_id);
             let display = if broken {
                 Self::append_link_display_text("?", link.heading.as_deref())
@@ -436,28 +386,37 @@ impl TerminalApp {
             };
             if !display.is_empty() {
                 let start = out_char_count;
-                Self::push_rendered_segment_with_count(
-                    &mut out,
-                    display.as_str(),
-                    &mut out_char_count,
-                );
+                Self::push_rendered_segment_with_count(out, display.as_str(), &mut out_char_count);
                 underline_ranges.push((start, out_char_count));
             }
+            mapped
+                .map
+                .segments
+                .push(note_session::display::mapping::Segment {
+                    display: out_char_count - display.chars().count()..out_char_count,
+                    provenance: Provenance::Owned(link.from..link.to),
+                });
             cursor = link.to;
         }
 
         if cursor == 0 {
-            return (line_text.to_string(), Vec::new());
+            return (
+                line_text.to_string(),
+                Vec::new(),
+                SourceDisplayMap::identity(line_text),
+            );
         }
-        Self::push_rendered_chars_segment(
-            &mut out,
-            &chars,
-            cursor,
-            chars.len(),
-            &mut out_char_count,
-        );
-        self.insert_wiki_link_line_cache(line_text, &out, &underline_ranges);
-        (out, underline_ranges)
+        Self::push_rendered_chars_segment(out, &chars, cursor, chars.len(), &mut out_char_count);
+        mapped
+            .map
+            .segments
+            .push(note_session::display::mapping::Segment {
+                display: out_char_count - (chars.len() - cursor)..out_char_count,
+                provenance: Provenance::Copied(cursor..chars.len()),
+            });
+        mapped.map.display_len = out_char_count;
+        self.insert_wiki_link_line_cache(line_text, out, &underline_ranges, &mapped.map);
+        (mapped.text, underline_ranges, mapped.map)
     }
 
     /// Top bar: note title (bold), unsaved marker, dim note id, and badges for
@@ -1953,6 +1912,7 @@ impl TerminalApp {
         // cursor cell in the reformatted string.
         let mut table_reflow_cell_pipes: Option<(usize, usize)> = None;
         let line_text = self.editor.lines()[line_idx].clone();
+        let mut source_map = SourceDisplayMap::identity(&line_text);
         let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
         let collapsed_hidden_count = self
             .folds
@@ -1971,7 +1931,8 @@ impl TerminalApp {
             // Formula masking rebuilds the row from source. Link ranges from
             // the unmasked row would underline unrelated output padding.
             if !is_cursor_line && formula_segments.is_empty() {
-                let (rendered, underlines) = self.render_wiki_link_display_line(&line_text);
+                let (rendered, underlines, map) = self.render_wiki_link_display_line(&line_text);
+                source_map = map;
                 rendered_line = Cow::Owned(rendered);
                 wiki_link_underline_ranges = underlines;
             }
@@ -2008,8 +1969,7 @@ impl TerminalApp {
                         .and_then(|entry| *entry)
                 };
 
-                let mut out = String::with_capacity(line_text.len() + 16);
-                let mut last_byte = 0usize;
+                let mut replacements: Vec<(std::ops::Range<usize>, String)> = Vec::new();
                 let mut char_delta: isize = 0;
                 let mut trailer_parts: Vec<String> = Vec::new();
                 formula_segment_char_delta_prefix.clear();
@@ -2022,7 +1982,7 @@ impl TerminalApp {
                 for (fi, seg) in formula_segments.iter().enumerate() {
                     let marker = formula_marker_token(fi);
                     let eval = value_for_cell(seg.cell_index);
-                    let value = Self::formula_cell_value(eval);
+                    let value = note_session::display::formula::formula_cell_value(eval);
                     let has_error = eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
                     let source_text = line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
@@ -2033,10 +1993,11 @@ impl TerminalApp {
                     // Ghost trailer: focused cell shows the value
                     // (so the user can see the result while editing),
                     // resting cells show the formula source.
-                    let trailer_text = if let Some(err) = Self::table_error_text(
-                        eval.and_then(|entry| entry.error_kind.as_ref()),
-                        eval.map(|entry| entry.value.as_str()).unwrap_or(""),
-                    ) {
+                    let trailer_text = if let Some(err) =
+                        note_session::display::formula::table_error_text(
+                            eval.and_then(|entry| entry.error_kind.as_ref()),
+                            eval.map(|entry| entry.value.as_str()).unwrap_or(""),
+                        ) {
                         err
                     } else if is_focused && !has_error {
                         value.clone()
@@ -2047,16 +2008,15 @@ impl TerminalApp {
                         trailer_parts.push(format!("{marker} ➜ {trailer_text}"));
                     }
 
-                    out.push_str(&line_text[last_byte..seg.from_byte]);
-
                     if is_focused {
-                        out.push_str(&line_text[seg.from_byte..seg.to_byte]);
                         let mapped = (self.editor.cursor_col as isize + char_delta).max(0) as usize;
                         focused_cursor_col = Some(mapped);
                         formula_segment_char_delta_prefix.push(char_delta);
                     } else {
                         let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                        let replacement = Self::resting_formula_cell_text(eval, &marker);
+                        let replacement = note_session::display::formula::resting_formula_cell_text(
+                            eval, &marker,
+                        );
                         let rendered_chars = replacement.chars().count();
                         let value_chars = rendered_chars - marker.len();
                         let marker_char =
@@ -2065,12 +2025,22 @@ impl TerminalApp {
                         resting_formula_markers.push((seg.cell_index, value_chars, marker.len()));
                         char_delta += rendered_chars as isize - old_chars as isize;
                         formula_segment_char_delta_prefix.push(char_delta);
-                        out.push_str(&replacement);
+                        replacements.push((seg.from_char..seg.to_char, replacement));
                     }
-                    last_byte = seg.to_byte;
                 }
-                out.push_str(&line_text[last_byte..]);
-                rendered_line = Cow::Owned(out);
+                let replacements: Vec<_> = replacements
+                    .iter()
+                    .map(
+                        |(source, text)| note_session::display::transform::Replacement {
+                            source: source.clone(),
+                            text,
+                        },
+                    )
+                    .collect();
+                let mapped =
+                    note_session::display::transform::substitute(&line_text, &replacements);
+                source_map = mapped.map;
+                rendered_line = Cow::Owned(mapped.text);
 
                 calc_ghost_override = Some(trailer_parts.join("  "));
 
@@ -2113,12 +2083,13 @@ impl TerminalApp {
                     // cursor-aware collapsed reflow (markers removed),
                     // matching what `render_line` actually displays.
                     let cursor = line_cursor_col.unwrap_or(self.editor.cursor_col);
-                    let (raw_display, raw_cursor) = reformat_table_cursor_row_raw(
-                        rendered_line.as_ref(),
-                        &col_widths,
-                        delimiter,
-                        cursor,
-                    );
+                    let (raw_display, raw_cursor, table_map) =
+                        note_session::display::table::reformat_table_cursor_row_raw_mapped(
+                            rendered_line.as_ref(),
+                            &col_widths,
+                            delimiter,
+                            cursor,
+                        );
                     let (collapsed_display, mapped_col, _) = reformat_table_row_for_display(
                         rendered_line.as_ref(),
                         &col_widths,
@@ -2134,14 +2105,17 @@ impl TerminalApp {
                     // caret uses the separately collapsed display coordinates.
                     line_cursor_col = Some(raw_cursor);
                     cursor_line_override = Some((collapsed_display, mc));
+                    source_map = table_map.compose(&source_map);
                     rendered_line = Cow::Owned(raw_display);
                 } else {
-                    let (display_line, _, _) = reformat_table_row_for_display(
-                        rendered_line.as_ref(),
-                        &col_widths,
-                        delimiter,
-                        None,
-                    );
+                    let (display_line, _, _, table_map) =
+                        note_session::display::table::reformat_table_row_for_display_mapped(
+                            rendered_line.as_ref(),
+                            &col_widths,
+                            delimiter,
+                            None,
+                        );
+                    source_map = table_map.compose(&source_map);
                     rendered_line = Cow::Owned(display_line);
                 }
                 if !resting_formula_markers.is_empty() {
@@ -2164,12 +2138,13 @@ impl TerminalApp {
                 line_cursor_col,
             );
             if media_transform.changed {
+                source_map = media_transform.source_map.compose(&source_map);
                 rendered_line = Cow::Owned(media_transform.rendered_line);
                 line_cursor_col = media_transform.mapped_cursor_col;
             }
         }
 
-        let (search_ranges, current_search_ranges) = if is_fold_placeholder {
+        let (mut search_ranges, mut current_search_ranges) = if is_fold_placeholder {
             (Vec::new(), Vec::new())
         } else {
             self.search_highlights_for_line(line_idx)
@@ -2181,6 +2156,19 @@ impl TerminalApp {
             }
         } else {
             self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
+        }
+
+        if !is_fold_placeholder {
+            let remap = |ranges: &[(usize, usize)]| -> Vec<(usize, usize)> {
+                ranges
+                    .iter()
+                    .flat_map(|&(start, end)| source_map.source_range_to_display(start..end))
+                    .map(|r| (r.start, r.end))
+                    .collect()
+            };
+            search_ranges = remap(&search_ranges);
+            current_search_ranges = remap(&current_search_ranges);
+            visual_highlight_ranges = remap(&visual_highlight_ranges);
         }
 
         if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
@@ -2255,6 +2243,7 @@ impl TerminalApp {
         // Image height is known only after the background worker decodes it.
         // Before then the markdown placeholder remains a single text row.
         DisplayLine {
+            source_map,
             text: rendered_line.into_owned(),
             is_cursor_line,
             calc_ghost: calc_ghost_override.or(calc_ghost),
@@ -2457,6 +2446,7 @@ fn buf_y(buf: &Buffer, row: usize) -> u16 {
 
 /// One document line resolved for display; see `prepare_display_line`.
 pub(super) struct DisplayLine {
+    pub(super) source_map: SourceDisplayMap,
     pub(super) text: String,
     is_cursor_line: bool,
     calc_ghost: Option<String>,
@@ -2480,6 +2470,7 @@ impl DisplayLine {
         variable_names: &'a render::VariableNames,
     ) -> LineDecorations<'a> {
         LineDecorations {
+            source_map: Some(&self.source_map),
             calc_ghost: self.calc_ghost.as_deref(),
             reminder_ghost: self.reminder_ghost.as_deref(),
             reminder_strikethrough: self.reminder_strikethrough,

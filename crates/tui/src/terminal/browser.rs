@@ -1230,6 +1230,7 @@ pub(crate) fn draw_note_preview(
         ranges.sort_unstable();
         let is_focus = *focus_line == Some(line_idx);
         let deco = LineDecorations {
+            source_map: None,
             calc_ghost: None,
             reminder_ghost: None,
             reminder_strikethrough: false,
@@ -1498,6 +1499,7 @@ fn draw_version_preview(
         VersionPreview::Text(lines) => {
             let mut ctx = RenderContext::with_syntax_mode(Default::default(), false, None, palette);
             let deco = LineDecorations {
+                source_map: None,
                 calc_ghost: None,
                 reminder_ghost: None,
                 reminder_strikethrough: false,

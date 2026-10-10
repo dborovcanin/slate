@@ -1135,3 +1135,12 @@ and delayed/out-of-order completions. Five tests cover save acknowledgement,
 conflicts, reminder joins/block edits/history, lifetime/epoch rejection, script
 switch-away/back, global rates and owned Send messages. Workspace checks pass;
 normal dependencies contain no terminal or GUI libraries.
+
+Phase 8 implementation: the renderer consumes shared semantic styles; marker
+visibility, formula labels, media placeholders and monospace table reflow live
+in note-session. Explicit scalar provenance composes formula/link/media/table
+substitutions with hiding; generated owners are noneditable and ghosts unowned.
+Unicode conversion, affinity, reflow and cache invalidation tests pass. Source
+search/selection ranges map through transforms. Styling and row/media caches
+are bounded and keyed by their semantic inputs. Workspace checks pass without
+new warnings; final performance and live-terminal qualification are pending.

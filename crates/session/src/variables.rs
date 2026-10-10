@@ -1,5 +1,7 @@
 use aho_corasick::AhoCorasick;
 use std::cell::OnceCell;
+use std::sync::atomic::{AtomicU64, Ordering};
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 fn is_variable_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
@@ -14,18 +16,29 @@ fn has_variable_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool 
 /// Calc variable names plus a matcher for highlighting them, built on first
 /// use. A note can define thousands of variables, so rendered lines must not
 /// be scanned once per name.
-#[derive(Default)]
 pub struct VariableNames {
     names: Vec<String>,
+    identity: u64,
     matcher: OnceCell<Option<AhoCorasick>>,
     /// Revision of the source the names were derived from, when known.
     source_revision: Option<u64>,
 }
 
+impl Default for VariableNames {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
 impl VariableNames {
+    /// Stable while names are unchanged, unique across owners and replacements.
+    pub fn identity(&self) -> u64 {
+        self.identity
+    }
     pub fn new(names: Vec<String>) -> Self {
         Self {
             names,
+            identity: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             matcher: OnceCell::new(),
             source_revision: None,
         }

@@ -283,6 +283,7 @@ struct WikiLinkRenderCacheEntry {
 
 #[derive(Debug, Clone)]
 struct WikiLinkLineRenderCacheEntry {
+    source_map: note_session::display::mapping::SourceDisplayMap,
     rendered_line: String,
     underline_ranges: Vec<(usize, usize)>,
     cached_at: Instant,

@@ -33,3 +33,5 @@ pub mod save;
 pub mod scripts;
 
 pub mod rates;
+
+pub mod display;
