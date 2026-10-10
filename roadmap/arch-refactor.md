@@ -1,6 +1,7 @@
 # Architecture Refactor: Core-Owned Editing
 
-Status: phases 1–3, 5 and 6 implemented, phase 4 partial (2026-10-10); see
+Status: phases 1–3, 5 and 6 implemented, phase 4 partial; phases 7 (shared
+note session) and 8 (shared display model) planned (2026-10-10). See
 "Follow-ups". Execution reference for moving editing semantics
 out of `crates/tui` into the core crates. Ownership rules come from
 `AGENTS.md` and `roadmap/plan.md` ("Ownership Rules"); the existing contract
@@ -24,12 +25,12 @@ Why now, independent of any future front end:
 
 ## Non-goals
 
-- No GUI and no generic "session" or controller layer up front. Shared
-  orchestration is explicitly deferred: autosave, worker-result validation,
-  cancellation and session lifecycle still live in `TerminalApp`. These
-  phases improve editing ownership; they do not yet make those workflows
-  reusable by another front end. A future extraction should share their
-  correctness policy rather than copy it into each front end.
+- No GUI in this plan. A second front end is a separate project; this plan
+  only makes the shared parts ready for it.
+- No speculative framework. Phases 1–6 deliberately deferred shared
+  orchestration until editing semantics were core-owned. Phase 7 now
+  extracts it from code the terminal already runs, one responsibility at a
+  time, rather than designing a controller layer up front.
 - The six phase commits preserve behavior. Separately committed, reproduced
   bugs from the follow-up audit are listed below. Replay fixtures and performance
   limits remain unchanged, with added regressions and coverage.
@@ -83,9 +84,9 @@ Verdicts: **core** moves to a core crate, **host** stays in `crates/tui`,
 | Fold view map | `rebuild_fold_view_map`, `real_line_for_virtual`, `current_virtual_line` | later | motions depend on it; revisit after vim execution moves |
 | Completion semantics | `calc_helpers.rs`: `extract_variable_completion_prefix`, `variable_completion_candidates`, `build_variable_suggestions`, `extract_cross_note_completion_prefix`; `editing.rs`: `variable_autocomplete_state`, `parse_wiki_link_query`, `filtered_wiki_link_suggestions` | split | prefix/candidate logic core; popups host |
 | In-note search matching | `text_utils.rs`: `case_insensitive_matches`; `recompute_search` | core | `editor_core::search` (new) |
-| Markdown display rules | `terminal/markdown_view.rs` | later | pure already; move when another consumer or tests need it |
-| Table display reformatting | `table_helpers.rs`: `reformat_table_row_impl` and friends | later | presentation of `TableBlockLayout`; evaluate after phase 4 |
-| Reminder line mapping | `reminder_helpers.rs`: `line_change`, `fates`, `move_lines` | later | builds on `app_core::reminders::block_line_fates`; preserve exact pre-edit coordinates and block mappings, not just `EditDelta` |
+| Markdown display rules | `terminal/markdown_view.rs` | phase 8 | pure already; part of the shared display model |
+| Table display reformatting | `table_helpers.rs`: `reformat_table_row_impl` and friends | phase 8 | presentation of `TableBlockLayout`; part of the shared display model |
+| Reminder line mapping | `reminder_helpers.rs`: `line_change`, `fates`, `move_lines` | phase 7 | builds on `app_core::reminders::block_line_fates`; preserve exact pre-edit coordinates and block mappings, not just `EditDelta` |
 | Switcher, collections, content/web search, command bar, dialogs, pickers, help, browser | `command_search_switcher.rs`, `input_modes.rs`, `browser.rs` | host | UI state |
 | Save, autosave, outside changes, workers (scripts, currency, prewarm, viewport calc preparation) | various | host | side effects and threads |
 | Calc scheduling (debounce, idle ticks, `key_depth`) | `editing.rs` | host | timing is host policy |
@@ -240,11 +241,124 @@ DB lookups stay in the host.
 Done when completion and search logic is tested in core and the terminal keeps
 only popup state and DB lookups.
 
+### Phase 7: shared note session (planned)
+
+**Why, and why now.** Phases 1–6 deferred a session layer: moving editing
+semantics first kept it from wrapping `TerminalApp`'s mix of policy and
+scheduling. That is done, and a second front end is now a near-term goal.
+What remains in `TerminalApp` is largely correctness policy, not only
+timing (see "Host-owned correctness policy"): save revision checks, stale
+worker results, exact edit recording before mutation, and the order of
+history, reminder, calc and fold updates after an edit. A second copy of
+those rules would drift and fail as data loss or stale results, so they
+need one owner that both front ends call. Neither core crate can own it:
+calc upkeep needs `editor-core` planning and `app-core` evaluation, and
+neither depends on the other.
+
+**Shape.** A new crate (`crates/session`, name provisional) depending on
+`editor-core` and `app-core`. It owns one open note's state and the rules
+for changing it, and it never runs work itself:
+
+- Owns: note identity, access mode and stored revision; text generation and
+  dirty state; `LineHistory` and
+  `UndoPolicy`; reminder marks; fold structure caches; calc results, line
+  metadata, dependency index and prepared calc context.
+- Takes: core edit plans and commands, results of jobs it requested, and
+  the current time as an input. It holds no clock.
+- The document (lines, cursor, selection anchor, text generation, joined
+  text) is a `Document` value defined by the crate and passed to session
+  calls as `&mut Document`. Front ends read it freely and move the cursor;
+  only the crate changes its text. Keeping it a separate value, rather than
+  a field behind the session, avoids rewriting several hundred
+  `self.editor.*` call sites and lets a GPUI entity hold both side by side.
+- Returns effects: which lines to repaint, a status message, and jobs for
+  the front end to run (calc preparation and index builds, autosave with the
+  revision it expects, cross-note export loads). Jobs carry the identity and
+  versions relevant to their type; result acceptance follows the rules below,
+  rather than one universal note/text/epoch check.
+- Does not own: viewport and scroll, wrapping, fold collapse state and view
+  map, popups, dialogs, key mapping, clipboard, worker threads, timers and
+  rendering. The terminal keeps its event loop and threads; another front
+  end runs the same jobs on its own executor.
+- Beside the note session, the crate holds the application-wide rate
+  service: the refresh coordination now in `terminal/app/currency.rs` (one
+  fetch at a time, cancellation on exit, applying a result and invalidating
+  calc state). It follows the same rules: it returns the fetch job and the
+  invalidation effects, and the installed rates themselves stay in
+  `app_core::currency`.
+
+**Result acceptance.** Keep acknowledgement of completed side effects separate
+from installing results into the current buffer:
+
+- Script edits require the same note, session lifetime, text generation and
+  editable access state. Switching away and back must still invalidate the
+  old result.
+- Calc preparation and index/export results validate the note/session and
+  relevant text, dependency and currency versions before installation or
+  shared-index publication. Preserve existing revalidation where a result can
+  be reused safely; each job type specifies its required checks.
+- A successful save acknowledges the persisted snapshot even when more typing
+  occurred while it ran. Advance the stored revision only if its expected
+  revision still matches, and clear dirty state only if the saved snapshot is
+  still current. Preserve reminder-generation acknowledgement and keep newer
+  text/reminder edits unsaved. Drain or reconcile pending saves before switch,
+  reload and close; never discard an acknowledgement merely because the text
+  generation changed, or roll back a newer stored revision.
+- Currency refresh is application-wide and survives note switches. Apply it
+  once through the shared rate service, skip identical rates, and invalidate
+  affected sessions and cross-note calculation state when rates change.
+  Cancellation and overlapping-refresh policy belong to that global job,
+  rather than the lifetime of one note session.
+
+**Steps.** "Phase 7 implementation plan" below lists them as one commit
+each: prerequisites (undo cursor fix, fold upkeep from `EditDelta`, core plans
+for host-only edits), the crate and its `Document`, session state, one edit
+pipeline, calc state and jobs, fold structure, note lifecycle and saves,
+script results and the rate service, then a headless-host test and a final
+bug and performance round.
+
+Done when `TerminalApp` holds a session and keeps only input mapping,
+rendering, timers and job execution; each row of "Host-owned correctness
+policy" is moved into the session or the rate service, or is pure scheduling;
+and session tests drive edits, jobs and stale results without a terminal.
+Cover typing during autosave, save completion after a newer revision,
+switch-away/back script rejection, global currency refresh across note
+switches, and reminder positions through joins, block replacements and
+undo/redo.
+
+### Phase 8: shared display model (planned)
+
+Move the presentation rules both front ends need into a shared,
+framework-independent model: which markdown markers are hidden or revealed
+for a cursor (`terminal/markdown_view.rs`), table display reformatting, and
+the spans for calc results and variable highlights. Output is styled lines
+with semantic styles (heading, hidden marker, calc result, variable), not
+colors or cells; each front end maps them to its own theme and geometry.
+Each transformed line also carries explicit source-to-display and
+display-to-source mappings, with coordinate units stated. Hidden markers,
+substituted formula values, table padding and generated ghost spans retain
+their source provenance. Define whether a position in generated text maps to
+an owning source span or is non-editable, including the cursor affinity at
+hidden boundaries. The front end maps display positions to terminal cells or
+pixels for cursor placement, selection and hit testing.
+
+Keep derived lines cached and update only affected lines or table blocks.
+Cache validity includes text changes, cursor-dependent reveal state, module
+state and relevant calc/variable generations; cursor movement must not cause
+whole-document parsing or layout.
+The model assumes a monospace editor font; table layout for proportional
+fonts would be front-end geometry.
+
+Done when the terminal renderer draws from the shared styled lines and
+keeps only terminal styles, cell painting and wrapping. Shared tests cover
+Unicode coordinate conversion, hidden-marker boundaries, formula substitution,
+table reflow and generated-span hit policies. Terminal replays and performance
+gates verify that mapping and cache extraction preserve existing behavior.
+
 ### Later, only when needed
 
-Fold view map, markdown display rules, table display reformatting and
-reminder line mapping. They are presentation-derived or already pure; move
-them when a second consumer or a test needs them, not before.
+Fold view map. Move it when a second consumer or a test needs it, not before.
+Reminder mapping orchestration is required by phase 7.
 
 ## Rules for every step
 
@@ -259,7 +373,16 @@ them when a second consumer or a test needs them, not before.
 - Run `perf-check` against `perf/baselines/large_note.json` for any step that
   touches editing, calc or folding; p50/p95 must not regress.
 - Update `roadmap/editor-engine-contract.md` when a new contract (buffer,
-  history, post-edit plan) becomes canonical.
+  history, post-edit plan, session) becomes canonical.
+- The session crate (phase 7) depends only on `editor-core`, `app-core` and
+  `table-syntax`. It must not spawn threads or read the clock: add a
+  `clippy.toml` in the crate with `disallowed-methods` for
+  `std::thread::spawn`, `std::thread::Builder::spawn`, `std::thread::scope`,
+  `std::time::Instant::now` and `std::time::SystemTime::now`, and set `disallowed_methods = "deny"` under
+  `[lints.clippy]` in its `Cargo.toml`. Configuration alone emits warnings;
+  the deny level makes the prescribed workspace Clippy check fail on a
+  violation. Verify enforcement with a temporary forbidden call when the
+  crate is introduced.
 
 ## Risks
 
@@ -282,6 +405,8 @@ them when a second consumer or a test needs them, not before.
 | 4. Vim intent execution | Partial | Visual selection, operator/text-object plans, registers and cursor placement are core-owned; paste and open-line buffer edits remain in the host |
 | 5. Post-edit planning | Complete | `plan_after_edit`, `plan_result_remap` and fold upkeep decisions are core-owned; fold upkeep still locates edits from the cursor (see "Follow-ups") |
 | 6. Completion and search | Complete | Prefixes, candidates, wiki-link queries and search matching are core-owned; applying a picked completion still edits in the host |
+| 7. Shared note session | Planned | Step-by-step plan in "Phase 7 implementation plan"; starts with the undo cursor fix and the fold-upkeep and host-only-edit follow-ups |
+| 8. Shared display model | Planned | |
 
 Track progress by which semantic decisions have a canonical core owner,
 which terminal paths delegate to it, and which core regression tests cover
@@ -291,9 +416,10 @@ not an acceptance criterion.
 
 ### Host-owned correctness policy
 
-Policy that stays in `TerminalApp` after these phases. A future shared
-orchestration layer should take these over rather than copy them per front
-end.
+Policy that stays in `TerminalApp` after phases 1–6. Phase 7 moves note-local
+policy into the shared session and application-wide currency policy into the
+rate service in the same crate. Pure scheduling (timers, threads, idle ticks) stays with
+each front end.
 
 | Policy | Where | Notes |
 | --- | --- | --- |
@@ -394,16 +520,414 @@ change with core tests.
   time, which is O(pasted lines × note lines); use one splice.
 - **Search allocation.** `search::find_matches` lowercases a copy of every line
   on each query change; reuse one buffer.
-- **Document state.** The after-edit pipeline (calc plan execution, fold view
-  map, cache invalidation) and the fold structure/text caches still live in
-  `TerminalApp`. A core document-state type (lines, cursor, history, undo
-  policy, fold caches, calc metadata) whose `apply` returns effects would let
-  another front end reuse it.
+- **Document state.** Now phase 7.
 - **Pre-existing bug, also on `main`.** Typing `one`/`two`, then `o` with
   `three`/`four`, `gg V d`, `u`, Ctrl-R, `u` and `x` in Vim mode joins the
   first two lines (`onetwo`) instead of deleting a character. The restored
   cursor is probably left past the line end; undo should clamp it as Normal
   mode does.
-- **Display model.** `terminal/markdown_view.rs` and table display
-  reformatting remain terminal code; a second front end needs them as a
-  shared styled-line model.
+- **Display model.** Now phase 8.
+
+## Phase 7 implementation plan
+
+Written for an agent implementing phase 7 without prior context. Read
+`AGENTS.md`, this document's phase 7 section ("Shape" and "Result
+acceptance") and `roadmap/editor-engine-contract.md` first. Line counts and
+names below were checked against the code on `main` at `4020693`; re-check them before
+each step, since earlier steps move code.
+
+### Ground rules
+
+- Work on a branch named `session`, created from an up-to-date `main`.
+- One commit per step below, using the given commit title. Keep each commit
+  under 300 changed lines excluding tests. Steps marked **[mechanical]**
+  are renames or moves that may exceed that; stop and get explicit approval
+  before committing one. Follow the repository owner's rules for asking
+  before commits and pushes.
+- Every step is behavior neutral, except steps marked **[fix]**, which fix
+  one recorded bug and add a regression test for it.
+- Keep `cargo build -p slate` free of new dependencies except the new crate.
+  The new crate may use crates already in the workspace (`rustc-hash`,
+  `aho-corasick`) and nothing else.
+- Do not change `perf/baselines/*.json`. A regression is fixed or reported,
+  never absorbed into a limit.
+- Stop and ask instead of improvising when: a step needs a behavior change
+  not listed here, a perf regression from the table below cannot be removed,
+  a golden replay fixture would have to change, or the code no longer
+  matches what a step describes.
+- After finishing, update "Progress" and the contract document (step 18).
+
+**Verification after every step** (run from the repository root):
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets 2>&1 | grep -E '^(warning|error)' | sort | uniq -c > /tmp/clippy-step.txt
+diff /tmp/clippy-baseline.txt /tmp/clippy-step.txt   # no new warnings or errors
+cargo test --workspace
+```
+
+**Performance check** for steps marked **[perf]**:
+
+```sh
+cargo test --release -p slate --lib large_note_perf -- --ignored --nocapture > /tmp/ln-step.txt 2>&1
+cargo run --release -p slate --bin perf-check     # read the `table` line when a step touches tables
+```
+
+Compare each metric's p50 and p95 for 30k and 100k lines with the step 0
+baseline. Investigate any metric whose p50 rises by more than 10% and more
+than 0.3 ms with at least 5 samples (`n` column); `type_table` has only 2
+samples at 30k, so judge it at 100k. Every metric must stay within
+`perf/baselines/large_note.json`. 400k lines are reported, not gated, but
+compare them too.
+
+### What the crate must look like when done
+
+Package `note-session` (library `note_session`) in `crates/session`, a
+workspace member depending on `editor-core`, `app-core`, `rustc-hash` and
+`aho-corasick`.
+
+```text
+crates/session/
+  Cargo.toml        [lints.clippy] disallowed_methods = "deny"
+  clippy.toml       disallowed-methods: std::thread::spawn, std::thread::Builder::spawn,
+                    std::thread::scope, std::time::Instant::now, std::time::SystemTime::now
+  src/lib.rs
+  src/document.rs   Document: lines (private), cursor, selection anchor,
+                    text generation, joined-text cache
+  src/session.rs    NoteSession: identity, revision, dirty, edit sequence,
+                    history, undo policy, reminder state, fold structure, calc state
+  src/edit.rs       SessionEdit (requests), EditContext, EditOutcome
+  src/reminders.rs  reminder marks, pending line changes, mapping (from reminder_helpers.rs)
+  src/folds.rs      fold structure caches and upkeep application
+  src/calc.rs       CalcState (from calc_cache.rs) and calc upkeep
+  src/jobs.rs       job and result types, tickets, runner functions
+  src/lifecycle.rs  open, reload, outside change, leave and save policy
+  src/scripts.rs    script result acceptance
+  src/rates.rs      RateService (from terminal/app/currency.rs)
+  tests/headless_host.rs
+```
+
+Rules the code must satisfy, with a GPUI front end in mind:
+
+- **No front-end types or units.** Positions are line plus character column
+  (cursor) or byte offset (exact edits), as `editor-core` documents them. No
+  cells, display widths, colors or key types.
+- **Text changes only through the crate.** `Document` keeps `lines` private
+  from step 8 on. Every mutation is a `SessionEdit` the session prepares and
+  applies in one call, so a prepared plan can never meet a changed buffer.
+- **No threads, no clock.** Work that ran on a thread or touched the database
+  becomes a job. Jobs and job results are `Send + 'static` (add
+  `fn assert_send<T: Send + 'static>() {}` checks in tests); `NoteSession`
+  itself need not be `Send`, since a GPUI entity lives on the main thread.
+  Time arrives as input (`EditContext::since_last_edit`, `now_ms` arguments).
+  Synchronous calc evaluation on the calling thread is allowed; it is what
+  the terminal does today on the input path.
+- **Runner functions live in the crate.** For each job type, a free function
+  (`jobs::run_save(job, &Db) -> SaveResult`, and so on) does the work, so both
+  front ends share it and only choose the thread or executor.
+- **Results are validated by the session**, following "Result acceptance".
+  A job carries a `JobTicket { session_id, note_id, text_generation, epoch }`;
+  each result type documents which fields it checks.
+- **Effects, not callbacks.** Session calls return what changed: an
+  `EditOutcome` (the `EditDelta`, first changed line, calc action, fold effect,
+  title changed) or an `Effects` value (repaint range in source lines, status
+  text, jobs to run).
+- **Edit identity is a counter.** Replace uses of `last_edit: Instant` as an
+  identity (save `edit_mark`, `autosave_paused_at`,
+  `SelectionStatsKey::last_edit`) with `NoteSession::edit_seq() -> u64`. The
+  terminal keeps an `Instant` only for debounce timing.
+
+### Step 0: branch and baselines (no commit)
+
+1. `git switch main && git pull --ff-only && git switch -c session`.
+2. Record warnings: `cargo clippy --workspace --all-targets 2>&1 | grep -E
+   '^(warning|error)' | sort | uniq -c > /tmp/clippy-baseline.txt`.
+3. Record performance on `main` twice and keep both outputs:
+   `cargo test --release -p slate --lib large_note_perf -- --ignored
+   --nocapture > /tmp/ln-baseline-1.txt 2>&1` (and `-2`). Use the lower p50
+   of the two runs per metric as the baseline.
+4. Record `cargo run --release -p slate --bin perf-check` output. The startup
+   check currently fails on some machines on `main` itself (see "Completion
+   checks"); startup is compared A/B against `main`, not against its limits.
+5. Run `cargo test --workspace` and note the test count.
+
+### Prerequisites
+
+**Step 1 [fix]: `Clamp the cursor after undo in Normal mode`.**
+Bug from "Follow-ups": in Vim mode, typing `one`/`two`, `o` with
+`three`/`four`, `gg V d`, `u`, Ctrl-R, `u`, `x` joins the first two lines.
+Add the sequence to `crates/tui/src/terminal/tests/golden/vim_replay.json`
+(expected: `x` deletes one character), confirm it fails, then clamp the
+restored cursor in the undo/redo path (`undo_text_action`,
+`redo_text_action` in `editing.rs`) the way Normal mode clamps after
+Escape. Check that redo of a linewise delete keeps its current cursor.
+
+**Step 2 [perf]: `Locate fold upkeep edits from EditDelta`.**
+`folding::upkeep::plan_fold_upkeep` guesses a one-line insert or delete at
+the cursor line. Add a `delta: Option<EditDelta>` parameter: with a delta,
+map the affected range from it (any line, any span; spans other than one
+line in or out still return `Recompute`); without one, keep the cursor
+fallback. Pass the delta from `mark_edited_from_line_with_span` through
+`recompute_folding_if_needed`. While there, stop cloning the current line
+three times per keystroke: compare `&str`, then replace the snapshot entry
+with `std::mem::replace`. Core tests: insert and delete away from the cursor,
+undo of a multi-line delete, unchanged same-line typing.
+
+**Step 3: `Plan same-line replacements in editor-core`.**
+Add `editor_core::buffer::prepare_line_replace(lines, line, char_range,
+text) -> Option<LineReplacePlan>` carrying `ExactTextEdit`, `EditDelta`
+(1 → 1) and the resulting cursor column, plus `apply_line_replace`. Use it
+in `apply_variable_autocomplete_pick`, `apply_calc_tab`, the trailer refresh
+in `run_calc_recompute`, wiki-link selection and heading-suffix removal.
+Record each through `mark_edited_with_delta` instead of `mark_edited()`, so
+history uses the span path. Core tests: Unicode ranges, empty replacement,
+range past line end.
+
+**Step 4 [perf]: `Plan line insertion and removal in editor-core`.**
+Add `prepare_insert_lines(lines, at, new_lines)` and
+`prepare_remove_lines(lines, start, end)` with `EditDelta`, cursor and the
+block fates reminders need (`old line -> Option<new line>`), applied with one
+`Vec::splice`. Use them for Vim linewise paste (today one `insert` and one
+clone per line), `o`/`O`, and `prune_empty_table_continuation_row_at_cursor`.
+Route Vim charwise paste through the existing paste plan. Afterwards, check
+direct buffer mutation in the terminal with:
+`grep -rnE 'editor\.lines(\[[^]]*\])?\.(insert|remove|push|splice|truncate|push_str|insert_str|replace_range|clear)\(|editor\.lines\[[^]]*\] *=[^=]' crates/tui/src --include='*.rs' | grep -v /tests`.
+The only matches left may be empty-buffer guards (`push(String::new())`);
+step 7 removes those.
+Check `paste_line` and `open_line` in the perf output.
+
+### The crate and its state
+
+**Step 5 [mechanical]: `Add the note-session crate with the document model`.**
+Create the crate (layout above) with `Document` holding the document fields
+of `EditorModel` (`crates/tui/src/terminal/app/mod.rs`): `lines`,
+`joined_text_cache`, `text_generation`, `cursor_line`, `cursor_col`,
+`selection_anchor`, keeping those names and keeping them `pub` for now.
+Move `cursor()` / `set_cursor()` with them. In the terminal, `TerminalApp.editor`
+becomes a `note_session::Document`; the view fields (`scroll_line`,
+`scroll_row_offset`, `scroll_col`, `markdown_formatting_right_boundary_exit`,
+about 85 references) move to a new terminal struct at `self.view`. Add the
+crate to the workspace members. Verify the clippy rule by adding a temporary
+`std::thread::spawn` call: `cargo clippy -p note-session` must fail. Remove
+it before committing.
+
+**Step 6 [mechanical]: `Move undo, dirty and reminder state into the note session`.**
+Add `NoteSession` and move into it from `TerminalApp`: `history`,
+`undo_policy`, `dirty`, `reminder_ghosts`, `pending_line_edits`,
+`reminders_generation`, `persisted_reminders_generation`, and the types
+`LineReminderGhost`, `ReminderMarks`, `ReminderUndoEntry`, plus
+`PendingLineChange` and the pure mapping functions of
+`terminal/app/reminder_helpers.rs` (`line_change`, `fates`, `move_lines`).
+Database loading and persistence of reminders stay in the terminal for now.
+Introduce `edit_seq` and replace the identity uses of `last_edit` listed
+above. The terminal holds `session: NoteSession` and passes `&mut self.editor`
+where needed. No logic changes.
+
+**Step 7: `Apply edits through the note session`.**
+Add `NoteSession::apply(&mut self, doc: &mut Document, edit: SessionEdit,
+ctx: EditContext) -> Option<EditOutcome>`. `SessionEdit` covers every text
+change: primitives (`PrimitiveEdit`), `EditOperation` (today's
+`apply_edit_operation`), plain and table-cell paste, table import, backward
+word delete, visual selection plans, and the line plans from steps 3–4. In
+one call it prepares the core plan, records the pending reminder change from
+the exact edit or block fates, applies the plan, bumps `text_generation`,
+drops the joined-text cache, sets dirty, increments `edit_seq`, records
+history with the `UndoGrouping` from `ctx`, and maps reminders. This is the
+existing order in `apply_buffer_primitive`, `mark_edited_from_line_with_span`
+and `record_history_after_edit`; keep it exactly. Calc and fold upkeep stay
+in the terminal and run from the returned outcome. Add `undo(doc)` and
+`redo(doc)` returning outcomes the same way. Session tests: reminder
+positions through joins, splits, block replacement and undo/redo; dirty and
+`edit_seq` after no-op edits.
+
+**Step 8 [mechanical]: `Make the note session the only writer of note text`.**
+Make `Document::lines` private with `lines() -> &[String]` and
+`set_text(&mut self, text: &str)` (used when a note opens or reloads). Replace
+the terminal's reads with `lines()` (about 620 references) and move test
+setup that assigns `app.editor.lines` (25 places) to `set_text`. The grep
+from step 4 must now match nothing at all in `crates/tui`.
+
+### Calc
+
+**Step 9 [mechanical]: `Move calc state into the note session`.**
+Split `CalcCache` (`crates/tui/src/terminal/calc_cache.rs`): everything except
+the two worker receivers (`range_context_build`, `index_build`) becomes
+`note_session::calc::CalcState`, owned by `NoteSession`; the receivers move
+to a terminal `CalcWorkers` struct. Move `VariableNames`
+(`terminal/render_styles.rs`) into the crate unchanged, including its lazily
+built matcher, so the renderer keeps reusing it; the terminal imports it.
+`CalcRuntime` (scheduling flags and the viewport range) stays in the terminal.
+
+**Step 10 [perf]: `Run calc upkeep in the note session`.**
+Move the calc work that runs after an edit into `CalcState` methods taking
+`&Document` and a `CalcInputs` value (feature mask, module flags, extern
+variables, thresholds, whether a key is still being handled): the
+`CalcAfterEdit` dispatch from `mark_edited_from_line_with_span`,
+`try_remap_calc_results_after_structural_edit`, `recompute_calc_range`, and
+the non-scheduling part of `run_calc_recompute` and
+`ensure_calc_for_viewport`. They return a `CalcEffect` (done, schedule an idle
+pass, recompute after the current key, refresh the viewport). The terminal
+keeps `CalcRuntime`, debounce times, idle ticks and `key_depth`, and reads
+extern variables from `CrossNoteVarIndex` to pass in. Split into two commits
+(remap and range first, full recompute second) if one exceeds 300 lines.
+Check `type_calc`, `enter`, `delete_line`, `undo` and `scroll_*`.
+
+**Step 11 [perf]: `Turn calc preparation into note-session jobs`.**
+Viewport preparation (`start_viewport_calc_preparation` /
+`install_viewport_calc_preparation`) and the background index build
+(`install_background_calc_index`) become `Job::PrepareCalc` and
+`Job::BuildCalcIndex` with a `JobTicket`. Their bodies become runner
+functions in `jobs.rs`; the terminal spawns a thread that calls the runner
+and sends the result back. `NoteSession::complete(result)` installs it only
+when the ticket still matches: same note and session, and the checks the
+current code does (text rehash for the prepared context, reset
+`cross_note_refs_generation`, `CrossNoteVarIndex::epoch()` for index writes,
+the currency generation). Session tests: a result for a switched-away note,
+a stale text generation, an epoch change. Check `open`, `open_calc` and
+`idle_tick`.
+
+### Folds
+
+**Step 12 [perf]: `Move fold structure into the note session`.**
+Move `line_has_structure`, `line_text_snapshot`, `ranges`, `range_by_start`,
+`rescan_pending` and `analysis_ready` from `FoldingState`
+(`crates/tui/src/terminal/folding_state.rs`) into `note_session::folds`.
+Collapsed ranges, the visible/real line maps, hidden owners, placeholders
+and the pending `z` prefix stay in the terminal. `EditOutcome` carries the
+fold effect from step 2's planner; the terminal applies view-map changes.
+The idle rescan becomes a session method the terminal calls from its tick.
+
+### Note lifecycle
+
+**Step 13: `Move note open and reload policy into the note session`.**
+Add `NoteSession::open(note: &Note, doc: &mut Document) -> Effects`, which
+resets history, undo policy, reminders, folds and calc state and increments
+`session_id`; it replaces the state-resetting parts of `set_active_note` and
+`reload_active_note`. Add `outside_change(stored_revision) ->
+OutsideChange` for `maybe_take_outside_change` and `leave_decision()` for
+`can_leave_note`. Reading notes from the database stays in the terminal.
+Session tests: switching away and back produces a new `session_id`.
+
+**Step 14: `Move save and autosave policy into the note session`.**
+Add `request_save(doc, ctx) -> Option<SaveJob>` (body, reminders to store,
+expected revision, `edit_seq` at the time) and `jobs::run_save(job, &Db)`,
+taking the body of the thread in `start_background_autosave`. Add
+`complete_save(result)` implementing "Result acceptance" exactly as
+`poll_background_save` does today: acknowledge the persisted snapshot even
+after newer typing, advance the stored revision only when the expected
+revision still matches, clear dirty only when `edit_seq` is unchanged,
+record the reminder generation, and pause autosave at the current
+`edit_seq` on failure. `format_on_save` stays a terminal command run before
+the request. Before switch, reload and close, the terminal waits for an
+in-flight save and passes its result to `complete_save`. Session tests:
+typing during autosave, a save completing after a newer revision, a failed
+save pausing autosave until the next edit, reminders-only saves.
+
+### Scripts and rates
+
+**Step 15: `Validate script results in the note session`.**
+`start_script_inner` asks the session for a `ScriptTicket` (session id, note
+id, text generation, editable). `poll_script_result` passes the response to
+`NoteSession::accept_script_result(ticket, response)`, which returns the
+`SessionEdit` to apply or the reason it was rejected; the status text stays
+in the terminal. Cancellation on note change keeps working through the new
+`session_id`. Session test: switch away and back during a run rejects it.
+
+**Step 16: `Move exchange-rate refresh policy into the session crate`.**
+Move the coordination in `crates/tui/src/terminal/app/currency.rs` (one fetch
+at a time, startup fetch, `:currency refresh`, applying a result) into
+`note_session::rates::RateService`, which returns `RateJob`s and has
+`jobs::run_rate_job`. `complete` installs rates through `app_core::currency`
+and reports whether they changed. On a change, the terminal calls
+`NoteSession::invalidate_calc()` and `CrossNoteVarIndex::invalidate_calculations()`.
+`RateService` lives in the terminal app beside the session, not inside it,
+because it outlives note switches. Session tests: refresh across a note
+switch, identical rates, a failure keeping cached rates.
+
+### Validation
+
+**Step 17: `Test the note session through a headless host`.**
+Add `crates/session/tests/headless_host.rs`: a minimal front end that holds
+a `Document` and `NoteSession`, applies edits, runs jobs synchronously and
+also out of order and late, and asserts results and effects. Cover the
+"Done when" list of phase 7: typing during autosave, save completion after
+a newer revision, switch-away/back script rejection, global rate refresh
+across note switches, reminder positions through joins, block replacements
+and undo/redo. Also assert the `Send + 'static` bounds on jobs and results,
+and that `cargo tree -p note-session -e normal` has no `ratatui`,
+`crossterm` or GUI crates.
+
+**Step 18: `Record session extraction validation`.**
+Run the final round below, then update this document ("Progress", the
+host-owned policy table, "Follow-ups") and
+`roadmap/editor-engine-contract.md` (session, document, job and rate
+contracts). This commit contains documentation only, unless the round finds
+bugs; fix each found bug in its own **[fix]** commit before this one.
+
+### Final round: bugs and performance
+
+Do all of this after step 17, on the finished branch.
+
+1. **Checks.** Verification commands above; the test count must be at least
+   the step 0 count plus the new tests.
+2. **Invariants.**
+   - The step 4 grep matches nothing in `crates/tui`.
+   - `grep -rn 'Instant::now\|thread::spawn\|SystemTime::now' crates/session/src`
+     matches nothing, and the clippy rule still fails on a temporary call.
+   - Every row of "Host-owned correctness policy" is moved or marked as pure
+     scheduling.
+3. **Performance A/B against `main`.** Build `main` in a separate worktree
+   with its own target directory; sharing one target directory between two
+   checkouts of the same path crates mixes their artifacts:
+   ```sh
+   git worktree add /tmp/slate-main main
+   (cd /tmp/slate-main && CARGO_TARGET_DIR=/tmp/slate-main-target \
+     cargo test --release -p slate --lib large_note_perf -- --ignored --nocapture)
+   ```
+   Run each side three times, alternating, and compare medians per metric
+   and size (30k, 100k, 400k) with the thresholds above. Also compare
+   `table-perf` and the startup marks from `perf-check` (5 runs each side).
+   Record the table in this document as for phase 5. Remove the worktree and
+   target directory afterwards.
+4. **Live terminal.** Run a debug build in tmux with isolated directories
+   and without a display, so the system clipboard is never touched:
+   ```sh
+   S=$(mktemp -d); mkdir -p "$S/config/slate" "$S/data"
+   printf '[editor]\nvim_mode = true\n' > "$S/config/slate/config.toml"
+   tmux new-session -d -s slate-check -x 110 -y 24 \
+     "env XDG_CONFIG_HOME=$S/config XDG_DATA_HOME=$S/data HOME=$S \
+      WAYLAND_DISPLAY= DISPLAY= target/debug/slate --new"
+   sleep 1
+   tmux send-keys -t slate-check i 'price := 20' Enter 'price * 3' Escape
+   tmux capture-pane -p -t slate-check
+   ```
+   Script and compare these scenarios against a `main` build with the same
+   keys: typing, Enter, Backspace across lines, visual and linewise delete,
+   yank and both pastes, `o`/`O`, undo/redo chains (including the step 1
+   sequence), a calc variable used below its definition, a table edit, a
+   reminder on a line that is then joined and undone, switching notes during
+   autosave (wait 1 s after typing), and a script run interrupted by a note
+   switch. Screens must match `main` except where step 1 fixed the bug.
+5. **Review.** Read the full diff against `main` for: logic left in the
+   terminal that decides what text or state becomes (it belongs in the crate),
+   new clones or allocations on typing paths, API that would not suit a GPUI
+   entity (front-end units, threads, callbacks), and public items without a
+   documented unit or invariant.
+6. **Report.** Record findings in "Follow-ups" and the results in
+   "Completion checks", stating anything not verified.
+
+## Second front end (outside this plan)
+
+Notes for when a GUI starts, recorded so phases 7 and 8 keep them possible:
+
+- Keep the GUI out of the root workspace at first: its own workspace (listed
+  under `exclude`) with path dependencies on the core crates and the session.
+  Cargo resolves the whole workspace, so a GPUI git dependency in it would be
+  fetched by every terminal-only build and CI run, and `default-members` does
+  not change what `--workspace` builds. Give it its own CI job with the GPUI
+  system libraries.
+- GPUI's text input uses UTF-16 ranges, marked (IME composition) text and
+  pixel bounds. The GUI needs an adapter to the session's character columns
+  and byte-offset edits, converted per line, and a decision on how
+  composition interacts with undo grouping.
+- Decide the editor font early: phase 8 assumes monospace.
