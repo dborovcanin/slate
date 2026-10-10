@@ -75,7 +75,7 @@ pub struct SlateWindow {
     /// Where a mouse drag started; set while the left button is held.
     drag_anchor: Option<(usize, usize)>,
     /// Window size in pixels from the last paint, to reveal far jumps and fit the status bar.
-    viewport: std::cell::Cell<(f32, f32)>,
+    pub(crate) viewport: std::cell::Cell<(f32, f32)>,
     fences: Vec<FenceState>,
     cache: Vec<Option<LineView>>,
     list: ListState,
@@ -1235,7 +1235,8 @@ mod tests {
     #[test]
     fn double_click_selects_words_and_symbol_runs() {
         assert_eq!(word_at("let total_cost = 5;", 6), (4, 14));
-        assert_eq!(word_at("let total_cost = 5;", 15), (14, 15));
+        assert_eq!(word_at("let total_cost = 5;", 15), (15, 16));
+        assert_eq!(word_at("let total_cost = 5;", 14), (14, 15));
         assert_eq!(word_at("a := b", 3), (2, 4));
         assert_eq!(word_at("héllo wörld", 8), (6, 11));
         assert_eq!(word_at("", 0), (0, 0));

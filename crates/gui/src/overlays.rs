@@ -594,6 +594,22 @@ fn menu_panels(
     cx: &mut Context<SlateWindow>,
 ) -> Vec<AnyElement> {
     const W: f32 = 300.0;
+    const SUB_W: f32 = 270.0;
+    const MARGIN: f32 = 8.0;
+    let (vw, vh) = win.viewport.get();
+    // Rows are 30px and separators 9px, inside 5px padding and a border.
+    let height = |items: &[Item]| -> f32 {
+        items
+            .iter()
+            .map(|i| if i.label.is_empty() { 9.0 } else { 30.0 })
+            .sum::<f32>()
+            + 12.0
+    };
+    // Keep a panel of `size` inside the window, preferring `want`.
+    let fit = |want: f32, size: f32, limit: f32| want.min(limit - size - MARGIN).max(MARGIN);
+
+    let left = fit(left, W, vw);
+    let top = fit(top, height(items), vh);
     let mut out = Vec::new();
     let rows: Vec<AnyElement> = items
         .iter()
@@ -610,13 +626,23 @@ fn menu_panels(
             .take_while(|i| !matches!(i.act, Act::Sub(s) if s == sub))
             .map(|i| if i.label.is_empty() { 9.0 } else { 30.0 })
             .sum();
-        let rows: Vec<AnyElement> = menu_items(sub)
+        let sub_items = menu_items(sub);
+        // Level with its parent row, moved up if it would run off the bottom.
+        let sub_top = fit(top + 5.0 + offset - 5.0, height(&sub_items), vh);
+        // To the right of the parent, or to its left when there is no room.
+        let right = left + W - 6.0;
+        let sub_left = if right + SUB_W + MARGIN <= vw {
+            right
+        } else {
+            (left - SUB_W + 6.0).max(MARGIN)
+        };
+        let rows: Vec<AnyElement> = sub_items
             .iter()
             .enumerate()
             .map(|(i, item)| menu_row(win, *item, format!("s{sub}-{i}").into(), false, cx))
             .collect();
         out.push(
-            panel(win, left + W - 6.0, top + offset, 270.0)
+            panel(win, sub_left, sub_top, SUB_W)
                 .children(rows)
                 .into_any_element(),
         );
@@ -943,8 +969,8 @@ pub fn render(
         }
         Overlay::Context { pos, table, sub } => {
             let items = context_items(*table);
-            let x = f32::from(pos.x).min(1280.0 - 580.0).max(8.0);
-            let y = f32::from(pos.y).max(8.0);
+            let x = f32::from(pos.x);
+            let y = f32::from(pos.y);
             let mut out = vec![backdrop(cx)];
             out.extend(menu_panels(win, &items, *sub, x, y, cx));
             out
