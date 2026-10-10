@@ -15,8 +15,8 @@ use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
 use crate::editor_core::completion::VariableAutocompleteState;
 use crate::editor_core::history::policy::UndoAction;
-use crate::editor_core::history::LineHistory;
 use crate::editor_core::vim_actions::{VimRegisterMode, VimRegisterValue as VimRegister};
+use note_session::lifecycle::build_history_for_note;
 
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
@@ -88,7 +88,6 @@ const TABLE_FORMULA_SEGMENT_CACHE_TTL_MS: u64 = 90 * 1000;
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
 const LARGE_NOTE_FULL_FEATURE_LINE_LIMIT: usize = 30_000;
-const LARGE_NOTE_REDUCED_UNDO_LINES: usize = LARGE_NOTE_FULL_FEATURE_LINE_LIMIT + 1;
 
 type ContentSearchResponse = (String, Result<Vec<NoteSearchResult>, String>);
 type BrowserSearchResponse = (String, Result<Vec<super::browser::SearchHit>, String>);
@@ -127,29 +126,6 @@ fn file_render_syntax_for_note_id(note_id: &str) -> (bool, Option<String>) {
     (
         true,
         app_core::note_sources::syntax_language_for_path(&path),
-    )
-}
-
-fn history_max_entries_for_line_count(line_count: usize) -> usize {
-    if line_count >= LARGE_NOTE_REDUCED_UNDO_LINES {
-        128
-    } else {
-        MAX_UNDO_ENTRIES
-    }
-}
-
-fn build_history_for_note(
-    lines: &[String],
-    cursor_line: usize,
-    cursor_col: usize,
-    reminders: ReminderMarks,
-) -> LineHistory<ReminderMarks> {
-    LineHistory::new(
-        history_max_entries_for_line_count(lines.len()),
-        lines,
-        cursor_line,
-        cursor_col,
-        reminders,
     )
 }
 
@@ -207,7 +183,6 @@ struct TerminalStartupMetrics {
     loading_screen: Duration,
 }
 
-const MAX_UNDO_ENTRIES: usize = 500;
 const MAX_COMMAND_HISTORY_ENTRIES: usize = 100;
 
 #[derive(Debug, Clone)]
@@ -654,12 +629,6 @@ struct TerminalApp {
     command_history_index: Option<usize>,
     quit: bool,
     force_quit: bool,
-    /// Edit mark of a buffer whose autosave failed; autosave waits for the
-    /// next edit (or an explicit save) instead of retrying in a loop.
-    autosave_paused_at: Option<u64>,
-    /// Edit mark of a buffer `can_leave_note` refused to leave; leaving
-    /// again without editing in between discards its unsaved changes.
-    leave_refused_at: Option<u64>,
     backup: BackupState,
     /// Autosave writing on a background thread, if one is in flight.
     background_save: Option<BackgroundSave>,
@@ -686,15 +655,11 @@ struct TerminalApp {
     calc_runtime: CalcRuntime,
     /// Coordinates of edits applied since the last history record, for
     /// moving reminders with them (`note_line_edit`).
-    /// Bumped whenever the reminders change; equal to the persisted one when
-    /// they are stored as they are.
+    /// Host reminder polling timer.
     last_reminder_check: Instant,
     /// When the stored note was last checked for changes made outside this
     /// session (`maybe_take_outside_change`).
     outside_change_checked_at: Instant,
-    /// Outside revision the unsaved buffer was warned about, so the warning
-    /// is shown once per change.
-    outside_change_reported: Option<String>,
     // In-note search overlay
     search: SearchState,
     // Web search overlay
@@ -786,7 +751,7 @@ impl TerminalApp {
     }
 
     fn active_note_is_editable(&self) -> bool {
-        self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked
+        self.session.editable()
     }
 
     fn access_mode_prompt_label(mode: NoteAccessMode) -> &'static str {
@@ -877,7 +842,7 @@ impl TerminalApp {
     }
 
     fn require_startup_password_if_needed(&mut self, db: &Db) {
-        if self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked {
+        if self.session.access_mode == NoteAccessMode::None || self.session.is_unlocked {
             return;
         }
         self.active_note_key_collection = db
@@ -914,14 +879,14 @@ impl TerminalApp {
             note_id: self.active_note.id.clone(),
             note_title,
             collection: self.active_note_key_collection.clone(),
-            access_mode: self.active_note.access_mode,
+            access_mode: self.session.access_mode,
             password: String::new(),
             line_number: None,
         });
         self.switcher.delete_confirm = None;
         self.status = format!(
             "password required to open {}",
-            Self::access_mode_prompt_label(self.active_note.access_mode)
+            Self::access_mode_prompt_label(self.session.access_mode)
         );
     }
 
@@ -1159,8 +1124,6 @@ impl TerminalApp {
             command_history_index: None,
             quit: false,
             force_quit: false,
-            autosave_paused_at: None,
-            leave_refused_at: None,
             backup: BackupState::default(),
             background_save: None,
             date_picker: DatePickerState {
@@ -1191,7 +1154,6 @@ impl TerminalApp {
             },
             last_reminder_check: Instant::now(),
             outside_change_checked_at: Instant::now(),
-            outside_change_reported: None,
             search: SearchState::default(),
             web_search: WebSearchState::default(),
             autosave_enabled,
@@ -1244,6 +1206,7 @@ impl TerminalApp {
             app.status = format!("script/keybinding config: {error}");
         }
         app.session.start_lifetime(&app.active_note.id);
+        app.session.set_note_metadata(&app.active_note);
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();
@@ -1447,7 +1410,9 @@ impl TerminalApp {
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
         self.poll_background_save(db, false);
-        if !self.autosave_enabled || self.autosave_paused_at == Some(self.session.edit_seq()) {
+        if !self.autosave_enabled
+            || self.session.autosave_paused_at == Some(self.session.edit_seq())
+        {
             return Ok(());
         }
         if (self.session.dirty || self.reminders_unsaved())

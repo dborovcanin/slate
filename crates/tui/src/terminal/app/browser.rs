@@ -864,8 +864,8 @@ impl TerminalApp {
     /// encrypted collection). The buffer is kept.
     fn refresh_active_note_protection(&mut self, db: &Db) -> Result<(), String> {
         if let Some(note) = db.get_note_meta(&self.active_note.id)? {
-            self.active_note.access_mode = note.access_mode;
-            self.active_note.is_unlocked = note.is_unlocked;
+            self.session.access_mode = note.access_mode;
+            self.session.is_unlocked = note.is_unlocked;
         }
         Ok(())
     }

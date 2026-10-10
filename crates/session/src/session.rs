@@ -3,6 +3,12 @@ use editor_core::history::policy::UndoPolicy;
 use editor_core::history::LineHistory;
 use rustc_hash::FxHashMap;
 pub struct NoteSession {
+    pub stored_revision: String,
+    pub access_mode: app_core::storage::NoteAccessMode,
+    pub is_unlocked: bool,
+    pub leave_refused_at: Option<u64>,
+    pub autosave_paused_at: Option<u64>,
+    pub outside_change_reported: Option<String>,
     pub folds: crate::folds::FoldStructure,
     pub session_id: u64,
     pub note_id: String,
@@ -23,6 +29,12 @@ impl NoteSession {
         calc: crate::calc::CalcState,
     ) -> Self {
         Self {
+            stored_revision: String::new(),
+            access_mode: Default::default(),
+            is_unlocked: true,
+            leave_refused_at: None,
+            autosave_paused_at: None,
+            outside_change_reported: None,
             folds: crate::folds::FoldStructure::default(),
             session_id: 0,
             note_id: String::new(),

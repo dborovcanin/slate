@@ -897,8 +897,8 @@ impl TerminalApp {
     fn unlock_active_note(&mut self, db: &Db, password: &str) -> Result<(), String> {
         let note = db.unlock_note(&self.active_note.id, password)?;
         // Only a buffer that was unlocked before holds the note's real text.
-        if self.session.dirty && self.active_note.is_unlocked {
-            self.active_note.is_unlocked = true;
+        if self.session.dirty && self.session.is_unlocked {
+            self.session.is_unlocked = true;
             self.save(db)?;
         } else {
             self.set_active_note(db, note)?;
@@ -2385,10 +2385,10 @@ impl TerminalApp {
                 // Only reminders changed: store them against the saved text.
                 let revision = db.replace_reminders_if(
                     &self.active_note.id,
-                    (!force).then_some(self.active_note.updated_at.as_str()),
+                    (!force).then_some(self.session.stored_revision.as_str()),
                     &reminders,
                 )?;
-                self.active_note.updated_at = revision.updated_at;
+                self.session.stored_revision = revision.updated_at;
                 self.session.persisted_reminders_generation = reminders_generation;
             }
             self.record_perf_duration("tui.save", "noop", started.elapsed());
@@ -2404,7 +2404,7 @@ impl TerminalApp {
             &self.active_note.id,
             &body,
             app_core::note_sources::SaveOptions {
-                expected_revision: Some(self.active_note.updated_at.clone()),
+                expected_revision: Some(self.session.stored_revision.clone()),
                 force,
                 reminders,
             },
@@ -2415,7 +2415,7 @@ impl TerminalApp {
         // Only the revision moves on; the document itself stays in
         // `self.editor.lines()` and is never round-tripped through the store.
         self.active_note.id = saved.id;
-        self.active_note.updated_at = saved.updated_at;
+        self.session.stored_revision = saved.updated_at;
         self.editor.joined_text_cache = Some(body);
         self.session.dirty = false;
         self.session.history.checkpoint(
@@ -2468,7 +2468,7 @@ impl TerminalApp {
             .as_ref()
             .map(|_| self.session.reminders_generation);
         let note_id = self.active_note.id.clone();
-        let expected_revision = self.active_note.updated_at.clone();
+        let expected_revision = self.session.stored_revision.clone();
         let options = app_core::note_sources::SaveOptions {
             expected_revision: Some(expected_revision.clone()),
             force: false,
@@ -2531,7 +2531,7 @@ impl TerminalApp {
             }
             Err(error) => {
                 if job.note_id == self.active_note.id {
-                    self.autosave_paused_at = Some(job.edit_mark);
+                    self.session.autosave_paused_at = Some(job.edit_mark);
                 }
                 self.status = format!(
                     "autosave failed: {error} (:w! overwrites, :e! reloads; edits are kept)"
@@ -2547,9 +2547,9 @@ impl TerminalApp {
             self.session.persisted_reminders_generation = generation;
         }
         let (saved, saved_text) = saved;
-        if self.active_note.updated_at == job.expected_revision {
+        if self.session.stored_revision == job.expected_revision {
             self.active_note.id = saved.id;
-            self.active_note.updated_at = saved.updated_at;
+            self.session.stored_revision = saved.updated_at;
         }
         if !saved_text {
             self.status = format!("reminders saved {}", self.active_note.id);
@@ -2580,6 +2580,7 @@ impl TerminalApp {
     /// vim's E37. Asking again without editing in between discards them.
     /// Sets the status when it refuses.
     pub(super) fn can_leave_note(&mut self, db: &Db) -> bool {
+        self.poll_background_save(db, true);
         let problem = if self.autosave_enabled {
             match self.save(db) {
                 Ok(()) => return true,
@@ -2590,11 +2591,11 @@ impl TerminalApp {
         } else {
             return true;
         };
-        if self.leave_refused_at == Some(self.session.edit_seq()) {
-            self.leave_refused_at = None;
+        if self.session.leave_decision(self.autosave_enabled)
+            == note_session::lifecycle::LeaveDecision::Allow
+        {
             return true;
         }
-        self.leave_refused_at = Some(self.session.edit_seq());
         self.status = format!("{problem} (:w saves, :e! reloads, repeat to leave without saving)");
         false
     }
@@ -2612,8 +2613,8 @@ impl TerminalApp {
         self.editor.cursor_col = col;
         self.adjust_cursor();
         self.adjust_scroll();
-        self.autosave_paused_at = None;
-        self.leave_refused_at = None;
+        self.session.autosave_paused_at = None;
+        self.session.leave_refused_at = None;
         Ok(())
     }
 
@@ -2638,30 +2639,23 @@ impl TerminalApp {
         let sources = note_sources(db);
         let identity = sources.parse_identity(&self.active_note.id);
         let revision = match sources.get_note_revision(&identity) {
-            Ok(Some(revision)) => revision,
-            Ok(None) => {
-                // Deleted elsewhere (e.g. `delete_note` over MCP): keep the
-                // buffer, which a forced write stores again.
-                if self.outside_change_reported.as_deref() != Some("") {
-                    self.outside_change_reported = Some(String::new());
-                    self.status = "note was deleted outside Slate (:w! saves it again)".to_string();
-                    self.render_state.dirty = true;
-                }
-                return;
-            }
+            Ok(revision) => revision,
             Err(_) => return,
         };
-        if revision == self.active_note.updated_at {
-            return;
-        }
-        if self.session.dirty || self.reminders_unsaved() {
-            if self.outside_change_reported.as_deref() != Some(revision.as_str()) {
-                self.outside_change_reported = Some(revision);
+        match self.session.outside_change(revision.as_deref()) {
+            note_session::lifecycle::OutsideChange::Unchanged => return,
+            note_session::lifecycle::OutsideChange::Deleted => {
+                self.status = "note was deleted outside Slate (:w! saves it again)".to_string();
+                self.render_state.dirty = true;
+                return;
+            }
+            note_session::lifecycle::OutsideChange::Conflict => {
                 self.status =
                     "note changed outside Slate (:e! loads it, :w! keeps your version)".to_string();
                 self.render_state.dirty = true;
+                return;
             }
-            return;
+            note_session::lifecycle::OutsideChange::Reload => {}
         }
         // Reminders deferred at startup are placed on the buffer first, so
         // the edit below moves them too.
@@ -2675,10 +2669,10 @@ impl TerminalApp {
         let locked = note.access_mode != NoteAccessMode::None && !note.is_unlocked;
         if locked && !self.active_note_is_editable() {
             // Still locked here: there is no text to show, only a revision.
-            self.active_note.updated_at = note.updated_at;
+            self.session.stored_revision = note.updated_at;
             return;
         }
-        if locked || note.access_mode != self.active_note.access_mode {
+        if locked || note.access_mode != self.session.access_mode {
             // Encrypted or decrypted elsewhere: a locked note has no text to
             // diff against, so open it afresh, as switching to it would. A
             // locked one asks for its password at the first edit.
@@ -2697,37 +2691,27 @@ impl TerminalApp {
             } else {
                 "note was decrypted outside Slate; reloaded".to_string()
             };
-            self.outside_change_reported = None;
+            self.session.outside_change_reported = None;
             self.render_state.dirty = true;
             return;
         }
-        let text = self
-            .editor
-            .joined_text_cache
-            .clone()
-            .unwrap_or_else(|| join_lines(self.editor.lines()));
-        if let Some(op) = crate::editor_core::operations::replace_text(&text, &note.body) {
-            self.session.history.break_coalescing();
+        let op = self
+            .session
+            .prepare_stored_replacement(&self.editor, &note.body);
+        let replaced = op.is_some();
+        if let Some(op) = op {
             self.apply_edit_operation(&op);
-            self.session.history.break_coalescing();
-            // The buffer now holds the stored text.
-            self.session.dirty = false;
-            self.session.history.checkpoint(
-                self.editor.lines(),
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            );
             self.status = "note changed outside Slate; reloaded (u undoes)".to_string();
         }
-        self.active_note.updated_at = note.updated_at;
-        self.outside_change_reported = None;
+        self.session
+            .acknowledge_reload(&self.editor, note.updated_at, replaced);
         self.update_switcher_item_after_body_save();
         self.render_state.dirty = true;
     }
 
     fn update_switcher_item_after_body_save(&mut self) {
         let note_id = &self.active_note.id;
-        let updated_at = self.active_note.updated_at.clone();
+        let updated_at = self.session.stored_revision.clone();
         if let Some(item) = self.switcher.items.iter_mut().find(|i| &i.id == note_id) {
             item.updated_at = updated_at;
         }
@@ -3050,19 +3034,19 @@ impl TerminalApp {
     }
 
     pub(super) fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
+        self.poll_background_save(db, true);
         self.cancel_script_on_note_change();
         self.active_note_key_collection = if note.access_mode == NoteAccessMode::None {
             None
         } else {
             db.note_key_collection_name(&note.id)?
         };
-        self.session.start_lifetime(&note.id);
+        self.session.open(&note, &mut self.editor);
         self.active_note = note;
         let (render_plain_text_file, render_file_language) =
             super::file_render_syntax_for_note_id(&self.active_note.id);
         self.render_state.plain_text_file = render_plain_text_file;
         self.render_state.file_language = render_file_language;
-        self.editor.set_text(&self.active_note.body);
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
         self.load_reminders(db)?;
@@ -3071,8 +3055,6 @@ impl TerminalApp {
         self.editor.cursor_col = 0;
         self.view.scroll_line = 0;
         self.view.scroll_col = 0;
-        self.session.dirty = false;
-        self.session.note_changed();
         self.last_edit = Instant::now();
         self.search.query.clear();
         self.search.matches.clear();
@@ -3080,13 +3062,6 @@ impl TerminalApp {
         self.rebuild_wiki_link_note_suggestions_cache();
         self.render_caches.wiki_link_render_cache.clear();
         self.render_caches.wiki_link_line_render_cache.clear();
-        self.session.history = super::build_history_for_note(
-            self.editor.lines(),
-            self.editor.cursor_line,
-            self.editor.cursor_col,
-            self.reminder_marks(),
-        );
-        self.session.undo_policy.clear();
         self.render_state.fence_checkpoints.truncate(1);
         self.render_state.fence_checkpoints_valid_through = 0;
         if self.calc_cross_note_enabled() && self.editor.lines().iter().any(|l| l.contains("[[")) {
@@ -3107,29 +3082,15 @@ impl TerminalApp {
                 && !self.active_has_variable_assignments()
                 && !self.session.calc.cached_has_expression)
         {
-            self.session.calc.results = vec![None; self.editor.lines().len()];
-            self.session.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
-            self.session.calc.variable_names.clear();
-            self.session.calc.calc_dependency_index = None;
-            self.session.calc.line_metadata.clear();
-            self.session.calc.prev_line_metadata.clear();
+            self.session.calc.clear(&self.editor);
             self.session.calc.stale = false;
-            self.session.calc.pathological_window_streak = 0;
-            self.session.calc.forced_full_recompute_remaining = 0;
             self.calc_runtime.recompute_pending = false;
             self.calc_runtime.recompute_due_at = None;
             self.calc_runtime.pending_viewport_pass = false;
             self.calc_runtime.pending_full_pass = false;
         } else if self.should_defer_calc_recompute() {
-            self.session.calc.results = vec![None; self.editor.lines().len()];
-            self.session.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
-            self.session.calc.variable_names.clear();
-            self.session.calc.calc_dependency_index = None;
-            self.session.calc.line_metadata.clear();
-            self.session.calc.prev_line_metadata.clear();
+            self.session.calc.clear(&self.editor);
             self.session.calc.stale = true;
-            self.session.calc.pathological_window_streak = 0;
-            self.session.calc.forced_full_recompute_remaining = 0;
             self.calc_runtime.recompute_pending = false;
             self.calc_runtime.recompute_due_at = None;
             self.calc_runtime.pending_viewport_pass = false;

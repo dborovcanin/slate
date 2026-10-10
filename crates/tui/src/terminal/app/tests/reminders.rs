@@ -484,12 +484,12 @@ fn reminders_deferred_at_startup_load_before_the_first_edit() {
 #[test]
 fn a_stale_session_cannot_write_over_reminder_changes() {
     let (db, mut app, path) = app_with_reminders("milk\nend", &[0]);
-    let stale_revision = app.active_note.updated_at.clone();
+    let stale_revision = app.session.stored_revision.clone();
     // This session removes the reminder; the text is saved, so it is stored.
     command(&mut app, &db, "remind toggle");
     assert_eq!(stored(&db), vec![]);
     assert_ne!(
-        app.active_note.updated_at, stale_revision,
+        app.session.stored_revision, stale_revision,
         "the revision moved"
     );
     // Another session still holding the old revision is refused.
@@ -533,7 +533,7 @@ fn deleting_one_of_two_identical_lines_keeps_the_others_reminder() {
 #[test]
 fn reminders_follow_text_reloaded_after_an_outside_change() {
     let (db, mut app, path) = app_with_reminders("a\nb\nc", &[1]);
-    app.active_note.updated_at = db
+    app.session.stored_revision = db
         .get_note_updated_at("n1")
         .expect("revision")
         .expect("note");

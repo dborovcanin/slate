@@ -13,11 +13,24 @@ pub(super) fn load_note_reminder_ghosts(
     note: &Note,
     lines: &[String],
 ) -> Result<FxHashMap<usize, LineReminderGhost>, String> {
-    if note.access_mode != NoteAccessMode::None && !note.is_unlocked {
+    load_reminder_ghosts(
+        db,
+        &note.id,
+        lines,
+        note.access_mode == NoteAccessMode::None || note.is_unlocked,
+    )
+}
+fn load_reminder_ghosts(
+    db: &Db,
+    note_id: &str,
+    lines: &[String],
+    editable: bool,
+) -> Result<FxHashMap<usize, LineReminderGhost>, String> {
+    if !editable {
         return Ok(FxHashMap::default());
     }
     Ok(db
-        .reconcile_reminders(&note.id, lines)?
+        .reconcile_reminders(note_id, lines)?
         .into_iter()
         .map(|reminder| {
             (
@@ -40,11 +53,13 @@ impl TerminalApp {
     /// Loads the open note's reminders as stored with its text, dropping any
     /// unsaved reminder changes.
     pub(super) fn load_reminders(&mut self, db: &Db) -> Result<(), String> {
-        self.session.reminder_ghosts =
-            load_note_reminder_ghosts(db, &self.active_note, self.editor.lines())?;
-        self.session.pending_line_edits.clear();
-        self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
-        self.session.persisted_reminders_generation = self.session.reminders_generation;
+        let ghosts = load_reminder_ghosts(
+            db,
+            &self.session.note_id,
+            self.editor.lines(),
+            self.session.editable(),
+        )?;
+        self.session.install_reminders(ghosts);
         Ok(())
     }
 
@@ -54,7 +69,7 @@ impl TerminalApp {
 
     /// Whether reminders changed since they were last stored.
     pub(super) fn reminders_unsaved(&self) -> bool {
-        self.session.reminders_generation != self.session.persisted_reminders_generation
+        self.session.reminders_unsaved()
     }
 
     /// Reminders can be stored only with notes in the database.
@@ -112,12 +127,12 @@ impl TerminalApp {
         let generation = self.session.reminders_generation;
         match db.replace_reminders_if(
             &self.active_note.id,
-            Some(&self.active_note.updated_at),
+            Some(&self.session.stored_revision),
             &self.reminder_lines(),
         ) {
             Ok(revision) => {
                 // Our own checked write: its revision is the one we hold.
-                self.active_note.updated_at = revision.updated_at;
+                self.session.stored_revision = revision.updated_at;
                 self.session.persisted_reminders_generation = generation;
             }
             Err(error) => {

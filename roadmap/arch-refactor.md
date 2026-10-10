@@ -547,7 +547,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 10: session calc upkeep.
 - [x] Step 11: calc preparation/index jobs.
 - [x] Step 12: session fold structure.
-- [ ] Step 13: open/reload/outside-change/leave policy.
+- [x] Step 13: open/reload/outside-change/leave policy.
 - [ ] Step 14: save and autosave jobs/policy.
 - [ ] Step 15: script tickets and result validation.
 - [ ] Step 16: application-wide rate service.
@@ -1096,3 +1096,11 @@ uses the resulting line count; a shared regression covers both threshold
 crossings. Workspace checks pass, no new warnings. A loaded performance run
 failed broadly; serial reruns pass all limits and the latest crosses no
 investigation thresholds (100k paste 9.60 ms versus baseline 9.12 ms).
+
+Step 13: session open owns lifetime, revision/access metadata, history capacity
+and resets; installed reminders share history marks. Outside-change conflict
+and deletion deduplication, stored replacement undo boundaries, and repeated
+leave decisions use session policy. The terminal drains pending saves before
+switch/reload/close even when autosave is disabled. Four shared lifecycle tests
+and all workspace checks pass, no new warnings; read-only review found no
+remaining host reads of stale revision/access metadata.

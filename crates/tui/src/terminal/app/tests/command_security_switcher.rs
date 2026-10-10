@@ -868,12 +868,12 @@ fn note_encrypt_and_decrypt_ask_for_the_password_in_a_masked_dialog() {
     run_keys(&mut app, &db, &[Key::Backspace, Key::Backspace]);
     enter_password(&mut app, &db, "different");
     assert!(app.status.contains("passwords differ"));
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.session.access_mode, NoteAccessMode::None);
     // A mismatch starts over from the first entry.
     enter_password(&mut app, &db, "enc123");
     enter_password(&mut app, &db, "enc123");
     assert!(app.note_password_dialog.is_none());
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode, NoteAccessMode::Encrypted);
     assert_eq!(app.status, "note encrypted at rest");
     assert!(db.unlock_note("n1", "visible").is_err());
 
@@ -881,14 +881,14 @@ fn note_encrypt_and_decrypt_ask_for_the_password_in_a_masked_dialog() {
     app.execute_terminal_command(&db, "decrypt-note");
     enter_password(&mut app, &db, "wrong");
     assert!(app.status.contains("invalid password"), "{}", app.status);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode, NoteAccessMode::Encrypted);
     app.execute_terminal_command(&db, "note decrypt");
     run_keys(&mut app, &db, &[Key::Char('x'), Key::Esc]);
     assert!(app.note_password_dialog.is_none());
     assert_eq!(app.status, "note decrypt cancelled");
     app.execute_terminal_command(&db, "note decrypt");
     enter_password(&mut app, &db, "enc123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.session.access_mode, NoteAccessMode::None);
     assert_eq!(app.editor.lines(), vec!["classified".to_string()]);
     assert_eq!(
         app.status,
@@ -918,7 +918,7 @@ fn new_note_in_a_locked_encrypted_working_collection_is_refused_not_fatal() {
     db.unlock_collection(&vault.id, "pw").expect("unlock");
     app.handle_key(&db, Key::Ctrl('n')).expect("new note");
     assert_ne!(app.active_note.id, "n1");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode, NoteAccessMode::Encrypted);
     assert_eq!(app.active_note_key_collection.as_deref(), Some("Vault"));
 
     drop((app, db, other));
@@ -931,8 +931,8 @@ fn locked_notes_block_edits_and_ask_for_the_password() {
     encrypt_elsewhere(&path, "n1", "pass123");
     let note = db.get_note("n1").expect("lookup").expect("exists");
     app.set_active_note(&db, note).expect("reopen note");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
-    assert!(!app.active_note.is_unlocked);
+    assert_eq!(app.session.access_mode, NoteAccessMode::Encrypted);
+    assert!(!app.session.is_unlocked);
     assert_eq!(app.editor.lines(), vec![String::new()]);
     assert!(!app.session.dirty);
 
@@ -967,7 +967,7 @@ fn locked_notes_block_edits_and_ask_for_the_password() {
         &[Key::Paste("pass123".to_string()), Key::Enter],
     );
     assert_eq!(app.mode, UiMode::Normal);
-    assert!(app.active_note.is_unlocked);
+    assert!(app.session.is_unlocked);
     assert_eq!(app.editor.lines(), vec!["top secret".to_string()]);
 
     drop(app);
@@ -2919,7 +2919,7 @@ fn module_command_after_an_unpolled_autosave_keeps_the_newer_revision() {
     app.execute_terminal_command(&db, "modules variables off");
     app.poll_background_save(&db, false);
     let persisted = db.get_note("n1").expect("lookup").expect("note");
-    assert_eq!(app.active_note.updated_at, persisted.updated_at);
+    assert_eq!(app.session.stored_revision, persisted.updated_at);
 
     {
         let replacement: Vec<String> = vec!["three".to_string()];
@@ -2953,9 +2953,9 @@ fn finished_autosave_does_not_roll_back_a_newer_revision() {
     let saved = db
         .save_note("n1", "written elsewhere")
         .expect("other write");
-    app.active_note.updated_at = saved.updated_at.clone();
+    app.session.stored_revision = saved.updated_at.clone();
     app.poll_background_save(&db, false);
-    assert_eq!(app.active_note.updated_at, saved.updated_at);
+    assert_eq!(app.session.stored_revision, saved.updated_at);
 
     drop(app);
     drop(db);
@@ -3223,7 +3223,7 @@ fn outside_change_reloads_a_clean_buffer_as_one_undoable_edit() {
     assert_eq!(app.editor.lines(), ["intro", "# Log", "- a", "- b"]);
     assert!(!app.session.dirty);
     assert_eq!(
-        Some(app.active_note.updated_at.clone()),
+        Some(app.session.stored_revision.clone()),
         db.get_note_updated_at("n1").expect("revision")
     );
     // The cursor stays on the text it was on.
@@ -3351,7 +3351,7 @@ fn outside_encryption_locks_the_open_note_instead_of_blanking_it() {
         .expect("edited elsewhere");
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode, NoteAccessMode::Encrypted);
     assert!(!app.active_note_is_editable());
     assert!(!app.session.dirty);
     assert!(
@@ -3379,14 +3379,14 @@ fn outside_decryption_reloads_the_note_as_plain_text() {
     other.encrypt_note("n1", "pw").expect("encrypted");
     db.unlock_note("n1", "pw").expect("unlocked here");
     app.reload_active_note(&db).expect("open unlocked");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.session.access_mode, NoteAccessMode::Encrypted);
 
     std::thread::sleep(Duration::from_millis(2));
     // Encrypting or decrypting keeps the revision; the edit after it moves it.
     other.decrypt_note("n1", "pw").expect("decrypted elsewhere");
     other.save_note("n1", "two").expect("edited elsewhere");
     take_outside_change(&mut app, &db);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.session.access_mode, NoteAccessMode::None);
     assert_eq!(app.editor.lines(), ["two"]);
     assert!(
         app.status.contains("decrypted outside Slate"),
@@ -3420,7 +3420,7 @@ fn outside_decryption_unlocks_a_locked_open_note() {
     other.save_note("n1", "two").expect("edited elsewhere");
 
     take_outside_change(&mut app, &db);
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.session.access_mode, NoteAccessMode::None);
     assert!(app.active_note_is_editable());
     assert_eq!(app.editor.lines(), ["two"]);
     assert!(
@@ -3447,7 +3447,7 @@ fn a_locked_open_note_edited_elsewhere_stays_locked_quietly() {
     assert!(!app.active_note_is_editable());
     assert!(app.status.is_empty(), "{}", app.status);
     assert_eq!(
-        Some(app.active_note.updated_at.clone()),
+        Some(app.session.stored_revision.clone()),
         db.get_note_updated_at("n1").expect("revision")
     );
 

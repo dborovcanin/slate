@@ -222,8 +222,8 @@ fn locked_note_cannot_run_scripts_and_registered_names_complete() {
     app.command_input = "run ex".into();
     assert!(app.open_command_completion_menu());
     assert_eq!(app.command_input, "run example");
-    app.active_note.access_mode = NoteAccessMode::Encrypted;
-    app.active_note.is_unlocked = false;
+    app.session.access_mode = NoteAccessMode::Encrypted;
+    app.session.is_unlocked = false;
     app.execute_terminal_command(&db, "run example");
     assert!(app.status.contains("locked"));
     assert_eq!(app.editor.lines(), vec!["original"]);
