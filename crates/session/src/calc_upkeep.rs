@@ -152,7 +152,12 @@ impl NoteSession {
                             self.calc.pending_result_splices.clear();
                             return effect;
                         }
-                        let provider = provider.expect("synchronous calc needs evaluation inputs");
+                        let Some(provider) = provider else {
+                            self.calc.pending_result_splices.clear();
+                            self.calc.defer_calc_state_after_edit(doc);
+                            effect.work = CalcWork::Idle;
+                            return effect;
+                        };
                         let recompute_inputs = provider.inputs(&self.calc);
                         if recompute_inputs.cross_note_enabled {
                             let refs = app_core::calc::scan_cross_note_refs(doc.lines());
@@ -215,5 +220,83 @@ impl NoteSession {
         let effect = self.calc_after_edit(doc, delta, false, inputs, provider);
         self.finish_edit(doc, ctx, delta);
         effect
+    }
+}
+
+#[cfg(test)]
+mod missing_provider_tests {
+    use super::*;
+    use crate::{EditContext, SessionEdit};
+    use editor_core::history::{
+        policy::{UndoGrouping, UndoSession},
+        LineHistory,
+    };
+    use std::{
+        panic::{catch_unwind, AssertUnwindSafe},
+        time::Duration,
+    };
+
+    #[test]
+    fn synchronous_edit_without_provider_defers_and_records_history_once() {
+        let mut doc = Document::from_text("plain");
+        let history = LineHistory::new(32, doc.lines(), 0, 0, Default::default());
+        let mut session = NoteSession::new(history, Default::default(), Default::default());
+        session.calc.results = vec![Some("99".to_string())];
+        let inputs = CalcEditInputs {
+            base: crate::calc::CalcInputs {
+                mask: Default::default(),
+                math_enabled: true,
+                viewport_only: false,
+            },
+            key_in_progress: false,
+            async_min_lines: usize::MAX,
+            defer_min_lines: usize::MAX,
+        };
+        let context = EditContext {
+            folds: None,
+            grouping: UndoGrouping {
+                session: UndoSession::Command,
+                elapsed: Duration::from_secs(1),
+            },
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            session.apply_with_upkeep(
+                &mut doc,
+                SessionEdit::LineReplace {
+                    line: 0,
+                    range: 0..5,
+                    text: "2 + 2 =",
+                    preserve_cursor: true,
+                    cursor_after: None,
+                },
+                context,
+                Some(inputs),
+                None,
+            )
+        }));
+        assert!(
+            result.is_ok(),
+            "missing IO provider must defer instead of interrupting history"
+        );
+        let outcome = result.unwrap().unwrap();
+        assert_eq!(outcome.calc_effect.work, CalcWork::Idle);
+        assert!(session.calc.stale);
+        assert_eq!(session.calc.results, vec![None]);
+        assert!(session.calc.pending_result_splices.is_empty());
+        assert_eq!(doc.lines(), &["2 + 2 ="]);
+        assert_eq!(doc.text_generation, 1);
+        assert_eq!(session.edit_seq(), 1);
+        assert!(session.dirty);
+        assert_eq!(session.history.undo_depth(), 1);
+        assert!(matches!(
+            session.undo_action(&mut doc, Default::default()),
+            crate::SessionUndoOutcome::Text(_)
+        ));
+        assert_eq!(doc.lines(), &["plain"]);
+        assert_eq!(session.history.undo_depth(), 0);
+        assert!(matches!(
+            session.undo_action(&mut doc, Default::default()),
+            crate::SessionUndoOutcome::Exhausted
+        ));
     }
 }

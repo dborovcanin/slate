@@ -1182,3 +1182,9 @@ was repeated unconditionally by the terminal. It now repeats only if a collapsed
 view moves the source caret. Focused undo tests pass; fresh alternating A/B
 qualification follows this correction. Initial samples and unchanged limits
 are retained as evidence rather than discarded.
+
+Final bug round, optional calc provider: a valid edit with calc inputs and no
+evaluation provider panicked after mutation and before history. The new
+regression failed before the fix; missing IO now clears stale results, returns
+Idle work and finalizes the edit once. Undo remains coherent. Workspace checks
+pass without new warnings.
