@@ -6,9 +6,10 @@
 use crate::editor_lines::{self, CursorShape, LineStyle};
 use crate::keys::{self, EditingMode, KeyCommand};
 use crate::note_view::{CommandRun, LineKind, LineView, NoteHost};
+use crate::settings::{CommandBarStyle, Settings};
 use crate::theme::Theme;
 use editor_core::markdown_tokens::FenceState;
-use editor_core::vim::{VimAction, VimIntent, VimKey, VimMode};
+use editor_core::vim::{VimAction, VimIntent, VimKey, VimMode, VimPending};
 use gpui::{
     div, list, prelude::*, px, AnyElement, ClipboardItem, Context, FocusHandle, FontWeight,
     KeyDownEvent, ListAlignment, ListState, MouseButton, SharedString, Window,
@@ -61,6 +62,7 @@ pub struct SlateWindow {
     pub(crate) host: NoteHost,
     pub(crate) theme: Theme,
     pub(crate) light: bool,
+    pub(crate) command_bar: CommandBarStyle,
     pub(crate) fonts: Fonts,
     pub(crate) focus: FocusHandle,
     pub(crate) mode: EditingMode,
@@ -82,16 +84,22 @@ pub struct SlateWindow {
 }
 
 impl SlateWindow {
-    pub fn new(host: NoteHost, light: bool, fonts: Fonts, cx: &mut Context<Self>) -> Self {
+    pub fn new(host: NoteHost, settings: Settings, fonts: Fonts, cx: &mut Context<Self>) -> Self {
+        let light = settings.light;
         let count = host.doc.lines().len();
         let mut this = Self {
             host,
             theme: if light { Theme::light() } else { Theme::dark() },
             light,
+            command_bar: settings.command_bar,
             fonts,
             focus: cx.focus_handle(),
-            mode: EditingMode::Vim,
-            sidebar: true,
+            mode: if settings.vim {
+                EditingMode::Vim
+            } else {
+                EditingMode::Standard
+            },
+            sidebar: settings.sidebar,
             status: None,
             overlay: Default::default(),
             hover_table: None,
@@ -102,6 +110,9 @@ impl SlateWindow {
             cache: Vec::new(),
             list: ListState::new(count, ListAlignment::Top, px(600.0)),
         };
+        if this.mode == EditingMode::Standard {
+            this.host.input.vim.mode = VimMode::Insert;
+        }
         this.reload_lines();
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -236,9 +247,31 @@ impl SlateWindow {
         }
         self.host.doc.selection_anchor = None;
         self.restyle();
+        self.persist();
         self.set_status(match mode {
             EditingMode::Vim => "vim editing",
             EditingMode::Standard => "standard editing",
+        });
+        cx.notify();
+    }
+
+    /// Remember the preferences that survive a restart.
+    pub(crate) fn persist(&self) {
+        Settings {
+            command_bar: self.command_bar,
+            vim: self.mode == EditingMode::Vim,
+            light: self.light,
+            sidebar: self.sidebar,
+        }
+        .save();
+    }
+
+    pub(crate) fn set_command_bar(&mut self, style: CommandBarStyle, cx: &mut Context<Self>) {
+        self.command_bar = style;
+        self.persist();
+        self.set_status(match style {
+            CommandBarStyle::Popup => "command line: popup",
+            CommandBarStyle::Bottom => "command line: bottom of the window",
         });
         cx.notify();
     }
@@ -251,6 +284,7 @@ impl SlateWindow {
             Theme::dark()
         };
         self.restyle();
+        self.persist();
         cx.notify();
     }
 
@@ -304,7 +338,7 @@ impl SlateWindow {
                 self.set_status("yanked to clipboard");
             }
             HostRequest::PasteFromClipboard(action) => self.paste_clipboard(&action, cx),
-            HostRequest::OpenCommandBar => self.open_palette(":", cx),
+            HostRequest::OpenCommandBar => crate::overlays::open_command_bar(self, ":", cx),
             HostRequest::OpenSearch => self.set_status("search is not in the desktop app yet"),
             HostRequest::SearchNext | HostRequest::SearchPrev => {}
             HostRequest::Unsupported(intent) => {
@@ -329,6 +363,13 @@ impl SlateWindow {
 
     /// Feed one key to the session's input pipeline.
     pub(crate) fn send_key(&mut self, key: VimKey, cx: &mut Context<Self>) {
+        // `gd` follows a wiki link or goes to a variable's definition, which
+        // the vim engine leaves to the host.
+        if key == VimKey::Char('d') && self.host.input.vim.pending == Some(VimPending::Go) {
+            self.host.input.vim.pending = None;
+            crate::commands::go_to_definition(self, cx);
+            return;
+        }
         let before = self.snapshot_cursor();
         let outcome = self.host.handle_key(key);
         if self.mode == EditingMode::Standard && self.host.input.mode() != VimMode::Insert {
@@ -517,6 +558,10 @@ impl SlateWindow {
             KeyCommand::SelectAll => self.select_all(cx),
             KeyCommand::Save => self.save(cx),
             KeyCommand::CommandPalette => self.open_palette("", cx),
+            KeyCommand::CommandBar => crate::overlays::open_command_bar(self, "", cx),
+            KeyCommand::NoteSwitcher => crate::switcher::open_switcher(self, cx),
+            KeyCommand::CollectionPicker => crate::switcher::open_picker(self, cx),
+            KeyCommand::FollowLink => crate::commands::follow_link(self, cx),
             KeyCommand::CollectionBrowser => crate::overlays::open_browser(self, cx),
             KeyCommand::History => crate::overlays::open_history(self, cx),
             KeyCommand::Find => {
@@ -528,6 +573,7 @@ impl SlateWindow {
             KeyCommand::NewNote => crate::commands::new_note(self, cx),
             KeyCommand::ToggleSidebar => {
                 self.sidebar = !self.sidebar;
+                self.persist();
                 cx.notify();
             }
             KeyCommand::Quit => self.quit(cx),

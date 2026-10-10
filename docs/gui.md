@@ -42,14 +42,42 @@ unaffected.
 - **Clipboard:** yanks go to the system clipboard; `p` with an empty register
   and Ctrl+V paste from it.
 
+## Shortcuts
+
+The global keys are the terminal app's (see [Keymaps](./keymaps.md)):
+
+| Key      | Action                                                      |
+| -------- | ----------------------------------------------------------- |
+| `Ctrl+P` | Note switcher (fuzzy title search, `Ctrl+L` scope, `Ctrl+N`, `Ctrl+G`, `Ctrl+R`) |
+| `Ctrl+G` | Collection picker: sets the working collection              |
+| `Ctrl+B` | Collection browser                                          |
+| `Ctrl+E` | Command line (`:` in vim Normal mode)                       |
+| `Ctrl+]` | Follow the wiki link at the cursor (`gd` also follows variables) |
+| `Ctrl+N` | New note (in the working collection)                        |
+| `Ctrl+S` / `Ctrl+Q` | Save / quit                                      |
+| `F1`     | Keys and commands                                           |
+| `Ctrl+\` | Toggle the sidebar (desktop only)                          |
+
+Standard editing mode adds the usual desktop keys: `Ctrl+Z` / `Ctrl+Y`,
+`Ctrl+C` / `Ctrl+X` / `Ctrl+V`, `Ctrl+A`, `Shift`+arrows to select, and
+`Ctrl+Shift+B` / `Ctrl+Shift+I` for bold and italic (`Ctrl+B` stays the
+browser, as in the terminal).
+
+## Settings
+
+View › Command bar chooses where the command line appears: a **popup**
+(default) or the **bottom** of the window, as in the terminal app. The choice,
+the editing mode, the theme and the sidebar are remembered in
+`gui-settings.json` in the Slate data directory.
+
 ## Not in the desktop app yet
 
 These are reported in the status bar when invoked:
 
 - PDF export, `:backup`, `:web-search`, `:currency refresh`, clip-watch,
   `:paste-image` and inline images, folding, in-note search (`/`), macros.
-- Wiki links show their raw `[[...]]` text and are not followable: that
-  display rule and `gd` navigation still live in the terminal app.
+- Wiki links show their raw `[[...]]` text instead of the target's title
+  (following them works).
 - Vertical motion follows logical lines, not wrapped rows (`gj`/`gk` too).
 - IME composition and accessibility are untested.
 

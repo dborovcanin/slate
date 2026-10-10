@@ -110,6 +110,9 @@ pub struct NoteHost {
     pub title: String,
     pub modules: NoteModules,
     pub notes: Vec<NoteSummary>,
+    /// The working collection `(id, name)`: the sidebar lists its notes and
+    /// new notes join it. `None` shows every note.
+    pub working: Option<(String, String)>,
     last_edit: Option<Instant>,
 }
 
@@ -169,6 +172,7 @@ impl NoteHost {
             title: String::new(),
             modules: NoteModules::default(),
             notes,
+            working: None,
             last_edit: None,
         };
         host.switch_to(&id)?;
@@ -647,12 +651,19 @@ impl NoteHost {
     }
 
     fn refresh_titles(&mut self) {
-        if let Ok(notes) = self.db.list_notes_meta() {
+        let id = self.working.as_ref().map(|(id, _)| id.as_str());
+        if let Ok(notes) = self.db.list_notes_meta_filtered(id) {
             self.notes = notes;
         }
         if let Some(note) = self.notes.iter().find(|n| n.id == self.session.note_id()) {
             self.title = note.title.clone();
         }
+    }
+
+    /// Choose the working collection (`None` for all notes).
+    pub fn set_working(&mut self, working: Option<(String, String)>) {
+        self.working = working;
+        self.refresh_titles();
     }
 
     /// Move the cursor to the start of `line`, clamped to the note.

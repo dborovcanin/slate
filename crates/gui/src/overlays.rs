@@ -2,6 +2,7 @@
 //! menu, text prompts (passwords, reminders, collections), the collection
 //! browser and history, plus the which-key strip at the bottom.
 use crate::keys::{EditingMode, KeyCommand};
+use crate::settings::CommandBarStyle;
 use crate::window::{SlateWindow, MENUS};
 use editor_core::types::CommandMode;
 use editor_core::vim::{VimIntent, VimMode, VimPending};
@@ -21,6 +22,7 @@ pub enum Act {
     Sub(&'static str),
     Prompt(PromptKind),
     Palette,
+    CommandBar(CommandBarStyle),
     TableRowBelow,
     TableRowAbove,
     TableColumnRight,
@@ -53,17 +55,24 @@ pub fn menu_items(name: &str) -> Vec<Item> {
             it("New note", "Ctrl+N", "", Key(KeyCommand::NewNote)),
             it("Today's note", "", ":today", Cmd("today")),
             it(
+                "Note switcher…",
+                "Ctrl+P",
+                "",
+                Key(KeyCommand::NoteSwitcher),
+            ),
+            it(
+                "Collection picker…",
+                "Ctrl+G",
+                "",
+                Key(KeyCommand::CollectionPicker),
+            ),
+            it(
                 "Browse collections…",
-                "Ctrl+O",
+                "Ctrl+B",
                 ":browse",
                 Key(KeyCommand::CollectionBrowser),
             ),
-            it(
-                "History…",
-                "Ctrl+Shift+H",
-                ":history",
-                Key(KeyCommand::History),
-            ),
+            it("History…", "", ":history", Key(KeyCommand::History)),
             SEP,
             it("Save", "Ctrl+S", ":w", Key(KeyCommand::Save)),
             it("Reload from disk", "", ":reload", Cmd("reload")),
@@ -81,18 +90,19 @@ pub fn menu_items(name: &str) -> Vec<Item> {
             it("Paste", "Ctrl+V", "p", Key(KeyCommand::Paste)),
             it("Select all", "Ctrl+A", "ggVG", Key(KeyCommand::SelectAll)),
             SEP,
-            it("Command palette…", "Ctrl+Shift+P", ":", Palette),
+            it("Command line…", "Ctrl+E", ":", Key(KeyCommand::CommandBar)),
         ],
         "View" => vec![
             it("Sidebar", "Ctrl+\\", "", Key(KeyCommand::ToggleSidebar)),
             it("Theme", "", "", Sub("theme")),
             it("Editing mode", "", "", Sub("editing")),
+            it("Command bar", "", "", Sub("cmdbar")),
             SEP,
             it("Keys and commands", "F1", ":help", Cmd("help")),
         ],
         "Format" => vec![
-            it("Bold", "Ctrl+B", ":bold", Cmd("format bold")),
-            it("Italic", "Ctrl+I", ":italic", Cmd("format italic")),
+            it("Bold", "Ctrl+Shift+B", ":bold", Cmd("format bold")),
+            it("Italic", "Ctrl+Shift+I", ":italic", Cmd("format italic")),
             it("Strikethrough", "", ":strike", Cmd("format strike")),
             it("Inline code", "", ":icode", Cmd("format code")),
             SEP,
@@ -117,7 +127,7 @@ pub fn menu_items(name: &str) -> Vec<Item> {
         ],
         "Help" => vec![
             it("Keys and commands", "F1", ":help", Cmd("help")),
-            it("Command palette", "Ctrl+Shift+P", ":", Palette),
+            it("Command line", "Ctrl+E", ":", Key(KeyCommand::CommandBar)),
         ],
         "export" => vec![
             it("Markdown", "", ":export md", Cmd("export md")),
@@ -127,6 +137,15 @@ pub fn menu_items(name: &str) -> Vec<Item> {
         "security" => vec![
             it("Encrypt note…", "", ":encrypt", Prompt(PromptKind::Encrypt)),
             it("Decrypt note…", "", ":decrypt", Prompt(PromptKind::Decrypt)),
+        ],
+        "cmdbar" => vec![
+            it("Popup", "", "", CommandBar(CommandBarStyle::Popup)),
+            it(
+                "Bottom of the window",
+                "",
+                "",
+                CommandBar(CommandBarStyle::Bottom),
+            ),
         ],
         "theme" => vec![it("Dark", "", "", Theme), it("Light", "", "", Theme)],
         "editing" => vec![
@@ -151,8 +170,8 @@ pub fn menu_items(name: &str) -> Vec<Item> {
             ),
         ],
         "format" => vec![
-            it("Bold", "Ctrl+B", ":bold", Cmd("format bold")),
-            it("Italic", "Ctrl+I", ":italic", Cmd("format italic")),
+            it("Bold", "Ctrl+Shift+B", ":bold", Cmd("format bold")),
+            it("Italic", "Ctrl+Shift+I", ":italic", Cmd("format italic")),
             it("Strikethrough", "", ":strike", Cmd("format strike")),
             it("Inline code", "", ":icode", Cmd("format code")),
         ],
@@ -194,7 +213,7 @@ fn context_items(table: bool) -> Vec<Item> {
         it("Set reminder…", "", ":remind", Prompt(PromptKind::Remind)),
         it("Run script…", "", ":run", Prompt(PromptKind::Run)),
         SEP,
-        it("Command palette…", "Ctrl+Shift+P", ":", Palette),
+        it("Command line…", "Ctrl+E", ":", Key(KeyCommand::CommandBar)),
     ]);
     items
 }
@@ -251,7 +270,12 @@ pub enum Overlay {
     Palette {
         query: String,
         selected: usize,
+        /// Opened as the command line (Ctrl+E, `:`), so it follows the
+        /// "command bar" setting; keys and commands (F1) is always a popup.
+        docked: bool,
     },
+    Switcher(crate::switcher::Switcher),
+    Picker(crate::switcher::Picker),
     Menu {
         name: &'static str,
         sub: Option<&'static str>,
@@ -274,6 +298,17 @@ pub fn open_palette(win: &mut SlateWindow, initial: &str, cx: &mut Context<Slate
     win.overlay = Overlay::Palette {
         query: initial.trim_start_matches(':').to_string(),
         selected: 0,
+        docked: false,
+    };
+    cx.notify();
+}
+
+/// The command line: at the bottom of the window or a popup, per setting.
+pub fn open_command_bar(win: &mut SlateWindow, initial: &str, cx: &mut Context<SlateWindow>) {
+    win.overlay = Overlay::Palette {
+        query: initial.trim_start_matches(':').to_string(),
+        selected: 0,
+        docked: true,
     };
     cx.notify();
 }
@@ -361,6 +396,7 @@ pub fn activate(win: &mut SlateWindow, act: Act, cx: &mut Context<SlateWindow>) 
         Act::Theme => win.toggle_theme(cx),
         Act::Prompt(kind) => open_prompt(win, kind, "", cx),
         Act::Palette => open_palette(win, "", cx),
+        Act::CommandBar(style) => win.set_command_bar(style, cx),
         Act::TableRowBelow => crate::commands::table_insert_row(win, false, cx),
         Act::TableRowAbove => crate::commands::table_insert_row(win, true, cx),
         Act::TableColumnRight => crate::commands::table_insert_column(win, cx),
@@ -386,10 +422,14 @@ pub fn on_key(
         .filter(|s| !s.is_empty() && !k.modifiers.control);
     match &mut win.overlay {
         Overlay::None => false,
-        Overlay::Palette { query, selected } => {
+        Overlay::Palette {
+            query, selected, ..
+        } => {
             let list = suggestions(query);
+            let ctrl_e = (k.modifiers.control || k.modifiers.platform) && k.key == "e";
             match k.key.as_str() {
                 "escape" => win.overlay = Overlay::None,
+                _ if ctrl_e => win.overlay = Overlay::None,
                 "up" => *selected = selected.saturating_sub(1),
                 "down" => *selected = (*selected + 1).min(list.len().saturating_sub(1)),
                 "tab" => {
@@ -459,6 +499,8 @@ pub fn on_key(
             cx.notify();
             true
         }
+        Overlay::Switcher(_) => crate::switcher::on_switcher_key(win, ev, cx),
+        Overlay::Picker(_) => crate::switcher::on_picker_key(win, ev, cx),
         Overlay::Browser(_) => crate::browser::on_key(win, ev, cx),
         Overlay::History(_) => crate::history::on_key(win, ev, cx),
     }
@@ -490,6 +532,7 @@ fn menu_row(
     let checked = match item.act {
         Act::Mode(m) => m == win.mode,
         Act::Theme => (item.label == "Light") == win.light,
+        Act::CommandBar(style) => style == win.command_bar,
         Act::Key(KeyCommand::ToggleSidebar) => win.sidebar,
         Act::Cmd(c) if c.starts_with("module toggle ") => {
             let m = win.host.modules;
@@ -681,6 +724,83 @@ fn backdrop(cx: &mut Context<SlateWindow>) -> AnyElement {
                 close(this);
                 cx.notify();
             }),
+        )
+        .into_any_element()
+}
+
+/// The command line docked at the bottom of the window, as in the terminal
+/// app: the input replaces the status bar and suggestions open above it.
+fn command_bar(win: &SlateWindow, query: &str, selected: usize) -> AnyElement {
+    let t = win.theme;
+    let list = suggestions(query);
+    let rows = list.iter().take(8).enumerate().map(|(i, s)| {
+        div()
+            .flex()
+            .gap(px(16.0))
+            .px(px(14.0))
+            .h(px(24.0))
+            .items_center()
+            .when(i == selected, |d| d.bg(t.active))
+            .child(
+                div()
+                    .w(px(170.0))
+                    .flex_none()
+                    .font_family(win.fonts.mono.clone())
+                    .text_size(px(12.5))
+                    .text_color(t.text)
+                    .child(s.value.clone()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(12.0))
+                    .text_color(if i == selected { t.text } else { t.muted })
+                    .child(s.description.clone()),
+            )
+    });
+    div()
+        .absolute()
+        .occlude()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .flex()
+        .flex_col()
+        .bg(t.panel)
+        .border_t_1()
+        .border_color(t.border)
+        .when(!list.is_empty(), |d| {
+            d.child(div().flex().flex_col().py(px(4.0)).children(rows))
+        })
+        .child(
+            div()
+                .h(px(30.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(14.0))
+                .border_t_1()
+                .border_color(t.border)
+                .font_family(win.fonts.mono.clone())
+                .text_size(px(13.0))
+                .child(div().text_color(t.blue).child(":"))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(t.heading)
+                        .child(format!("{query}▏")),
+                )
+                .child(
+                    div()
+                        .font_family(win.fonts.sans.clone())
+                        .text_size(px(11.5))
+                        .text_color(t.faint)
+                        .child("Tab complete · ↑ ↓ select · Enter run · Esc close"),
+                ),
         )
         .into_any_element()
 }
@@ -952,9 +1072,19 @@ pub fn render(
     let _ = window;
     match &win.overlay {
         Overlay::None => Vec::new(),
-        Overlay::Palette { query, selected } => {
-            vec![backdrop(cx), palette(win, query, *selected)]
+        Overlay::Palette {
+            query,
+            selected,
+            docked,
+        } => {
+            if *docked && win.command_bar == CommandBarStyle::Bottom {
+                vec![command_bar(win, query, *selected)]
+            } else {
+                vec![backdrop(cx), palette(win, query, *selected)]
+            }
         }
+        Overlay::Switcher(sw) => vec![backdrop(cx), crate::switcher::render_switcher(win, sw, cx)],
+        Overlay::Picker(p) => vec![backdrop(cx), crate::switcher::render_picker(win, p, cx)],
         Overlay::Menu { name, sub } => {
             let mut out = vec![backdrop(cx)];
             out.extend(menu_panels(

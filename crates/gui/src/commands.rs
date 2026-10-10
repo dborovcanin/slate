@@ -189,11 +189,13 @@ fn insert_date(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) {
 
 pub fn new_note(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) {
     let id = ulid::Ulid::new().to_string();
-    match win
-        .host
-        .db
-        .create_note_with_context(&id, NoteModules::default(), None, None)
-    {
+    let collection = win.host.working.as_ref().map(|(id, _)| id.clone());
+    match win.host.db.create_note_with_context(
+        &id,
+        NoteModules::default(),
+        None,
+        collection.as_deref(),
+    ) {
         Ok(_) => {
             win.host.refresh_notes();
             win.open_note(&id, cx);
@@ -593,6 +595,105 @@ pub fn submit_prompt(win: &mut SlateWindow, mut p: Prompt, cx: &mut Context<Slat
             };
             export(win, format, Some(text), cx);
         }
+    }
+}
+
+/// Put the cursor on the heading named `heading` (as in `[[note#heading]]`).
+fn jump_to_heading(win: &mut SlateWindow, heading: &str, cx: &mut Context<SlateWindow>) {
+    let normalize = |value: &str| {
+        value
+            .trim_end_matches(|c: char| c == '#' || c.is_whitespace())
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let needle = normalize(heading);
+    if needle.is_empty() {
+        return;
+    }
+    let found = win.host.doc.lines().iter().position(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with('#') && normalize(trimmed.trim_start_matches('#')) == needle
+    });
+    if let Some(line) = found {
+        let before = win.snapshot_cursor();
+        win.host.set_cursor_line(line);
+        win.after_input(before, InputOutcome::default(), cx);
+    }
+}
+
+/// `Ctrl+]`: open the note the wiki link under the cursor points to.
+pub fn follow_link(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) {
+    if !follow_wiki_link(win, cx) {
+        notify_status(win, "no link at the cursor", cx);
+    }
+}
+
+fn follow_wiki_link(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) -> bool {
+    let line = win.host.doc.lines()[win.host.doc.cursor_line].clone();
+    let Some(link) =
+        editor_core::markdown_tokens::wiki_link_at_cursor(&line, win.host.doc.cursor_col)
+    else {
+        return false;
+    };
+    let heading = link.heading.clone();
+    let destination = |title: &str| match &heading {
+        Some(h) => format!("→ {title}#{h}"),
+        None => format!("→ {title}"),
+    };
+    match win.host.db.get_note_meta(&link.note_id) {
+        Ok(Some(summary)) if summary.id == win.host.note_id() => {
+            // Reloading would drop unsaved edits; this text is the note.
+            if let Some(h) = &heading {
+                jump_to_heading(win, h, cx);
+            }
+            notify_status(win, destination(&summary.title), cx);
+        }
+        Ok(Some(summary)) => {
+            win.open_note(&summary.id, cx);
+            if win.host.note_id() == summary.id {
+                if let Some(h) = &heading {
+                    jump_to_heading(win, h, cx);
+                }
+                notify_status(win, destination(&summary.title), cx);
+            }
+        }
+        Ok(None) => notify_status(win, "wiki-link: broken (note deleted)", cx),
+        Err(err) => notify_status(win, format!("wiki-link error: {err}"), cx),
+    }
+    true
+}
+
+/// `gd`: follow the wiki link at the cursor, or jump to the definition of
+/// the variable there.
+pub fn go_to_definition(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) {
+    if follow_wiki_link(win, cx) {
+        return;
+    }
+    let m = win.host.modules;
+    let target = m.math.then(|| {
+        editor_core::calc_plan::variable_definition_at(
+            win.host.doc.lines(),
+            win.host.session.calc().calc_dependency_index.as_ref(),
+            win.host.doc.cursor_line,
+            win.host.doc.cursor_col,
+            editor_core::calc_plan::CalcFeatureMask {
+                math_enabled: m.math,
+                table_enabled: m.table,
+                variables_enabled: m.variables,
+            },
+        )
+    });
+    match target.flatten() {
+        Some(target) => {
+            let before = win.snapshot_cursor();
+            win.host.doc.cursor_line = target.line;
+            win.host.doc.cursor_col = target.col;
+            win.after_input(before, InputOutcome::default(), cx);
+            notify_status(win, format!("definition: {}", target.name), cx);
+        }
+        None => notify_status(win, "no link or variable at the cursor", cx),
     }
 }
 

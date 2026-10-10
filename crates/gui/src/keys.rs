@@ -35,9 +35,19 @@ pub enum KeyCommand {
     Paste,
     SelectAll,
     Save,
+    /// `Ctrl+E`: the command line.
+    CommandBar,
+    /// `F1`: keys and commands.
     CommandPalette,
+    /// `Ctrl+P`: switch between notes.
+    NoteSwitcher,
+    /// `Ctrl+G`: choose the working collection.
+    CollectionPicker,
+    /// `Ctrl+B`: browse collections and notes.
     CollectionBrowser,
     History,
+    /// `Ctrl+]`: follow the wiki link at the cursor.
+    FollowLink,
     Find,
     Bold,
     Italic,
@@ -80,23 +90,26 @@ fn typed_char(k: &Keystroke) -> Option<char> {
     }
 }
 
-/// Shortcuts both modes share (Ctrl with a letter, function keys).
+/// Shortcuts both modes share. They are the terminal app's global keys
+/// (docs/keymaps.md, "Everywhere"), plus `Ctrl+\\` for the sidebar.
 fn app_shortcut(k: &Keystroke) -> Option<KeyCommand> {
     let m = k.modifiers;
     if k.key == "f1" {
         return Some(KeyCommand::CommandPalette);
     }
-    if !(m.control || m.platform) {
+    if !(m.control || m.platform) || m.shift {
         return None;
     }
-    Some(match (k.key.as_str(), m.shift) {
-        ("p", true) => KeyCommand::CommandPalette,
-        ("s", false) => KeyCommand::Save,
-        ("o", false) => KeyCommand::CollectionBrowser,
-        ("h", true) => KeyCommand::History,
-        ("n", false) => KeyCommand::NewNote,
-        ("\\", false) => KeyCommand::ToggleSidebar,
-        ("q", false) => KeyCommand::Quit,
+    Some(match k.key.as_str() {
+        "q" => KeyCommand::Quit,
+        "p" => KeyCommand::NoteSwitcher,
+        "g" => KeyCommand::CollectionPicker,
+        "b" => KeyCommand::CollectionBrowser,
+        "e" => KeyCommand::CommandBar,
+        "]" => KeyCommand::FollowLink,
+        "s" => KeyCommand::Save,
+        "n" => KeyCommand::NewNote,
+        "\\" => KeyCommand::ToggleSidebar,
         _ => return None,
     })
 }
@@ -129,8 +142,8 @@ pub fn map(k: &Keystroke, mode: EditingMode) -> KeyCommand {
                     ("v", false) => KeyCommand::Paste,
                     ("a", false) => KeyCommand::SelectAll,
                     ("f", false) => KeyCommand::Find,
-                    ("b", false) => KeyCommand::Bold,
-                    ("i", false) => KeyCommand::Italic,
+                    ("b", true) => KeyCommand::Bold,
+                    ("i", true) => KeyCommand::Italic,
                     _ => KeyCommand::Ignore,
                 };
             }
@@ -207,11 +220,25 @@ mod tests {
     }
 
     #[test]
-    fn app_shortcuts_work_in_both_modes() {
+    fn global_shortcuts_match_the_terminal_app() {
         for mode in [EditingMode::Vim, EditingMode::Standard] {
-            assert_eq!(map(&key("ctrl-shift-p"), mode), KeyCommand::CommandPalette);
+            assert_eq!(map(&key("ctrl-p"), mode), KeyCommand::NoteSwitcher);
+            assert_eq!(map(&key("ctrl-g"), mode), KeyCommand::CollectionPicker);
+            assert_eq!(map(&key("ctrl-b"), mode), KeyCommand::CollectionBrowser);
+            assert_eq!(map(&key("ctrl-e"), mode), KeyCommand::CommandBar);
+            assert_eq!(map(&key("ctrl-]"), mode), KeyCommand::FollowLink);
             assert_eq!(map(&key("ctrl-s"), mode), KeyCommand::Save);
-            assert_eq!(map(&key("ctrl-o"), mode), KeyCommand::CollectionBrowser);
+            assert_eq!(map(&key("ctrl-q"), mode), KeyCommand::Quit);
+            assert_eq!(map(&key("ctrl-n"), mode), KeyCommand::NewNote);
+            assert_eq!(map(&key("f1"), mode), KeyCommand::CommandPalette);
         }
+    }
+
+    #[test]
+    fn standard_formatting_keys_leave_ctrl_b_to_the_browser() {
+        let s = EditingMode::Standard;
+        assert_eq!(map(&key("ctrl-shift-b"), s), KeyCommand::Bold);
+        assert_eq!(map(&key("ctrl-shift-i"), s), KeyCommand::Italic);
+        assert_eq!(map(&key("ctrl-b"), s), KeyCommand::CollectionBrowser);
     }
 }
