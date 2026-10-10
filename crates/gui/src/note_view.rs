@@ -17,8 +17,11 @@ use note_session::display::table::{format_formula_display_value, is_markdown_tab
 use note_session::{Document, NoteSession};
 use std::sync::{Arc, Condvar, Mutex};
 
+/// Lines evaluated up front for notes that only evaluate what is visible.
+const FIRST_SCREEN_LINES: usize = 200;
+
 /// A stretch of one line with a single style.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Run {
     pub text: String,
     pub style: SemanticStyle,
@@ -37,13 +40,18 @@ pub enum LineKind {
     /// Markdown heading, level 1–6.
     Heading(usize),
     /// Checklist item; runs start after the `- [ ]` marker.
-    Checklist { checked: bool },
-    TableRow { cells: Vec<TableCell>, header: bool },
+    Checklist {
+        checked: bool,
+    },
+    TableRow {
+        cells: Vec<TableCell>,
+        header: bool,
+    },
     /// The `| --- |` row under a table header; drawn as the header rule.
     TableDelimiter,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct LineView {
     pub index: usize,
     pub kind: LineKind,
@@ -74,7 +82,7 @@ impl NoteHost {
                 .map(|n| n.id.clone())
                 .ok_or_else(|| "no notes yet; create one with `slate --new`".to_string())?,
         };
-        let mut doc = Document::default();
+        let doc = Document::default();
         let history =
             note_session::lifecycle::build_history_for_note(doc.lines(), 0, 0, Default::default());
         let session = NoteSession::new(history, Default::default(), Default::default());
@@ -113,7 +121,8 @@ impl NoteHost {
         Ok(())
     }
 
-    /// Full recompute through the provider the terminal also uses.
+    /// Evaluate calc the way the terminal does after opening a note. Large
+    /// viewport-only notes get their first screen evaluated.
     pub fn recompute_calc(&mut self) {
         let modules = self.modules;
         let note_id = self.session.note_id().to_string();
@@ -137,8 +146,12 @@ impl NoteHost {
             },
             selection_range: None,
         };
-        let lines = self.doc.lines().len();
-        self.session.evaluate_calc_range(&self.doc, 0, lines, &provider);
+        let reset = self.session.reset_calc_after_open(&mut self.doc, &provider);
+        if reset.refresh_viewport {
+            let to = self.doc.lines().len().min(FIRST_SCREEN_LINES);
+            self.session
+                .evaluate_calc_range(&self.doc, 0, to, &provider);
+        }
     }
 
     /// Move the cursor to the start of `line`, clamped to the note.
@@ -164,8 +177,8 @@ impl NoteHost {
             markdown_tokens::advance_fence_state(&mut ctx.fence, text);
         }
         let mut out = Vec::with_capacity(to.saturating_sub(from));
-        for index in from..to {
-            let text = lines[index].as_str();
+        for (index, text) in lines.iter().enumerate().take(to).skip(from) {
+            let text = text.as_str();
             let is_cursor = index == self.doc.cursor_line;
             let result = calc.results.get(index).and_then(|r| r.as_deref());
             let in_code = ctx.fence.in_code_block;
@@ -274,8 +287,8 @@ mod tests {
 
     const LISBON: &str = "# Lisbon trip\n\
         ## Budget\n\
-        flights := 2 * 189 EUR\n\
-        hotel := 4 * 96 EUR\n\
+        flights := 2 * 189\n\
+        hotel := 4 * 96\n\
         flights + hotel\n\
         - [x] Book flights\n\
         - [ ] Renew passport\n\

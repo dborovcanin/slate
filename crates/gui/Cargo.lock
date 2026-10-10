@@ -5308,6 +5308,7 @@ dependencies = [
  "editor-core",
  "gpui",
  "note-session",
+ "table-syntax",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@ gpui = "0.2.2"
 note-session = { path = "../session" }
 app-core = { path = "../app-core" }
 editor-core = { path = "../editor-core" }
+table-syntax = { path = "../table-syntax" }
 
 [profile.release]
 lto = "thin"
