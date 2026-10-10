@@ -16,19 +16,19 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
         save_error: None,
     }));
     app.poll_currency_refresh();
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("8 EUR"));
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("8 EUR"));
     assert_eq!(app.status, "exchange rates updated (2026-10-09)");
 
     app.currency = CurrencyState::with_result(Err("offline".into()));
     app.poll_currency_refresh();
     assert_eq!(app.status, "exchange rates: offline");
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("8 EUR"));
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("8 EUR"));
     // A dependency evaluated with the old rates must be loaded again.
     let dep = ulid::Ulid::new().to_string();
     db.save_note(&dep, "price := 20 EUR to USD").unwrap();
     app_core::cross_note::load_note_exports(
         &db,
-        &app.session.calc.engine,
+        &app.session.calc().engine,
         &app.cross_note_var_index,
         &dep,
     );
@@ -37,7 +37,7 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
         app.editor.set_text(&replacement.join("\n"));
     };
     app.recompute_calc_whole_note();
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("50"));
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("50"));
     app.currency = CurrencyState::with_result(Ok(Fetched {
         rates: ExchangeRates {
             base: "EUR".into(),
@@ -48,7 +48,7 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
         save_error: None,
     }));
     app.poll_currency_refresh();
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("80"));
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("80"));
 
     // Identical rates keep the results and do not invalidate dependencies.
     let epoch = app.cross_note_var_index.lock().unwrap().epoch();
@@ -63,7 +63,7 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
     }));
     app.poll_currency_refresh();
     assert_eq!(app.status, "exchange rates unchanged (2026-10-10)");
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("80"));
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("80"));
     assert_eq!(app.cross_note_var_index.lock().unwrap().epoch(), epoch);
 
     // Host dispatch refuses a second worker while one is running...
@@ -124,7 +124,7 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
             app.poll_currency_refresh();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert_eq!(app.session.calc.results[0].as_deref(), Some("160"));
+        assert_eq!(app.session.calc().results[0].as_deref(), Some("160"));
         assert_eq!(
             app_core::currency::load_cache(&cache)
                 .unwrap()

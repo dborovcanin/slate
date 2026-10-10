@@ -334,20 +334,20 @@ fn huge_plain_text_note_100k_edits_skip_calc_recompute() {
     let body = build_repeated_note("plain text", 100_000);
     let (db, mut app, path) = app_with_note(&body);
 
-    assert!(!app.session.calc.cached_has_builtin_formula);
-    assert!(!app.session.calc.cached_has_variable_assignment);
+    assert!(!app.session.calc().cached_has_builtin_formula);
+    assert!(!app.session.calc().cached_has_variable_assignment);
     assert!(!app.calc_runtime.viewport_only);
-    assert!(app.session.calc.prev_line_metadata.is_empty());
+    assert!(app.session.calc().prev_line_metadata.is_empty());
 
     app.editor.cursor_line = 50_000;
     app.editor.cursor_col = line_char_len(app.current_line());
     app.insert_text(" updated");
 
     assert!(!app.calc_runtime.recompute_pending);
-    assert!(!app.session.calc.stale);
+    assert!(!app.session.calc().stale);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(50_000)
             .and_then(|value| value.as_deref()),
@@ -384,7 +384,7 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
     let last_idx = app.editor.lines().len().saturating_sub(1);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(last_idx)
             .and_then(|value| value.as_deref()),
@@ -410,7 +410,7 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
     assert!(end_range.0 <= last_idx && last_idx < end_range.1);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(last_idx)
             .and_then(|value| value.as_deref()),
@@ -418,7 +418,7 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
     );
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(50_000)
             .and_then(|value| value.as_deref()),
@@ -453,7 +453,7 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
     assert!(changed_range.0 <= changed_idx && changed_idx < changed_range.1);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(changed_idx)
             .and_then(|value| value.as_deref()),
@@ -481,7 +481,7 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
     assert!(!app.calc_runtime.viewport_only);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(table_start + 4)
             .and_then(|value| value.as_deref()),
@@ -501,25 +501,25 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
     assert!(app.calc_runtime.recompute_pending);
 
     let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_line_metadata(
-        &app.session.calc.prev_line_metadata,
-        &app.session.calc.results,
+        &app.session.calc().prev_line_metadata,
+        &app.session.calc().results,
         app.editor.lines(),
-        &app.session.calc.line_metadata,
+        &app.session.calc().line_metadata,
     );
     let suffix_len = app.editor.lines().len().saturating_sub(plan.eval_to);
     let prev_changed_from = plan
         .eval_from
-        .min(app.session.calc.prev_line_metadata.len());
+        .min(app.session.calc().prev_line_metadata.len());
     let prev_changed_to = app
         .session
-        .calc
+        .calc()
         .prev_line_metadata
         .len()
         .saturating_sub(suffix_len)
         .max(prev_changed_from);
     let prev_changed_slice = app
         .session
-        .calc
+        .calc()
         .prev_line_metadata
         .get(prev_changed_from..prev_changed_to)
         .unwrap_or(&[]);
@@ -536,7 +536,7 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
             lines: app.editor.lines(),
             changed_from: plan.eval_from,
             changed_to: plan.eval_to,
-            has_prev: !app.session.calc.prev_line_metadata.is_empty(),
+            has_prev: !app.session.calc().prev_line_metadata.is_empty(),
             mask: app.calc_feature_mask(),
             prev_changed_assignment_names: &prev_changed_assignment_names,
             prev_changed_had_assignment,
@@ -555,7 +555,7 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
     assert!(!app.calc_runtime.recompute_pending);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(formula_idx)
             .and_then(|value| value.as_deref()),
@@ -581,11 +581,11 @@ fn large_mixed_calc_note_defers_full_recompute_until_idle() {
     let (db, mut app, path) = app_with_note(&body);
 
     assert!(!app.calc_runtime.viewport_only);
-    assert!(app.session.calc.stale);
+    assert!(app.session.calc().stale);
     assert!(app.calc_runtime.recompute_pending);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(formula_idx)
             .and_then(|value| value.as_deref()),
@@ -595,11 +595,11 @@ fn large_mixed_calc_note_defers_full_recompute_until_idle() {
     app.last_edit = std::time::Instant::now() - std::time::Duration::from_millis(200);
     app.run_calc_recompute();
 
-    assert!(!app.session.calc.stale);
+    assert!(!app.session.calc().stale);
     assert!(!app.calc_runtime.recompute_pending);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(formula_idx)
             .and_then(|value| value.as_deref()),
@@ -615,18 +615,23 @@ fn large_mixed_calc_note_defers_full_recompute_until_idle() {
 fn initial_open_without_calc_syntax_keeps_calc_cache_lightweight() {
     let (db, app, path) = app_with_note("plain line\nanother plain line");
 
-    assert!(!app.session.calc.cached_has_builtin_formula);
-    assert!(!app.session.calc.cached_has_variable_assignment);
-    assert!(!app.session.calc.stale);
-    assert_eq!(app.session.calc.results.len(), app.editor.lines().len());
-    assert!(app.session.calc.results.iter().all(|entry| entry.is_none()));
+    assert!(!app.session.calc().cached_has_builtin_formula);
+    assert!(!app.session.calc().cached_has_variable_assignment);
+    assert!(!app.session.calc().stale);
+    assert_eq!(app.session.calc().results.len(), app.editor.lines().len());
     assert!(app
         .session
-        .calc
+        .calc()
+        .results
+        .iter()
+        .all(|entry| entry.is_none()));
+    assert!(app
+        .session
+        .calc()
         .cell_results
         .iter()
         .all(|row| row.is_empty()));
-    assert!(app.session.calc.prev_line_metadata.is_empty());
+    assert!(app.session.calc().prev_line_metadata.is_empty());
 
     drop(app);
     drop(db);
@@ -645,7 +650,7 @@ fn large_note_with_assignments_uses_viewport_calc_on_open() {
     assert!(app.calc_runtime.last_view_eval_range.is_some());
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(1)
             .and_then(|entry| entry.as_deref()),
@@ -653,7 +658,7 @@ fn large_note_with_assignments_uses_viewport_calc_on_open() {
     );
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .last()
             .and_then(|entry| entry.as_deref()),
@@ -676,7 +681,7 @@ fn viewport_calc_evaluates_new_window_after_scroll() {
     let last_idx = app.editor.lines().len().saturating_sub(1);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(last_idx)
             .and_then(|entry| entry.as_deref()),
@@ -690,7 +695,7 @@ fn viewport_calc_evaluates_new_window_after_scroll() {
 
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(last_idx)
             .and_then(|entry| entry.as_deref()),
@@ -746,7 +751,7 @@ fn large_note_structural_edit_recomputes_calc_without_idle_delay() {
     assert!(app.calc_runtime.viewport_only);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(2)
             .and_then(|entry| entry.as_deref()),
@@ -758,10 +763,10 @@ fn large_note_structural_edit_recomputes_calc_without_idle_delay() {
     app.insert_newline();
 
     assert!(!app.calc_runtime.recompute_pending);
-    assert_eq!(app.session.calc.results.len(), app.editor.lines().len());
+    assert_eq!(app.session.calc().results.len(), app.editor.lines().len());
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(3)
             .and_then(|entry| entry.as_deref()),
@@ -787,7 +792,7 @@ fn large_note_structural_edit_with_calc_change_recomputes_immediately() {
     assert!(app.calc_runtime.viewport_only);
     assert_eq!(
         app.session
-            .calc
+            .calc()
             .results
             .get(2)
             .and_then(|entry| entry.as_deref()),
@@ -801,13 +806,13 @@ fn large_note_structural_edit_with_calc_change_recomputes_immediately() {
     assert!(!app.calc_runtime.recompute_pending);
     let changed_left = app
         .session
-        .calc
+        .calc()
         .results
         .get(2)
         .and_then(|entry| entry.as_deref());
     let changed_right = app
         .session
-        .calc
+        .calc()
         .results
         .get(3)
         .and_then(|entry| entry.as_deref());
@@ -824,8 +829,8 @@ fn large_note_structural_edit_with_calc_change_recomputes_immediately() {
 #[test]
 fn set_active_note_without_calc_syntax_skips_full_calc_recompute() {
     let (db, mut app, path) = app_with_note("x := 4\nx + 2");
-    assert!(app.session.calc.cached_has_variable_assignment);
-    assert!(!app.session.calc.prev_line_metadata.is_empty());
+    assert!(app.session.calc().cached_has_variable_assignment);
+    assert!(!app.session.calc().prev_line_metadata.is_empty());
 
     let plain_note = db
         .save_note("n2", "plain line\nstill plain")
@@ -833,18 +838,23 @@ fn set_active_note_without_calc_syntax_skips_full_calc_recompute() {
     app.set_active_note(&db, plain_note)
         .expect("switch to plain note");
 
-    assert!(!app.session.calc.cached_has_builtin_formula);
-    assert!(!app.session.calc.cached_has_variable_assignment);
-    assert!(!app.session.calc.stale);
-    assert_eq!(app.session.calc.results.len(), app.editor.lines().len());
-    assert!(app.session.calc.results.iter().all(|entry| entry.is_none()));
+    assert!(!app.session.calc().cached_has_builtin_formula);
+    assert!(!app.session.calc().cached_has_variable_assignment);
+    assert!(!app.session.calc().stale);
+    assert_eq!(app.session.calc().results.len(), app.editor.lines().len());
     assert!(app
         .session
-        .calc
+        .calc()
+        .results
+        .iter()
+        .all(|entry| entry.is_none()));
+    assert!(app
+        .session
+        .calc()
         .cell_results
         .iter()
         .all(|row| row.is_empty()));
-    assert!(app.session.calc.prev_line_metadata.is_empty());
+    assert!(app.session.calc().prev_line_metadata.is_empty());
 
     drop(app);
     drop(db);
@@ -1543,22 +1553,24 @@ fn recompute_calc_skips_refresh_when_cursor_in_trailer() {
 #[test]
 fn defer_calc_state_after_edit_clears_full_cached_results_vector() {
     let (db, mut app, path) = app_with_note("1 + 1\n2 + 2\n3 + 3");
-    app.session.calc.results = vec![
+    app.session.calc_mut_for_tests().results = vec![
         Some("2".to_string()),
         Some("4".to_string()),
         Some("6".to_string()),
     ];
     app.session
-        .calc
+        .calc_mut_for_tests()
         .variable_names
         .set(vec!["total".to_string()]);
     app.editor.cursor_line = 1;
 
-    app.session.calc.defer_calc_state_after_edit(&app.editor);
+    app.session
+        .calc_mut_for_tests()
+        .defer_calc_state_after_edit(&app.editor);
 
-    assert_eq!(app.session.calc.results, vec![None, None, None]);
-    assert!(app.session.calc.variable_names.is_empty());
-    assert!(app.session.calc.stale);
+    assert_eq!(app.session.calc().results, vec![None, None, None]);
+    assert!(app.session.calc().variable_names.is_empty());
+    assert!(app.session.calc().stale);
 
     drop(app);
     drop(db);
@@ -1890,14 +1902,15 @@ fn label_line_shows_leading_result_and_tab_appends_it() {
     let (db, mut app, path) = app_with_note("100 - 20 groceries");
     app.mode = UiMode::Editor;
     app.run_calc_recompute();
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("80"));
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("80"));
 
     app.editor.cursor_col = line_char_len(&app.editor.lines()[0]);
     app.handle_editor_key(&db, Key::Tab).expect("tab");
     assert_eq!(app.editor.lines()[0], "100 - 20 groceries = 80");
     app.run_calc_recompute();
     assert_eq!(
-        app.session.calc.results[0], None,
+        app.session.calc().results[0],
+        None,
         "applied result is not repeated"
     );
 
@@ -1909,9 +1922,9 @@ fn label_line_shows_leading_result_and_tab_appends_it() {
 #[test]
 fn plain_expressions_evaluate_when_opening_a_note_without_assignments() {
     let (_db, app, path) = app_with_note("2 + 2\n100 - 20 groceries\nplain text");
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("4"));
-    assert_eq!(app.session.calc.results[1].as_deref(), Some("80"));
-    assert_eq!(app.session.calc.results[2], None);
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("4"));
+    assert_eq!(app.session.calc().results[1].as_deref(), Some("80"));
+    assert_eq!(app.session.calc().results[2], None);
 
     drop(app);
     cleanup_db_files(&path);
@@ -1927,7 +1940,7 @@ fn typing_a_plain_expression_evaluates_it_on_idle() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while app
         .session
-        .calc
+        .calc()
         .results
         .first()
         .cloned()
@@ -1938,7 +1951,7 @@ fn typing_a_plain_expression_evaluates_it_on_idle() {
         std::thread::sleep(Duration::from_millis(20));
         app.maybe_recompute_calc_after_idle();
     }
-    assert_eq!(app.session.calc.results[0].as_deref(), Some("36"));
+    assert_eq!(app.session.calc().results[0].as_deref(), Some("36"));
 
     drop(app);
     drop(db);
@@ -2077,7 +2090,7 @@ fn cross_note_values_show_right_after_opening_a_note() {
     let body = "cost := 10\ncost * [[01ABCDEFGHJKMNPQRSTVWXYZ00]].vat";
     let (db, app, path) = app_with_linked_notes(body, &[(RATES_NOTE_ID, RATES_NOTE_BODY)]);
 
-    assert_eq!(app.session.calc.results[1].as_deref(), Some("2"));
+    assert_eq!(app.session.calc().results[1].as_deref(), Some("2"));
 
     drop(app);
     drop(db);
@@ -2099,7 +2112,7 @@ fn cross_note_values_show_in_viewport_evaluated_large_notes() {
     assert!(app.calc_runtime.viewport_only);
 
     render_screen(&mut app);
-    assert_eq!(app.session.calc.results[1].as_deref(), Some("2"));
+    assert_eq!(app.session.calc().results[1].as_deref(), Some("2"));
 
     drop(app);
     drop(db);
@@ -2118,23 +2131,23 @@ fn large_note_deleting_an_assignment_updates_visible_results_immediately() {
     app.mode = UiMode::Normal;
     render_screen(&mut app);
     assert!(app.calc_runtime.viewport_only);
-    assert_eq!(app.session.calc.results[3].as_deref(), Some("3"));
+    assert_eq!(app.session.calc().results[3].as_deref(), Some("3"));
 
     app.editor.cursor_line = 1;
     for key in "dd".chars() {
         app.handle_key(&db, Key::Char(key)).expect("dd");
     }
     assert!(!app.calc_runtime.recompute_pending);
-    assert_eq!(app.session.calc.results.len(), app.editor.lines().len());
+    assert_eq!(app.session.calc().results.len(), app.editor.lines().len());
     assert_ne!(
-        app.session.calc.results[2].as_deref(),
+        app.session.calc().results[2].as_deref(),
         Some("3"),
         "base is gone, so base + 2 must not keep its old value"
     );
 
     app.handle_key(&db, Key::Char('u')).expect("undo");
     assert_eq!(app.editor.lines()[1], "base := 1");
-    assert_eq!(app.session.calc.results[3].as_deref(), Some("3"));
+    assert_eq!(app.session.calc().results[3].as_deref(), Some("3"));
 
     drop(app);
     drop(db);
@@ -2197,13 +2210,13 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
         assert!(!app.calc_runtime.recompute_pending);
         if step > 0 {
             assert_eq!(
-                app.session.calc.line_metadata.len(),
+                app.session.calc().line_metadata.len(),
                 app.editor.lines().len()
             );
         }
 
         let fresh = crate::terminal::app::compute_calc_data(
-            &app.session.calc.engine,
+            &app.session.calc().engine,
             app.editor.lines(),
             true,
             false,
@@ -2215,7 +2228,7 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
         let last = (first + app.editor_height()).min(app.editor.lines().len());
         for line in first..last {
             assert_eq!(
-                app.session.calc.results[line],
+                app.session.calc().results[line],
                 fresh.line_results[line],
                 "step {step}, line {line}: {:?}",
                 app.editor.lines()[line]
@@ -2294,13 +2307,13 @@ fn large_note_new_assignment_names_arrive_on_the_idle_tick() {
     settle_idle_calc(&mut app);
     assert!(app
         .session
-        .calc
+        .calc()
         .variable_names
         .iter()
         .any(|name| name == "zeta"));
     assert!(app
         .session
-        .calc
+        .calc()
         .variable_names
         .iter()
         .any(|name| name == "base"));
@@ -2321,7 +2334,7 @@ fn large_note_deleting_the_last_assignment_drops_its_name_on_the_idle_tick() {
     settle_idle_calc(&mut app);
     assert!(app
         .session
-        .calc
+        .calc()
         .variable_names
         .iter()
         .any(|name| name == "base"));
@@ -2331,7 +2344,7 @@ fn large_note_deleting_the_last_assignment_drops_its_name_on_the_idle_tick() {
     render_screen(&mut app);
 
     settle_idle_calc(&mut app);
-    assert!(app.session.calc.variable_names.is_empty());
+    assert!(app.session.calc().variable_names.is_empty());
 
     drop(app);
     drop(db);
@@ -2346,8 +2359,8 @@ fn background_index_completion_requests_repaint_after_installing_names() {
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(note_session::jobs::run_build_calc_index(job))
         .unwrap();
-    app.session.calc.calc_dependency_index = None;
-    app.session.calc.variable_names.clear();
+    app.session.calc_mut_for_tests().calc_dependency_index = None;
+    app.session.calc_mut_for_tests().variable_names.clear();
     app.calc_workers.index_build = Some(rx);
     app.calc_runtime.index_sync_pending = true;
     app.render_state.dirty = false;
@@ -2355,7 +2368,7 @@ fn background_index_completion_requests_repaint_after_installing_names() {
     assert!(app.render_state.dirty);
     assert!(app
         .session
-        .calc
+        .calc()
         .variable_names
         .iter()
         .any(|name| name == "fresh"));
@@ -2387,18 +2400,18 @@ fn background_index_build_catches_up_with_edits_made_while_it_runs() {
     settle_idle_calc(&mut app);
     let mask = app.calc_feature_mask();
     assert_eq!(
-        app.session.calc.line_metadata,
+        app.session.calc().line_metadata,
         crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(app.editor.lines(), mask)
     );
     assert!(app
         .session
-        .calc
+        .calc()
         .variable_names
         .iter()
         .any(|name| name == "late"));
     assert!(!app
         .session
-        .calc
+        .calc()
         .variable_names
         .iter()
         .any(|name| name == "v2"));
@@ -2450,7 +2463,7 @@ fn large_viewport_note_prepares_calc_off_the_input_thread() {
         let offset = line - 1;
         let expected = (5 + offset).to_string();
         assert_eq!(
-            app.session.calc.results[line].as_deref(),
+            app.session.calc().results[line].as_deref(),
             Some(expected.as_str()),
             "line {line}"
         );
@@ -2464,8 +2477,8 @@ fn large_viewport_note_prepares_calc_off_the_input_thread() {
 #[test]
 fn fenced_code_does_not_change_notebook_variables() {
     let (db, app, path) = app_with_note("x := 1\n```go\nx := 100\n```\nx + 1");
-    assert_eq!(app.session.calc.results[4].as_deref(), Some("2"));
-    assert_eq!(app.session.calc.results[2], None);
+    assert_eq!(app.session.calc().results[4].as_deref(), Some("2"));
+    assert_eq!(app.session.calc().results[2], None);
 
     drop(app);
     drop(db);

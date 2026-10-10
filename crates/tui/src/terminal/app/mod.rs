@@ -720,14 +720,7 @@ impl TerminalApp {
         // This doesn't guarantee RSS drops immediately (allocator-dependent),
         // but it releases large vector capacities held by app structures.
         self.editor.compact();
-        self.session.calc.results.shrink_to_fit();
-        self.session.calc.cell_results.shrink_to_fit();
-        self.session.calc.variable_names.shrink_to_fit();
-        self.session.calc.line_metadata.shrink_to_fit();
-        self.session.calc.prev_line_metadata.shrink_to_fit();
-        self.session.folds.line_has_structure.shrink_to_fit();
-        self.session.folds.line_text_snapshot.shrink_to_fit();
-        self.session.folds.range_by_start.shrink_to_fit();
+        self.session.compact_derived_state();
         self.folds.visible_to_real.shrink_to_fit();
         self.folds.real_to_visible.shrink_to_fit();
         self.folds.hidden_owner.shrink_to_fit();
@@ -1388,8 +1381,7 @@ impl TerminalApp {
         }
 
         // Process any deferred fold recompute while the user is not typing.
-        if self.session.folds.rescan_pending {
-            self.session.folds.rescan_pending = false;
+        if self.session.take_fold_rescan() {
             self.recompute_folding_for_note_size();
             self.render_state.dirty = true;
         }

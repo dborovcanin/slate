@@ -582,15 +582,15 @@ fn large_note_fixture_evaluates_in_the_app() {
     };
     let (vat, budget, table) = (line("cost 1 * [["), line("[["), line("| a1 |"));
     assert!(
-        app.session.calc.results[vat].is_some(),
+        app.session.calc().results[vat].is_some(),
         "cross-note vat unresolved"
     );
     assert!(
-        app.session.calc.results[budget].is_some(),
+        app.session.calc().results[budget].is_some(),
         "cross-note budget unresolved"
     );
     assert!(
-        !app.session.calc.cell_results[table].is_empty(),
+        !app.session.calc().cell_results[table].is_empty(),
         "table formula not evaluated"
     );
     let screen = screen_text(&mut app);

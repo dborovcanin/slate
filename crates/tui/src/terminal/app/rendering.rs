@@ -268,7 +268,7 @@ impl TerminalApp {
             let cursor_col = (idx == self.editor.cursor_line).then_some(self.editor.cursor_col);
             let evals = self
                 .session
-                .calc
+                .calc()
                 .cell_results
                 .get(idx)
                 .map(Vec::as_slice)
@@ -1512,7 +1512,7 @@ impl TerminalApp {
                         skip,
                         max_rows,
                         track,
-                        &display.decorations(&self.session.calc.variable_names),
+                        &display.decorations(&self.session.calc().variable_names),
                         Some((buf, line_x, line_y)),
                     );
                     let used = outcome.rows.saturating_sub(skip).clamp(1, max_rows);
@@ -1578,7 +1578,7 @@ impl TerminalApp {
                         &display.text,
                         viewport.text_width,
                         viewport.text_window_col,
-                        &display.decorations(&self.session.calc.variable_names),
+                        &display.decorations(&self.session.calc().variable_names),
                         buf,
                         buf_x(buf, col),
                         buf_y(buf, row),
@@ -1845,7 +1845,7 @@ impl TerminalApp {
                     0,
                     usize::MAX,
                     track,
-                    &display.decorations(&self.session.calc.variable_names),
+                    &display.decorations(&self.session.calc().variable_names),
                     None,
                 );
                 if let Some((row, _)) = outcome.tracked {
@@ -1893,7 +1893,7 @@ impl TerminalApp {
         };
         let mut calc_ghost = self
             .session
-            .calc
+            .calc()
             .results
             .get(line_idx)
             .and_then(|r| r.as_ref().map(|value| value.to_string()));
@@ -1950,7 +1950,7 @@ impl TerminalApp {
 
                 let cell_results = self
                     .session
-                    .calc
+                    .calc()
                     .cell_results
                     .get(line_idx)
                     .map(Vec::as_slice)

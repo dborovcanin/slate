@@ -515,12 +515,11 @@ Normal-mode undo cursor, document state and display-model findings are resolved
 by this execution. Shared regressions and the terminal adapter exercise their
 replacement paths.
 
-- **Calc and fold state still public:** `NoteSession::calc` and `::folds` stay
-  public because the terminal still drives viewport evaluation
-  (`ensure_calc_for_viewport`, `recompute_calc_range`), the calc decisions after
-  opening a note (`set_active_note`) and idle fold rescans, and its `CalcProvider`
-  holds the cross-note loading policy. Move these into session methods so the
-  remaining fields can become private too.
+- **Calc and fold policy (resolved after review):** the cross-note calc
+  provider, the startup/open/note-wide calc decisions, viewport range
+  evaluation and fold rescans moved into the session; `calc` and `folds` are
+  crate-private. The terminal keeps calc scheduling (`CalcRuntime`), viewport
+  geometry and worker threads.
 - **Search allocation:** query changes still lowercase each line; buffer reuse
   remains a separate optimization, outside this extraction.
 - **Startup qualification:** the unchanged absolute startup limits fail on this

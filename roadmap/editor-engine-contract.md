@@ -216,9 +216,20 @@ Its fields are crate-private: front ends read through accessors (`dirty()`,
 `stored_revision()`, `reminders()`, `history()`, ...) and change state only through
 named methods (`set_protection`, `acknowledge_locked_revision`, `begin_input`,
 `break_undo_coalescing`, `checkpoint_history`, `drop_reminders_on_lines`,
-`set_reminder`, ...). `calc` and `folds` remain public while front ends still
-schedule viewport evaluation and fold rescans. Test fixtures use `*_for_tests`
-setters available only with the `test-support` feature.
+`set_reminder`, ...), including calc and fold state (`calc()`/`folds()` read
+access; `fold_upkeep`, `recompute_folds`, `take_fold_rescan`,
+`sync_calc_index_after_idle`, `compact_derived_state`). Test fixtures use
+`*_for_tests` setters available only with the `test-support` feature.
+
+Calc policy shared by front ends lives in the crate: `calc_provider` holds the
+cross-note loading rules (bounded wait for background loads, synchronous loads,
+startup refresh) and the calc thresholds behind `NoteCalcProvider`;
+`calc_reset` decides startup evaluation (`initial_calc_plan`), note open
+(`reset_calc_after_open`) and note-wide changes such as modules or rates
+(`reset_calc_after_note_wide_change`), including the viewport-only rule.
+Viewport evaluation is `evaluate_calc_range`; full and incremental
+recomputation is `recompute_calc_with`. Front ends keep only scheduling,
+viewport geometry and threads.
 `apply` prepares and consumes a `SessionEdit` against the separate document.
 Requests cover primitives, character replacements, paste/import, whole-line edits,
 visual ranges, word deletion, byte-offset operations and ticketed script output.

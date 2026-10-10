@@ -77,14 +77,14 @@ fn diff_against_fresh(app: &mut TerminalApp) -> Vec<String> {
     for idx in 0..app.editor.lines().len() {
         let ours = app
             .session
-            .calc
+            .calc()
             .cell_results
             .get(idx)
             .cloned()
             .unwrap_or_default();
         let theirs = fresh
             .session
-            .calc
+            .calc()
             .cell_results
             .get(idx)
             .cloned()

@@ -5,8 +5,6 @@ use rustc_hash::FxHashMap;
 /// State and policy for one open note. Fields are crate-private: front ends
 /// read through accessors and change state only through session methods, so
 /// edit, history, reminder, revision and access rules have a single owner.
-/// `calc` and `folds` stay public while front ends still drive viewport
-/// evaluation and fold rescans; see "Follow-ups" in `roadmap/arch-refactor.md`.
 pub struct NoteSession {
     pub(crate) stored_revision: String,
     pub(crate) access_mode: app_core::storage::NoteAccessMode,
@@ -14,10 +12,10 @@ pub struct NoteSession {
     pub(crate) leave_refused_at: Option<u64>,
     pub(crate) autosave_paused_at: Option<u64>,
     pub(crate) outside_change_reported: Option<String>,
-    pub folds: crate::folds::FoldStructure,
+    pub(crate) folds: crate::folds::FoldStructure,
     pub(crate) session_id: u64,
     pub(crate) note_id: String,
-    pub calc: crate::calc::CalcState,
+    pub(crate) calc: crate::calc::CalcState,
     pub(crate) history: LineHistory<ReminderMarks>,
     pub(crate) undo_policy: UndoPolicy<ReminderUndoEntry>,
     pub(crate) dirty: bool,
@@ -125,6 +123,104 @@ impl NoteSession {
         }
     }
 
+    /// Calc results, line metadata and signals, read by renderers and popups.
+    pub fn calc(&self) -> &crate::calc::CalcState {
+        &self.calc
+    }
+    /// Fold ranges and structure the front end maps into its view.
+    pub fn folds(&self) -> &crate::folds::FoldStructure {
+        &self.folds
+    }
+
+    pub fn bootstrap_folds(&mut self, line_count: usize) {
+        self.folds.bootstrap(line_count);
+    }
+    /// Keep fold structure current after an edit the front end applied itself.
+    pub fn fold_upkeep(
+        &mut self,
+        doc: &crate::Document,
+        delta: Option<editor_core::buffer::EditDelta>,
+        reduced_features: bool,
+        has_collapsed: bool,
+        view_line_count: usize,
+    ) -> crate::folds::FoldEffect {
+        self.folds
+            .upkeep(doc, delta, reduced_features, has_collapsed, view_line_count)
+    }
+    pub fn recompute_folds(&mut self, doc: &crate::Document) -> crate::folds::FoldEffect {
+        self.folds.recompute(doc)
+    }
+    /// Fold commands need a full analysis of the current text first.
+    pub fn fold_analysis_stale(&self, doc: &crate::Document) -> bool {
+        let len = doc.lines().len();
+        !self.folds.analysis_ready
+            || self.folds.rescan_pending
+            || self.folds.range_by_start.len() != len
+            || self.folds.line_has_structure.len() != len
+            || self.folds.line_text_snapshot.len() != len
+    }
+    /// A deferred fold rescan is due; the caller runs it now.
+    pub fn take_fold_rescan(&mut self) -> bool {
+        std::mem::take(&mut self.folds.rescan_pending)
+    }
+
+    pub fn rebuild_calc_metadata(
+        &mut self,
+        doc: &crate::Document,
+        inputs: crate::calc::CalcInputs,
+    ) {
+        self.calc.rebuild_calc_line_metadata(doc, inputs);
+    }
+    /// Returns whether the dependency index now needs an idle sync.
+    pub fn refresh_calc_metadata_at(
+        &mut self,
+        doc: &crate::Document,
+        inputs: crate::calc::CalcInputs,
+        line: usize,
+    ) -> bool {
+        self.calc.refresh_calc_line_metadata_at(doc, inputs, line)
+    }
+    /// Returns whether the dependency index now needs an idle sync.
+    pub fn splice_calc_metadata(
+        &mut self,
+        doc: &crate::Document,
+        inputs: crate::calc::CalcInputs,
+        start_line: usize,
+        old_span: usize,
+        new_span: usize,
+    ) -> bool {
+        self.calc
+            .splice_calc_line_metadata(doc, inputs, start_line, old_span, new_span)
+    }
+    /// Bring the dependency index up to date while idle; true when names changed.
+    pub fn sync_calc_index_after_idle(
+        &mut self,
+        doc: &crate::Document,
+        mask: editor_core::calc_plan::CalcFeatureMask,
+        viewport_only: bool,
+    ) -> bool {
+        self.calc.sync_index_after_idle(doc, mask, viewport_only)
+    }
+    /// Release capacity held for a large note after switching away from it.
+    pub fn compact_derived_state(&mut self) {
+        self.calc.results.shrink_to_fit();
+        self.calc.cell_results.shrink_to_fit();
+        self.calc.variable_names.shrink_to_fit();
+        self.calc.line_metadata.shrink_to_fit();
+        self.calc.prev_line_metadata.shrink_to_fit();
+        self.folds.line_has_structure.shrink_to_fit();
+        self.folds.line_text_snapshot.shrink_to_fit();
+        self.folds.range_by_start.shrink_to_fit();
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn calc_mut_for_tests(&mut self) -> &mut crate::calc::CalcState {
+        &mut self.calc
+    }
+    #[cfg(feature = "test-support")]
+    pub fn folds_mut_for_tests(&mut self) -> &mut crate::folds::FoldStructure {
+        &mut self.folds
+    }
     #[cfg(feature = "test-support")]
     pub fn note_changed_for_tests(&mut self) {
         self.note_changed();

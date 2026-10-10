@@ -222,18 +222,13 @@ impl TerminalApp {
     }
 
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
-        self.session.folds.bootstrap(self.editor.lines().len());
+        self.session.bootstrap_folds(self.editor.lines().len());
         self.folds.collapsed_starts.clear();
         self.rebuild_fold_view_map();
     }
 
     fn ensure_fold_analysis_ready_for_command(&mut self) {
-        if !self.session.folds.analysis_ready
-            || self.session.folds.rescan_pending
-            || self.session.folds.range_by_start.len() != self.editor.lines().len()
-            || self.session.folds.line_has_structure.len() != self.editor.lines().len()
-            || self.session.folds.line_text_snapshot.len() != self.editor.lines().len()
-        {
+        if self.session.fold_analysis_stale(&self.editor) {
             self.recompute_folding();
         }
     }
@@ -251,9 +246,7 @@ impl TerminalApp {
             return;
         }
         let inputs = self.calc_inputs();
-        self.session
-            .calc
-            .rebuild_calc_line_metadata(&self.editor, inputs);
+        self.session.rebuild_calc_metadata(&self.editor, inputs);
     }
 
     fn refresh_calc_line_metadata_at(&mut self, line_idx: usize) {
@@ -263,8 +256,7 @@ impl TerminalApp {
         let inputs = self.calc_inputs();
         self.calc_runtime.index_sync_pending |=
             self.session
-                .calc
-                .refresh_calc_line_metadata_at(&self.editor, inputs, line_idx);
+                .refresh_calc_metadata_at(&self.editor, inputs, line_idx);
     }
 
     pub(super) fn splice_calc_line_metadata(
@@ -277,7 +269,7 @@ impl TerminalApp {
             return;
         }
         let inputs = self.calc_inputs();
-        self.calc_runtime.index_sync_pending |= self.session.calc.splice_calc_line_metadata(
+        self.calc_runtime.index_sync_pending |= self.session.splice_calc_metadata(
             &self.editor,
             inputs,
             start_line,
@@ -325,7 +317,7 @@ impl TerminalApp {
     pub(super) fn active_has_variable_assignments(&self) -> bool {
         self.note_math_module_enabled()
             && self.note_variables_module_enabled()
-            && self.session.calc.cached_has_variable_assignment
+            && self.session.calc().cached_has_variable_assignment
     }
 
     pub(super) fn calc_variables_enabled(&self) -> bool {
@@ -392,7 +384,7 @@ impl TerminalApp {
 
     pub(super) fn recompute_folding_if_needed(&mut self, delta: Option<EditDelta>) {
         let reduced = self.large_note_reduced_features();
-        let effect = self.session.folds.upkeep(
+        let effect = self.session.fold_upkeep(
             &self.editor,
             delta,
             reduced,
@@ -413,7 +405,7 @@ impl TerminalApp {
         if effect.rebuild_view && needs_view {
             self.folds.collapsed_starts.retain(|line| {
                 self.session
-                    .folds
+                    .folds()
                     .range_by_start
                     .get(*line)
                     .is_some_and(|entry| entry.is_some())
@@ -422,7 +414,7 @@ impl TerminalApp {
         }
     }
     pub(super) fn recompute_folding(&mut self) {
-        let effect = self.session.folds.recompute(&self.editor);
+        let effect = self.session.recompute_folds(&self.editor);
         self.apply_fold_effect(effect);
     }
     pub(super) fn rebuild_fold_view_map(&mut self) {
@@ -443,7 +435,7 @@ impl TerminalApp {
             .iter()
             .filter_map(|start| {
                 self.session
-                    .folds
+                    .folds()
                     .range_by_start
                     .get(*start)
                     .and_then(|entry| *entry)
@@ -585,7 +577,7 @@ impl TerminalApp {
         }
         if self
             .session
-            .folds
+            .folds()
             .range_by_start
             .get(line)
             .is_some_and(|entry| entry.is_some())
@@ -595,7 +587,7 @@ impl TerminalApp {
 
         let mut best_start = None;
         let mut best_span = usize::MAX;
-        for range in &self.session.folds.ranges {
+        for range in &self.session.folds().ranges {
             if range.start_line < line && line <= range.end_line {
                 let span = range.end_line.saturating_sub(range.start_line);
                 if span < best_span {
@@ -655,7 +647,7 @@ impl TerminalApp {
     ) -> bool {
         let Some(range) = self
             .session
-            .folds
+            .folds()
             .range_by_start
             .get(start_line)
             .and_then(|entry| *entry)
@@ -1281,7 +1273,7 @@ impl TerminalApp {
             let exports = cross_note_exports_for_autocomplete(
                 &dep_id,
                 &self.cross_note_var_index,
-                &self.session.calc.engine,
+                &self.session.calc().engine,
                 &self.cross_note_db,
             );
             // Eagerly preload dep values in the background so that when the
@@ -1327,7 +1319,7 @@ impl TerminalApp {
             self.editor.cursor_col,
             self.note_table_module_enabled(),
             self.note_variables_module_enabled(),
-            &self.session.calc.variable_names,
+            &self.session.calc().variable_names,
             self.variable_autocomplete_min_chars,
             VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
         )
@@ -1540,7 +1532,7 @@ impl TerminalApp {
         let text = self.current_line().to_string();
         let Some(result) = self
             .session
-            .calc
+            .calc()
             .results
             .get(self.editor.cursor_line)
             .and_then(|value| value.clone())
@@ -2153,7 +2145,7 @@ impl TerminalApp {
         let (positions, _) = ctx.wrap_char_positions(
             &display.text,
             width,
-            &display.decorations(&self.session.calc.variable_names),
+            &display.decorations(&self.session.calc().variable_names),
         );
         Some(positions)
     }
@@ -2521,8 +2513,8 @@ impl TerminalApp {
         }
         let mask = self.calc_feature_mask();
         if self.calc_runtime.viewport_only
-            && (self.session.calc.calc_dependency_index.is_none()
-                || self.session.calc.line_metadata.is_empty())
+            && (self.session.calc().calc_dependency_index.is_none()
+                || self.session.calc().line_metadata.is_empty())
         {
             // The first build reads every line; do it off the input thread
             // and catch up with any edits made meanwhile when it lands.
@@ -2537,7 +2529,7 @@ impl TerminalApp {
             return;
         }
         self.calc_runtime.index_sync_pending = false;
-        if !self.session.calc.sync_index_after_idle(
+        if !self.session.sync_calc_index_after_idle(
             &self.editor,
             mask,
             self.calc_runtime.viewport_only,
@@ -3029,7 +3021,7 @@ impl TerminalApp {
         let target = if self.note_math_module_enabled() {
             crate::editor_core::calc_plan::variable_definition_at(
                 self.editor.lines(),
-                self.session.calc.calc_dependency_index.as_ref(),
+                self.session.calc().calc_dependency_index.as_ref(),
                 self.editor.cursor_line,
                 self.editor.cursor_col,
                 self.calc_feature_mask(),

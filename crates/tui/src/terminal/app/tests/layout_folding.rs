@@ -269,7 +269,7 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
         app.editor.lines().len()
     );
     assert_eq!(
-        app.session.folds.range_by_start.len(),
+        app.session.folds().range_by_start.len(),
         app.editor.lines().len()
     );
     assert!(app.view.scroll_line > 0);
@@ -291,7 +291,7 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
         app.editor.lines().len()
     );
     assert_eq!(
-        app.session.folds.range_by_start.len(),
+        app.session.folds().range_by_start.len(),
         app.editor.lines().len()
     );
     assert!(app.view.scroll_line > 0);
@@ -368,7 +368,7 @@ fn large_doc_random_tail_edit_stress_keeps_state_consistent() {
             "step {step_idx}: fold_placeholder_hidden_lines size mismatch after op {op}"
         );
         assert_eq!(
-            app.session.folds.range_by_start.len(),
+            app.session.folds().range_by_start.len(),
             app.editor.lines().len(),
             "step {step_idx}: fold_range_by_start size mismatch after op {op}"
         );
@@ -397,9 +397,9 @@ fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
     let body = vec!["plain"; 25_000].join("\n");
     let (db, mut app, path) = app_with_note(&body);
 
-    assert!(app.session.calc.stale);
-    assert!(!app.session.calc.cached_has_builtin_formula);
-    assert!(!app.session.calc.cached_has_variable_assignment);
+    assert!(app.session.calc().stale);
+    assert!(!app.session.calc().cached_has_builtin_formula);
+    assert!(!app.session.calc().cached_has_variable_assignment);
 
     app.mode = UiMode::Editor;
     app.editor.cursor_line = app.editor.lines().len().saturating_sub(1);
@@ -421,21 +421,21 @@ fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
         ],
     );
 
-    assert!(app.session.calc.cached_has_variable_assignment);
-    assert!(!app.session.calc.stale);
+    assert!(app.session.calc().cached_has_variable_assignment);
+    assert!(!app.session.calc().stale);
     assert_eq!(
-        app.session.calc.prev_line_metadata.len(),
+        app.session.calc().prev_line_metadata.len(),
         app.editor.lines().len()
     );
     assert!(app
         .session
-        .calc
+        .calc()
         .prev_line_metadata
         .iter()
         .any(|entry| entry.has_assignment));
     assert!(app
         .session
-        .calc
+        .calc()
         .variable_names
         .iter()
         .any(|name| name == "total"));
@@ -525,14 +525,14 @@ fn line_deletes_defer_the_fold_rescan_until_a_fold_command_needs_it() {
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
     assert!(
-        app.session.folds.rescan_pending,
+        app.session.folds().rescan_pending,
         "rescan waits for idle time"
     );
     assert_eq!(app.folds.visible_to_real.len(), app.editor.lines().len());
 
     app.editor.cursor_line = 0;
     run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
-    assert!(!app.session.folds.rescan_pending);
+    assert!(!app.session.folds().rescan_pending);
     assert!(app.folds.collapsed_starts.contains(&0));
     assert_eq!(app.folds.visible_to_real, vec![0, 3, 4]);
 
@@ -553,7 +553,7 @@ fn undo_keeps_collapsed_folds_exact_and_defers_the_rescan_otherwise() {
         &[Key::Char('d'), Key::Char('d'), Key::Char('u')],
     );
     assert!(
-        app.session.folds.rescan_pending,
+        app.session.folds().rescan_pending,
         "nothing collapsed: rescan waits"
     );
 
@@ -566,7 +566,7 @@ fn undo_keeps_collapsed_folds_exact_and_defers_the_rescan_otherwise() {
         &[Key::Char('d'), Key::Char('d'), Key::Char('u')],
     );
     assert!(
-        !app.session.folds.rescan_pending,
+        !app.session.folds().rescan_pending,
         "a collapsed fold forces the rescan"
     );
     assert!(app.folds.collapsed_starts.contains(&0));
@@ -900,11 +900,11 @@ fn typing_a_fence_into_place_rebuilds_the_fold_ranges() {
     app.editor.cursor_col = 0;
     run_keys(&mut app, &db, &[Key::Char('i'), Key::Char('~'), Key::Esc]);
     assert_eq!(app.editor.lines()[0], "~~~");
-    if app.session.folds.rescan_pending {
+    if app.session.folds().rescan_pending {
         app.recompute_folding();
     }
     assert_eq!(
-        app.session.folds.ranges,
+        app.session.folds().ranges,
         crate::editor_core::folding::build_fold_ranges(app.editor.lines())
     );
 

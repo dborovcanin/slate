@@ -715,7 +715,7 @@ fn module_commands_update_and_persist_note_modules() {
     );
     assert!(!app.active_note.modules.variables);
     assert!(!app.variable_autocomplete_popup.visible);
-    assert!(app.session.calc.variable_names.is_empty());
+    assert!(app.session.calc().variable_names.is_empty());
 
     let persisted = db
         .get_note("n1")
