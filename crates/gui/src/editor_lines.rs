@@ -122,41 +122,6 @@ fn merge(
     out
 }
 
-/// Runs split at character `at`.
-fn split_runs(runs: &[Run], at: usize) -> (Vec<Run>, Vec<Run>) {
-    let (mut left, mut right) = (Vec::new(), Vec::new());
-    let mut seen = 0;
-    for run in runs {
-        let n = run.text.chars().count();
-        if seen + n <= at {
-            left.push(run.clone());
-        } else if seen >= at {
-            right.push(run.clone());
-        } else {
-            let k = at - seen;
-            let byte = run
-                .text
-                .char_indices()
-                .nth(k)
-                .map_or(run.text.len(), |(b, _)| b);
-            left.push(Run {
-                text: run.text[..byte].to_string(),
-                style: run.style,
-            });
-            right.push(Run {
-                text: run.text[byte..].to_string(),
-                style: run.style,
-            });
-        }
-        seen += n;
-    }
-    (left, right)
-}
-
-fn shift(sel: Option<&Range<usize>>, by: usize) -> Option<Range<usize>> {
-    sel.map(|r| r.start.saturating_sub(by)..r.end.saturating_sub(by))
-}
-
 /// The line's text with its cursor and selection, as one run so it wraps.
 fn text_with_cursor(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> AnyElement {
     let text = styled(&line.runs, line.selection.as_ref(), line.cursor, s);
@@ -266,22 +231,6 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use note_session::display::semantic::SemanticStyle;
-
-    fn run(text: &str) -> Run {
-        Run {
-            text: text.into(),
-            style: SemanticStyle::default(),
-        }
-    }
-
-    #[test]
-    fn split_runs_cuts_inside_a_multibyte_run() {
-        let (l, r) = split_runs(&[run("ab"), run("éλx")], 3);
-        let join = |v: &[Run]| v.iter().map(|r| r.text.clone()).collect::<String>();
-        assert_eq!(join(&l), "abé");
-        assert_eq!(join(&r), "λx");
-    }
 
     #[test]
     fn merge_applies_overlays_on_whole_ranges() {

@@ -71,7 +71,6 @@ pub enum LineKind {
 
 #[derive(Clone)]
 pub struct LineView {
-    pub index: usize,
     pub kind: LineKind,
     pub runs: Vec<Run>,
     /// Calc result shown after the text, with its ` = ` or ` → ` prefix.
@@ -678,6 +677,7 @@ impl NoteHost {
     }
 
     /// Lines `from..to` ready to paint.
+    #[cfg(test)]
     pub fn lines(&self, from: usize, to: usize) -> Vec<LineView> {
         let fences = self.fence_starts();
         (from..to.min(fences.len()))
@@ -778,7 +778,6 @@ impl NoteHost {
             None => (None, false),
         };
         LineView {
-            index,
             kind,
             runs: runs(&styled, start),
             ghost: result.map(|r| format!("{}{}", styled.calc_prefix, r)),
@@ -795,7 +794,6 @@ impl NoteHost {
     fn table_line(&self, index: usize, text: &str) -> LineView {
         let lines = self.doc.lines();
         let mut view = LineView {
-            index,
             kind: LineKind::TableDelimiter,
             runs: Vec::new(),
             ghost: None,

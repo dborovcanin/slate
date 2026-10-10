@@ -273,11 +273,11 @@ fn collection_command(win: &mut SlateWindow, raw: &str, cx: &mut Context<SlateWi
                 .map(|n| format!("purged {} ({n} notes)", c.name))
         }),
         CollectionCommandAction::Add => find(&cmd.collection).and_then(|c| {
-            db.add_notes_to_collection(&c.id, &[note_id.clone()])
+            db.add_notes_to_collection(&c.id, std::slice::from_ref(&note_id))
                 .map(|_| format!("added to {}", c.name))
         }),
         CollectionCommandAction::Remove => find(&cmd.collection).and_then(|c| {
-            db.remove_notes_from_collection(&c.id, &[note_id.clone()])
+            db.remove_notes_from_collection(&c.id, std::slice::from_ref(&note_id))
                 .map(|_| format!("removed from {}", c.name))
         }),
         CollectionCommandAction::Choose => {

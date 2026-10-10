@@ -169,9 +169,8 @@ impl SlateWindow {
         let ix = self.host.doc.cursor_line;
         let rows = ((self.viewport.get().1 / 26.0) as usize).max(8);
         let top = self.top_line();
-        if ix >= top && ix + 2 < top + rows {
-            self.list.scroll_to_reveal_item(ix);
-        } else if ix < top && top - ix < rows {
+        let near = (ix >= top && ix + 2 < top + rows) || (ix < top && top - ix < rows);
+        if near {
             self.list.scroll_to_reveal_item(ix);
         } else {
             self.list.scroll_to(gpui::ListOffset {
@@ -714,9 +713,18 @@ impl SlateWindow {
             cursor: shape,
             focused: self.focus.is_focused(window),
         };
+        // The number sits beside the first row of the line, centred on it.
+        let gutter_top = match &line.kind {
+            LineKind::Heading(1) => 13.0,
+            LineKind::Heading(2) => 7.6,
+            LineKind::Heading(_) => 2.2,
+            LineKind::TableRow { .. } => 4.0,
+            _ => 0.0,
+        };
         let gutter = div()
             .w(px(38.0))
             .flex_none()
+            .pt(px(gutter_top))
             .pr(px(12.0))
             .flex()
             .justify_end()
@@ -755,7 +763,7 @@ impl SlateWindow {
         let row = div()
             .id(("line", ix))
             .flex()
-            .items_center()
+            .items_start()
             .w_full()
             .map(|d| {
                 if delimiter {
@@ -829,6 +837,7 @@ impl SlateWindow {
                 d.child(
                     div()
                         .ml(px(12.0))
+                        .mt(px(4.0))
                         .px(px(8.0))
                         .rounded(px(9.0))
                         .bg(t.chip)
