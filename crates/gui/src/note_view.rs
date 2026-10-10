@@ -970,6 +970,154 @@ mod tests {
         assert_eq!(cells[3].text, ":=(1,2)*(1,3)");
     }
 
+    fn keys(f: &mut Fixture, keys: &str) {
+        for ch in keys.chars() {
+            let key = match ch {
+                '⎋' => VimKey::Esc,
+                ch => VimKey::Char(ch),
+            };
+            f.host.handle_key(key);
+        }
+    }
+
+    #[test]
+    fn typing_recalculates_and_saves() {
+        let mut f = fixture("x := 4\nx * 2");
+        assert_eq!(f.host.session.calc().results[1].as_deref(), Some("8"));
+        keys(&mut f, "A0⎋");
+        assert_eq!(f.host.doc.lines()[0], "x := 40");
+        assert_eq!(f.host.session.calc().results[1].as_deref(), Some("80"));
+        assert!(f.host.session.dirty());
+        assert_eq!(f.host.save(), Ok(true));
+        assert_eq!(
+            f.host.db.get_note("lisbon").unwrap().unwrap().body,
+            "x := 40\nx * 2"
+        );
+        assert_eq!(f.host.save(), Ok(false));
+    }
+
+    #[test]
+    fn core_commands_format_the_selection() {
+        let mut f = fixture("make me bold\nplain");
+        keys(&mut f, "V");
+        assert!(matches!(
+            f.host.run_command(":format bold"),
+            CommandRun::Done { .. }
+        ));
+        assert_eq!(f.host.doc.lines()[0], "**make me bold**");
+        assert_eq!(f.host.doc.lines()[1], "plain");
+    }
+
+    #[test]
+    fn host_commands_are_returned_not_run() {
+        let mut f = fixture("text");
+        match f.host.run_command("browse") {
+            CommandRun::Host { id, .. } => assert_eq!(id, Some(CommandId::Browse)),
+            other => panic!("{other:?}"),
+        }
+        match f.host.run_command("sum") {
+            CommandRun::Done { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cut_removes_and_returns_the_selection() {
+        let mut f = fixture("hello world");
+        f.host.input.vim.mode = VimMode::Insert;
+        f.host.doc.selection_anchor = Some((0, 0));
+        f.host.doc.cursor_col = 5;
+        let (text, outcome) = f.host.cut_selection().expect("selection");
+        assert_eq!(text, "hello");
+        assert!(outcome.text_changed);
+        assert_eq!(f.host.doc.lines()[0], " world");
+    }
+
+    #[test]
+    fn table_columns_extend_every_row() {
+        let mut f = fixture("| A | B |\n| --- | --- |\n| 1 | 2 |");
+        let outcome = f.host.append_table_column(0, 2);
+        assert!(outcome.text_changed);
+        for line in f.host.doc.lines() {
+            assert_eq!(table_syntax::split_table_cells(line).len(), 3, "{line}");
+        }
+        assert!(table_syntax::is_delimiter_line_in(f.host.doc.lines(), 1));
+    }
+
+    #[test]
+    fn inserted_lines_land_where_asked() {
+        let mut f = fixture("a\nc");
+        f.host.insert_lines(1, vec!["b".into()]);
+        assert_eq!(f.host.doc.lines(), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn encrypted_notes_lock_and_unlock() {
+        let mut f = fixture("secret numbers: 2 + 2");
+        let note = f.host.db.encrypt_note("lisbon", "pw").unwrap();
+        f.host.open_note(note);
+        assert!(!f.host.locked());
+        f.host.db.lock_note("lisbon");
+        let note = f.host.db.get_note("lisbon").unwrap().unwrap();
+        f.host.open_note(note);
+        assert!(f.host.locked());
+        assert!(f.host.db.unlock_note("lisbon", "wrong").is_err());
+        let note = f.host.db.unlock_note("lisbon", "pw").unwrap();
+        f.host.open_note(note);
+        assert!(!f.host.locked());
+        assert_eq!(f.host.doc.lines()[0], "secret numbers: 2 + 2");
+    }
+
+    fn script(output: app_core::scripts::ScriptOutput) -> app_core::scripts::ScriptDefinition {
+        app_core::scripts::ScriptDefinition {
+            argv: vec!["true".into()],
+            input: app_core::scripts::ScriptInput::Note,
+            output,
+            timeout_seconds: 5,
+        }
+    }
+
+    #[test]
+    fn script_results_apply_once_and_not_after_edits() {
+        use app_core::scripts::{ScriptOutput, ScriptResponse};
+        let mut f = fixture("abc");
+        let (ticket, request) = f
+            .host
+            .script_request(&script(ScriptOutput::Insert), vec!["x".into()])
+            .expect("request");
+        assert_eq!(request.text, "abc");
+        assert_eq!(request.args, ["x"]);
+        let response = ScriptResponse {
+            text: "!".into(),
+            message: None,
+        };
+        let outcome = f.host.apply_script(&ticket, &response).expect("applied");
+        assert!(outcome.text_changed);
+        assert_eq!(f.host.doc.lines()[0], "!abc");
+        // The text changed since the ticket was made: the result is dropped.
+        assert!(f.host.apply_script(&ticket, &response).is_err());
+        assert_eq!(f.host.doc.lines()[0], "!abc");
+    }
+
+    #[test]
+    fn selection_scripts_need_a_selection() {
+        use app_core::scripts::ScriptOutput;
+        let mut f = fixture("abc");
+        assert!(f
+            .host
+            .script_request(&script(ScriptOutput::ReplaceSelection), vec![])
+            .is_none());
+    }
+
+    #[test]
+    fn vim_selection_covers_the_cursor_character() {
+        let mut f = fixture("abcdef");
+        keys(&mut f, "vll");
+        assert_eq!(f.host.selected_text().as_deref(), Some("abc"));
+        keys(&mut f, "⎋");
+        assert_eq!(f.host.selected_text(), None);
+    }
+
     #[test]
     fn switching_notes_reloads_text_and_calc() {
         let mut f = fixture(LISBON);

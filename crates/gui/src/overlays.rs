@@ -931,7 +931,14 @@ pub fn render(
         }
         Overlay::Menu { name, sub } => {
             let mut out = vec![backdrop(cx)];
-            out.extend(menu_panels(win, &menu_items(name), *sub, menu_left(name), 34.0, cx));
+            out.extend(menu_panels(
+                win,
+                &menu_items(name),
+                *sub,
+                menu_left(name),
+                34.0,
+                cx,
+            ));
             out
         }
         Overlay::Context { pos, table, sub } => {
