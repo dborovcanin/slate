@@ -3,6 +3,7 @@ use crate::types::TextChange;
 
 pub mod paste;
 pub mod primitives;
+pub mod words;
 
 /// Line-span summary for invalidating derived state; not an exact edit map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -423,6 +423,29 @@ fn visual_delete_updates_register_without_syncing_clipboard_watch_text() {
 }
 
 #[test]
+fn word_motions_preserve_unicode_classes_and_use_visible_neighbors() {
+    let (db, mut app, path) = app_with_note("αβ_γ !!  δ\nhidden\n界");
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = 0;
+    app.move_cursor_right_word();
+    assert_eq!(app.editor.cursor_col, 5);
+    app.move_cursor_right_word();
+    assert_eq!(app.editor.cursor_col, 9);
+    app.move_cursor_left_word();
+    assert_eq!(app.editor.cursor_col, 5);
+    app.folds.visible_to_real = vec![0, 2];
+    app.folds.real_to_visible = vec![0, 0, 1];
+    app.editor.cursor_col = 10;
+    app.move_cursor_right_word();
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (2, 0));
+    app.move_cursor_left_word();
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (0, 10));
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn move_cursor_left_word_clamps_empty_line_cursor_without_underflow() {
     let (db, mut app, path) = app_with_note("alpha\n\nbeta");
     app.mode = UiMode::Normal;

@@ -88,6 +88,22 @@ This document defines the canonical shared-core contract for editor semantics.
     before acknowledging with `complete_undo` / `complete_redo`. A reminder
     error leaves the action pending. Existing text-store exhaustion behavior
     is preserved. Note switching clears both store and policy.
+- Word editing contract (`editor_core::buffer::words`):
+  - Left/right motions take lines, a character cursor, the table-module flag
+    and a lazy iterator of visible neighbor line indices in motion order.
+    Only the current line and needed neighbors are inspected; the host owns
+    fold visibility and supplies the iterator without building a new list.
+  - Prose motions retain whitespace, word (alphanumeric/underscore) and
+    punctuation classes. Table motions reuse core row-word helpers, skip
+    delimiter rows, land on empty rows and step into adjacent prose.
+  - `prepare_backward_word_delete` returns a same-line byte range carrying
+    `ExactTextEdit` and `EditDelta`, or a previous-physical-line join.
+    Apply a range to the unchanged line with
+    `apply_word_delete`; joins use the existing Backspace transaction.
+    Deletion retains its distinct alphanumeric-only word rule and existing
+    table padding bounds. Out-of-range character columns keep their behavior.
+  - The host preserves calc/history/reminder bookkeeping and continuation-row
+    cleanup. No document copy or eager neighbor collection is added.
 - Command contract:
   - input: `CommandMode`, `raw_input`
   - output: canonical command definition (or none), suggestions, normalized input

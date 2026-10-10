@@ -21,6 +21,7 @@ use crate::editor_core::buffer::paste::{
 use crate::editor_core::buffer::primitives::{
     apply_primitive_edit, prepare_primitive_edit, BufferCursor, PrimitiveEdit,
 };
+use crate::editor_core::buffer::words::{self, BackwardWordDelete};
 use crate::editor_core::buffer::{
     apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
     map_offset_through_changes, prepare_text_change, EditDelta,
@@ -2087,229 +2088,59 @@ impl TerminalApp {
 
     // --- Search ---
 
-    /// `w`/`b` on a table row: cell borders count as whitespace, so the
-    /// motion steps into the neighbouring cell, and past the row's first or
-    /// last word it continues on the adjacent row (skipping the delimiter).
-    /// Returns false when the cursor is not on a table row.
-    fn move_cursor_word_in_table(&mut self, forward: bool) -> bool {
-        use crate::editor_core::table::{
-            is_delimiter_line_in, table_row_next_word_start, table_row_prev_word_start,
+    fn move_cursor_word(&mut self, forward: bool) {
+        let current_virtual = self.current_virtual_line();
+        let cursor = BufferCursor {
+            line: self.editor.cursor_line,
+            column: self.editor.cursor_col,
         };
-        if !self.note_table_module_enabled() || !is_markdown_table_line(self.current_line()) {
-            return false;
-        }
-        let on_row = if forward {
-            table_row_next_word_start(self.current_line(), self.editor.cursor_col)
+        let tables = self.note_table_module_enabled();
+        let after = if forward {
+            let neighbors = (current_virtual + 1..self.visible_line_count())
+                .map_while(|line| self.real_line_for_virtual(line));
+            words::move_cursor_right_word(&self.editor.lines, cursor, tables, neighbors)
         } else {
-            table_row_prev_word_start(self.current_line(), self.editor.cursor_col)
+            let neighbors = (0..current_virtual)
+                .rev()
+                .map_while(|line| self.real_line_for_virtual(line));
+            words::move_cursor_left_word(&self.editor.lines, cursor, tables, neighbors)
         };
-        if let Some(col) = on_row {
-            self.editor.cursor_col = col;
-            return true;
-        }
-
-        let mut virtual_line = self.current_virtual_line();
-        loop {
-            let next_virtual = if forward {
-                virtual_line + 1
-            } else {
-                let Some(prev) = virtual_line.checked_sub(1) else {
-                    return true;
-                };
-                prev
-            };
-            if next_virtual >= self.visible_line_count() {
-                return true;
-            }
-            let Some(line_idx) = self.real_line_for_virtual(next_virtual) else {
-                return true;
-            };
-            virtual_line = next_virtual;
-            let line = &self.editor.lines[line_idx];
-            if !is_markdown_table_line(line) {
-                self.editor.cursor_line = line_idx;
-                self.editor.cursor_col = if forward { 0 } else { line_char_len(line) };
-                return true;
-            }
-            if is_delimiter_line_in(&self.editor.lines, line_idx) {
-                continue;
-            }
-            let col = if forward {
-                table_row_next_word_start(line, 0)
-            } else {
-                table_row_prev_word_start(line, line_char_len(line))
-            };
-            self.editor.cursor_line = line_idx;
-            // An empty row has no word; land on it and let the cursor guard
-            // place the cursor in its first cell.
-            self.editor.cursor_col = col.unwrap_or(0);
-            return true;
-        }
+        self.editor.cursor_line = after.line;
+        self.editor.cursor_col = after.column;
     }
 
     pub(super) fn move_cursor_left_word(&mut self) {
-        if self.move_cursor_word_in_table(false) {
-            return;
-        }
-        if self.editor.cursor_col == 0 {
-            let current_virtual = self.current_virtual_line();
-            if current_virtual > 0 {
-                if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
-                    self.editor.cursor_line = prev_real;
-                    self.editor.cursor_col = line_char_len(self.current_line());
-                }
-            }
-            return;
-        }
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        let len = chars.len();
-
-        let mut col = self.editor.cursor_col;
-        if col > len {
-            col = len;
-        }
-        if col == 0 {
-            self.editor.cursor_col = 0;
-            return;
-        }
-
-        col -= 1;
-        while col > 0 && chars.get(col).map_or(false, |c| c.is_whitespace()) {
-            col -= 1;
-        }
-
-        let target_class = chars.get(col).map_or(0, |c| {
-            if c.is_alphanumeric() || *c == '_' {
-                1
-            } else {
-                2
-            }
-        });
-        while col > 0 {
-            let prev_class = chars.get(col - 1).map_or(0, |c| {
-                if c.is_whitespace() {
-                    0
-                } else if c.is_alphanumeric() || *c == '_' {
-                    1
-                } else {
-                    2
-                }
-            });
-            if prev_class == target_class {
-                col -= 1;
-            } else {
-                break;
-            }
-        }
-        self.editor.cursor_col = col;
+        self.move_cursor_word(false);
     }
 
     pub(super) fn move_cursor_right_word(&mut self) {
-        if self.move_cursor_word_in_table(true) {
-            return;
-        }
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        let len = chars.len();
-        if self.editor.cursor_col >= len {
-            let current_virtual = self.current_virtual_line();
-            if current_virtual + 1 < self.visible_line_count() {
-                if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
-                    self.editor.cursor_line = next_real;
-                    self.editor.cursor_col = 0;
-                }
-            }
-            return;
-        }
-        let mut col = self.editor.cursor_col;
-        let start_class = chars.get(col).map_or(0, |c| {
-            if c.is_whitespace() {
-                0
-            } else if c.is_alphanumeric() || *c == '_' {
-                1
-            } else {
-                2
-            }
-        });
-
-        while col < len {
-            let current_class = chars.get(col).map_or(0, |c| {
-                if c.is_whitespace() {
-                    0
-                } else if c.is_alphanumeric() || *c == '_' {
-                    1
-                } else {
-                    2
-                }
-            });
-            if current_class == start_class {
-                col += 1;
-            } else {
-                break;
-            }
-        }
-
-        if start_class != 0 {
-            while col < len && chars.get(col).map_or(false, |c| c.is_whitespace()) {
-                col += 1;
-            }
-        }
-
-        self.editor.cursor_col = col;
+        self.move_cursor_word(true);
     }
 
     pub(super) fn delete_word_backward(&mut self) -> bool {
-        if self.editor.cursor_col == 0 {
-            if self.editor.cursor_line > 0 {
-                self.backspace();
-                return true;
-            }
+        let Some(plan) = words::prepare_backward_word_delete(
+            &self.editor.lines,
+            BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
+            self.note_table_module_enabled(),
+        ) else {
             return false;
-        }
-        if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                let Some(col) = crate::editor_core::table::table_cell_word_delete_start(
-                    self.current_line(),
-                    self.editor.cursor_col,
-                    table_cell_edit_start(&cell),
-                    table_cell_navigation_anchor(self.current_line(), &cell),
-                ) else {
-                    return false;
-                };
-                let start_byte = byte_index(self.current_line(), col);
-                let end_byte = byte_index(self.current_line(), self.editor.cursor_col);
-                let text = self.current_line_mut();
-                text.replace_range(start_byte..end_byte, "");
-                self.editor.cursor_col = col;
-                self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                self.mark_edited_current_line();
+        };
+        match plan {
+            BackwardWordDelete::JoinPreviousLine => self.backspace(),
+            BackwardWordDelete::WithinLine(range) => {
+                let delta = range.delta;
+                self.editor.cursor_col = words::apply_word_delete(self.current_line_mut(), range);
+                self.refresh_calc_line_metadata_at(delta.start_line);
+                self.mark_edited_from_line_with_span(
+                    delta.start_line,
+                    Some((delta.start_line, delta.old_span, delta.new_span)),
+                );
                 self.prune_empty_table_continuation_row_at_cursor();
-                return true;
             }
         }
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        let mut col = self.editor.cursor_col;
-        while col > 0 && chars.get(col - 1).map_or(false, |c| !c.is_alphanumeric()) {
-            col -= 1;
-        }
-        while col > 0 && chars.get(col - 1).map_or(false, |c| c.is_alphanumeric()) {
-            col -= 1;
-        }
-
-        let start_byte = byte_index(self.current_line(), col);
-        let end_byte = byte_index(self.current_line(), self.editor.cursor_col);
-        let text = self.current_line_mut();
-        text.replace_range(start_byte..end_byte, "");
-        self.editor.cursor_col = col;
-        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-        self.mark_edited_current_line();
-        self.prune_empty_table_continuation_row_at_cursor();
         true
     }
 

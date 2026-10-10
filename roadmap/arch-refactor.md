@@ -255,9 +255,9 @@ them when a second consumer or a test needs them, not before.
 
 | Phase | Status | Notes |
 | --- | --- | --- |
-| 1. Buffer primitives | Complete | Offset helpers, text changes, typing and plain/table paste delegate to core; word deletion remains in phase 3 |
+| 1. Buffer primitives | Complete | Offset helpers, text changes, typing and plain/table paste delegate to core |
 | 2. Undo store and policy | Complete | Core owns span recording, grouping, redo truncation, self-cancelling text markers and text/reminder action order; host supplies time/session boundaries and applies effects |
-| 3. Word motions | Planned | |
+| 3. Word motions | Complete | Core owns word motions and backward deletion; host supplies lazy visible neighbors and retains edit bookkeeping |
 | 4. Vim intent execution | Planned | Same as plan.md Commands/Vim action point 1 |
 | 5. Post-edit planning | Planned | |
 | 6. Completion and search | Planned | |

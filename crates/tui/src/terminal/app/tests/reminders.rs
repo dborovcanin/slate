@@ -97,6 +97,33 @@ fn a_deleted_task_stays_deleted_after_save_and_reload() {
 }
 
 #[test]
+fn backward_word_delete_preserves_unicode_reminders_and_physical_line_joins() {
+    let (db, mut app, path) = app_with_reminders("αβ_γ !!\nhidden\n界", &[0, 1, 2]);
+    app.mode = UiMode::Editor;
+    app.editor.cursor_col = 7;
+    assert!(app.delete_word_backward());
+    assert_eq!(app.editor.lines[0], "αβ_");
+    assert_eq!(app.editor.cursor_col, 3);
+    assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
+    app.undo(&db);
+    assert_eq!(app.editor.lines[0], "αβ_γ !!");
+    app.history.break_coalescing();
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = 0;
+    app.folds.visible_to_real = vec![0, 2];
+    app.folds.real_to_visible = vec![0, 0, 1];
+    assert!(app.delete_word_backward());
+    assert_eq!(app.editor.lines, vec!["αβ_γ !!", "hidden界"]);
+    assert_eq!(shown(&app), vec![reminder(0), reminder(1)]);
+    app.undo(&db);
+    assert_eq!(app.editor.lines, vec!["αβ_γ !!", "hidden", "界"]);
+    assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn undo_and_redo_restore_reminders_by_identity() {
     let (db, mut app, path) = app_with_reminders("- [ ] buy milk\n- [ ] buy eggs", &[0]);
     run_keys(&mut app, &db, &DD);
