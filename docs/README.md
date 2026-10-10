@@ -16,5 +16,6 @@ Reference docs:
 - [Variables Specification](./variables.md)
 - [Export Reference](./export.md)
 - [MCP Server](./mcp.md) — let AI assistants and bots read and write notes
+- [Desktop App (GPUI)](./gui.md) — experimental desktop front end, built with `make ui`
 
 Planning and roadmap documents now live in `roadmap/`.

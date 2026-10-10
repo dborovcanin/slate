@@ -17,6 +17,7 @@ Detailed project documentation is organized in [`docs/`](docs/README.md):
 - [Variables Specification](docs/variables.md)
 - [Export Reference](docs/export.md)
 - [MCP Server](docs/mcp.md) (connect Claude Code, Codex, opencode or another MCP client)
+- [Desktop App (GPUI)](docs/gui.md) (experimental; build with `make ui`)
 
 Roadmap and planning docs are in [`roadmap/`](roadmap/).
 
