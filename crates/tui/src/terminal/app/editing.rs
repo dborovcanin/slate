@@ -14,6 +14,13 @@ use super::{
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
     UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
+use crate::editor_core::buffer::paste::{
+    apply_plain_paste, apply_table_cell_paste, normalize_paste, parse_table_paste,
+    prepare_plain_paste, prepare_table_cell_paste, prepare_table_import, table_paste_outside_code,
+};
+use crate::editor_core::buffer::primitives::{
+    apply_primitive_edit, prepare_primitive_edit, BufferCursor, PrimitiveEdit,
+};
 use crate::editor_core::buffer::{
     apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
     map_offset_through_changes, prepare_text_change,
@@ -2357,63 +2364,75 @@ impl TerminalApp {
         true
     }
 
+    fn apply_buffer_primitive(
+        &mut self,
+        primitive: PrimitiveEdit<'_>,
+    ) -> Option<crate::editor_core::buffer::EditDelta> {
+        let prepared = prepare_primitive_edit(
+            &self.editor.lines,
+            BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
+            primitive,
+        )?;
+        let delta = prepared.delta;
+        // Preserve the existing structural reminder callbacks before mutation.
+        // Same-line character edits leave line-attached marks in place.
+        if delta.old_span != delta.new_span {
+            let edit = prepared.edit;
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+        }
+        let cursor = apply_primitive_edit(&mut self.editor.lines, prepared);
+        self.editor.cursor_line = cursor.line;
+        self.editor.cursor_col = cursor.column;
+        Some(delta)
+    }
+
     pub(super) fn insert_char(&mut self, ch: char) {
-        if ch.is_control() {
+        if self
+            .apply_buffer_primitive(PrimitiveEdit::InsertChar(ch))
+            .is_none()
+        {
             return;
         }
-        let col = self.editor.cursor_col;
-        let line = self.current_line_mut();
-        let idx = byte_index(line, col);
-        line.insert(idx, ch);
-        self.editor.cursor_col += 1;
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited_current_line();
     }
 
     pub(super) fn insert_text(&mut self, text: &str) {
-        if text.is_empty() {
+        if self
+            .apply_buffer_primitive(PrimitiveEdit::InsertText(text))
+            .is_none()
+        {
             return;
         }
-        let col = self.editor.cursor_col;
-        let line = self.current_line_mut();
-        let idx = byte_index(line, col);
-        line.insert_str(idx, text);
-        self.editor.cursor_col += text.chars().count();
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited_current_line();
     }
 
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
-        if !self.note_table_module_enabled() || self.editor.lines.is_empty() {
-            return false;
-        }
-        let line_idx = self
-            .editor
-            .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
-        let cursor_byte = byte_index(&self.editor.lines[line_idx], self.editor.cursor_col);
-        let Some(edit) = crate::editor_core::table::plan_table_cell_multiline_paste(
+        let Some(edit) = prepare_table_cell_paste(
             &self.editor.lines,
-            line_idx,
-            cursor_byte,
+            BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
             normalized,
+            self.note_table_module_enabled(),
             &mut self.table_format_cache,
         ) else {
             return false;
         };
-
         let replaced_count = edit.end - edit.start + 1;
         let inserted_count = edit.lines.len();
-        self.note_block_replace(edit.start, replaced_count, &edit.lines);
-        self.editor.lines.splice(edit.start..=edit.end, edit.lines);
-        self.editor.cursor_line = edit.cursor_line;
-        let target_line = &self.editor.lines[edit.cursor_line];
-        self.editor.cursor_col = target_line[..edit.cursor_byte.min(target_line.len())]
-            .chars()
-            .count();
-
-        self.splice_calc_line_metadata(edit.start, replaced_count, inserted_count);
-        self.mark_edited_from_line(edit.start);
+        let start = edit.start;
+        self.note_block_replace(start, replaced_count, &edit.lines);
+        let cursor = apply_table_cell_paste(&mut self.editor.lines, edit);
+        self.editor.cursor_line = cursor.line;
+        self.editor.cursor_col = cursor.column;
+        self.splice_calc_line_metadata(start, replaced_count, inserted_count);
+        self.mark_edited_from_line(start);
         true
     }
 
@@ -2421,59 +2440,30 @@ impl TerminalApp {
         if text.is_empty() {
             return;
         }
-
-        if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
-        }
-
-        // Normalize line endings to keep cursor/line mapping predictable.
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let normalized = normalize_paste(text);
         if self.try_insert_table_cell_multiline_paste(&normalized) {
             return;
         }
-        let parts: Vec<&str> = normalized.split('\n').collect();
-        if parts.is_empty() {
+        let Some(prepared) = prepare_plain_paste(
+            &self.editor.lines,
+            BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
+            &normalized,
+        ) else {
             return;
+        };
+        let delta = prepared.delta;
+        if prepared.edit.inserted_breaks > 0 {
+            let edit = prepared.edit;
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
         }
-
-        let line_idx = self
-            .editor
-            .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
-        let col = self.editor.cursor_col;
-        let current = self.editor.lines[line_idx].clone();
-        let split_idx = byte_index(&current, col);
-        let (left, right) = current.split_at(split_idx);
-
-        if parts.len() == 1 {
-            self.editor.lines[line_idx] = format!("{left}{}{right}", parts[0]);
-            self.editor.cursor_line = line_idx;
-            self.editor.cursor_col = col + parts[0].chars().count();
-            self.splice_calc_line_metadata(line_idx, 1, 1);
-            self.mark_edited_from_line(line_idx);
-            return;
-        }
-
-        self.note_line_edit(
-            (line_idx, split_idx),
-            (line_idx, split_idx),
-            parts.len() - 1,
-        );
-        self.editor.lines[line_idx] = format!("{left}{}", parts[0]);
-        let mut insert_at = line_idx + 1;
-        for part in &parts[1..parts.len() - 1] {
-            self.editor.lines.insert(insert_at, (*part).to_string());
-            insert_at += 1;
-        }
-
-        let tail = *parts.last().unwrap_or(&"");
-        self.editor
-            .lines
-            .insert(insert_at, format!("{tail}{right}"));
-        self.editor.cursor_line = insert_at;
-        self.editor.cursor_col = tail.chars().count();
-        self.splice_calc_line_metadata(line_idx, 1, parts.len());
-        self.mark_edited_from_line(line_idx);
+        let cursor = apply_plain_paste(&mut self.editor.lines, prepared);
+        self.editor.cursor_line = cursor.line;
+        self.editor.cursor_col = cursor.column;
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_from_line(delta.start_line);
     }
 
     pub(super) fn try_import_image_paste(
@@ -2538,16 +2528,9 @@ impl TerminalApp {
     /// off, or the cursor is in a fenced code block or already in a table
     /// (where a paste fills cells).
     pub(super) fn pasted_table(&mut self, text: &str) -> Option<Vec<String>> {
-        if !self.note_table_module_enabled() || is_markdown_table_line(self.current_line()) {
-            return None;
-        }
-        let table = crate::editor_core::table_import::delimited_text_to_table(text)?;
-        // The table lands on, above or below the cursor's line: none of it
-        // may be code, so an opening or closing fence line counts as code.
-        let mut fence = self.fence_state_before_line(self.editor.cursor_line);
-        let before = fence.in_code_block;
-        crate::editor_core::markdown_tokens::advance_fence_state(&mut fence, self.current_line());
-        (!before && !fence.in_code_block).then_some(table)
+        let table = parse_table_paste(text, self.current_line(), self.note_table_module_enabled())?;
+        let fence = self.fence_state_before_line(self.editor.cursor_line);
+        table_paste_outside_code(self.current_line(), fence).then_some(table)
     }
 
     /// Pastes CSV or TSV as a table: in place of a blank line, or on the
@@ -2556,29 +2539,27 @@ impl TerminalApp {
         let Some(table) = self.pasted_table(text) else {
             return false;
         };
-        let mut block = table.join("\n");
-        if !self.current_line().trim().is_empty() {
-            self.editor.cursor_col = line_char_len(self.current_line());
-            block.insert(0, '\n');
-        }
+        let (block, cursor) = prepare_table_import(
+            &table,
+            self.current_line(),
+            BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
+        );
+        self.editor.cursor_line = cursor.line;
+        self.editor.cursor_col = cursor.column;
         self.insert_paste(&block);
         self.status = "pasted as table".to_string();
         true
     }
 
     pub(super) fn insert_newline(&mut self) {
-        let changed_from_line = self.editor.cursor_line;
-        let col = self.editor.cursor_col;
-        let idx = byte_index(self.current_line(), col);
-        self.note_line_edit((changed_from_line, idx), (changed_from_line, idx), 1);
-        let right = self.editor.lines[self.editor.cursor_line][idx..].to_string();
-        self.editor.lines[self.editor.cursor_line].truncate(idx);
-        let insert_at = self.editor.cursor_line + 1;
-        self.editor.lines.insert(insert_at, right);
-        self.editor.cursor_line += 1;
-        self.editor.cursor_col = 0;
-        self.splice_calc_line_metadata(changed_from_line, 1, 2);
-        self.mark_edited_from_line(changed_from_line);
+        let Some(delta) = self.apply_buffer_primitive(PrimitiveEdit::Newline) else {
+            return;
+        };
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_from_line(delta.start_line);
     }
 
     pub(super) fn variable_autocomplete_state(&self) -> Option<VariableAutocompleteState> {
@@ -3414,36 +3395,19 @@ impl TerminalApp {
         if self.try_table_char_delete(true) {
             return;
         }
-
-        if self.editor.cursor_col > 0 {
-            let new_col = self.editor.cursor_col - 1;
-            remove_char_at(&mut self.editor.lines[self.editor.cursor_line], new_col);
-            self.editor.cursor_col = new_col;
+        let Some(delta) = self.apply_buffer_primitive(PrimitiveEdit::Backspace) else {
+            return;
+        };
+        if delta.old_span == delta.new_span {
             self.refresh_calc_line_metadata_at(self.editor.cursor_line);
             self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
-
-        if self.editor.cursor_line == 0 {
-            return;
-        }
-
-        let joined_onto = self.editor.cursor_line - 1;
-        self.note_line_edit(
-            (joined_onto, self.editor.lines[joined_onto].len()),
-            (self.editor.cursor_line, 0),
-            0,
-        );
-        let removed = self.editor.lines.remove(self.editor.cursor_line);
-        self.editor.cursor_line -= 1;
-        let prev_len = line_char_len(&self.editor.lines[self.editor.cursor_line]);
-        self.editor.lines[self.editor.cursor_line].push_str(&removed);
-        self.editor.cursor_col = prev_len;
-        self.splice_calc_line_metadata(self.editor.cursor_line, 2, 1);
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
         self.mark_edited_from_line_with_span(
-            self.editor.cursor_line,
-            Some((self.editor.cursor_line, 2, 1)),
+            delta.start_line,
+            Some((delta.start_line, delta.old_span, delta.new_span)),
         );
     }
 
@@ -3451,32 +3415,19 @@ impl TerminalApp {
         if self.try_table_char_delete(false) {
             return;
         }
-
-        let line_len = line_char_len(self.current_line());
-        if self.editor.cursor_col < line_len {
-            let col = self.editor.cursor_col;
-            remove_char_at(&mut self.editor.lines[self.editor.cursor_line], col);
+        let Some(delta) = self.apply_buffer_primitive(PrimitiveEdit::DeleteForward) else {
+            return;
+        };
+        if delta.old_span == delta.new_span {
             self.refresh_calc_line_metadata_at(self.editor.cursor_line);
             self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
-
-        if self.editor.cursor_line + 1 >= self.editor.lines.len() {
-            return;
-        }
-
-        self.note_line_edit(
-            (self.editor.cursor_line, self.current_line().len()),
-            (self.editor.cursor_line + 1, 0),
-            0,
-        );
-        let next = self.editor.lines.remove(self.editor.cursor_line + 1);
-        self.editor.lines[self.editor.cursor_line].push_str(&next);
-        self.splice_calc_line_metadata(self.editor.cursor_line, 2, 1);
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
         self.mark_edited_from_line_with_span(
-            self.editor.cursor_line,
-            Some((self.editor.cursor_line, 2, 1)),
+            delta.start_line,
+            Some((delta.start_line, delta.old_span, delta.new_span)),
         );
     }
 

@@ -1,6 +1,9 @@
 //! In-place buffer edits and byte-offset mapping, independent of the host.
 use crate::types::TextChange;
 
+pub mod paste;
+pub mod primitives;
+
 /// Line-span summary for invalidating derived state; not an exact edit map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EditDelta {
