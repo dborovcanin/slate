@@ -40,3 +40,5 @@ pub mod scripts;
 pub mod rates;
 
 pub mod display;
+
+pub mod input;

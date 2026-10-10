@@ -99,30 +99,7 @@ pub(super) fn cross_note_exports_for_autocomplete(
     _engine: &CalcEngine,
     db: &Db,
 ) -> Vec<VariableIndexEntry> {
-    // Fast path: name scan already done for this note.
-    if let Ok(index) = cross_note_var_index.lock() {
-        if index.was_name_scan_attempted(note_id) {
-            return index.exports_for_note(note_id).to_vec();
-        }
-    }
-
-    // Slow path: load the note body and do a name-only scan (no eval).
-    let note = match db.get_note(note_id) {
-        Ok(Some(n)) => n,
-        _ => {
-            if let Ok(mut index) = cross_note_var_index.lock() {
-                index.mark_name_scan_attempted(note_id);
-            }
-            return Vec::new();
-        }
-    };
-    let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
-    let entries = app_core::calc::scan_variable_assignments(&lines);
-    if let Ok(mut index) = cross_note_var_index.lock() {
-        index.update_entries_only(note_id, &entries);
-        index.mark_name_scan_attempted(note_id);
-    }
-    entries
+    app_core::cross_note::exports_for_autocomplete(note_id, cross_note_var_index, db)
 }
 
 /// Ensures `note_id`'s exported values are in the index, evaluating it

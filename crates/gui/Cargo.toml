@@ -1,0 +1,31 @@
+# Desktop front end. Its own workspace so terminal builds and CI never fetch GPUI.
+[workspace]
+
+[package]
+name = "slate-gui"
+version = "0.3.0"
+edition = "2021"
+
+[[bin]]
+name = "slate-gui"
+path = "src/main.rs"
+
+[dependencies]
+gpui = "0.2.2"
+note-session = { path = "../session" }
+app-core = { path = "../app-core" }
+slate-export = { path = "../export" }
+editor-core = { path = "../editor-core" }
+table-syntax = { path = "../table-syntax" }
+env_logger = { version = "0.11", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+ulid = "1"
+rustc-hash = "2"
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = false

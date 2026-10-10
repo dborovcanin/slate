@@ -13,7 +13,11 @@ HAS_OSXCROSS := $(shell command -v o64-clang >/dev/null 2>&1 && command -v oa64-
 
 RELEASE_BIN := target/release/$(APP_NAME)
 
-.PHONY: all build test perf install release release-linux release-macos
+# Desktop front end (crates/gui): its own Cargo workspace, see docs/gui.md.
+UI_DIR := crates/gui
+UI_BIN := $(UI_DIR)/target/release/slate-gui
+
+.PHONY: all build test perf install release release-linux release-macos ui ui-run ui-test ui-deps
 
 all: install
 
@@ -25,6 +29,22 @@ test:
 
 perf:
 	cargo run --release -p slate --bin perf-check
+
+ui:
+	cargo build --release --manifest-path $(UI_DIR)/Cargo.toml
+	@echo "Built $(UI_BIN)"
+
+ui-run:
+	cargo run --release --manifest-path $(UI_DIR)/Cargo.toml -- $(ARGS)
+
+ui-test:
+	cargo test --manifest-path $(UI_DIR)/Cargo.toml
+
+# Debian/Ubuntu packages GPUI needs to compile on Linux.
+ui-deps:
+	sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+		libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig1-dev libfreetype-dev \
+		libssl-dev clang cmake
 
 install: build
 	mkdir -p "$(BIN_DIR)"

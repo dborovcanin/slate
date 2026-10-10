@@ -3386,11 +3386,32 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "slate-export",
  "slate-mcp",
  "time",
  "ttf-parser",
  "ulid",
  "unicode-width",
+ "url",
+]
+
+[[package]]
+name = "slate-export"
+version = "0.3.0"
+dependencies = [
+ "app-core",
+ "base64",
+ "editor-core",
+ "flate2",
+ "image",
+ "note-session",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "time",
+ "ttf-parser",
+ "ulid",
  "url",
 ]
 

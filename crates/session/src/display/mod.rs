@@ -10,3 +10,5 @@ pub mod media;
 pub mod transform;
 
 pub mod formula;
+
+pub mod wiki;

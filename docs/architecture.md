@@ -11,6 +11,7 @@ Slate is a terminal application built from these crates:
 - app core (`crates/app-core/`): storage, note sources, calc evaluation, config
 - table syntax (`crates/table-syntax/`): markdown table structure shared by both cores
 - MCP server (`crates/mcp/`, package `slate-mcp`): `slate mcp`, note tools for MCP clients over stdio
+- desktop app (`crates/gui/`, package `slate-gui`, experimental): GPUI front end over `note-session`; its own workspace, see [Desktop App](gui.md)
 
 ## Layer ownership
 
