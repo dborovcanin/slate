@@ -393,6 +393,11 @@ impl NoteHost {
             .move_word(&mut self.doc, forward, self.modules.table);
     }
 
+    /// `Shift+Tab`.
+    pub fn back_tab(&mut self) -> InputOutcome {
+        self.run_input(|session, doc, input, cx| session.back_tab(doc, input, cx))
+    }
+
     /// `Ctrl+Backspace`.
     pub fn delete_word_backward(&mut self) -> InputOutcome {
         self.run_input(|session, doc, input, cx| session.delete_word_backward(doc, input, cx))

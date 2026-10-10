@@ -538,6 +538,36 @@ impl NoteSession {
         true
     }
 
+    /// `Shift+Tab` in Insert mode: the previous table cell, or outdent the
+    /// list item. Does nothing when neither applies.
+    pub fn back_tab(
+        &mut self,
+        doc: &mut Document,
+        state: &mut InputState,
+        cx: &InputContext<'_>,
+    ) -> InputOutcome {
+        self.begin_input(UndoSession::Insert);
+        let mut outcome = InputOutcome {
+            handled: true,
+            ..Default::default()
+        };
+        let options = cx.options;
+        let rules = TabRuleOptions {
+            markdown_autoformat: options.markdown_autoformat,
+            outdent: true,
+            table_enabled: options.tables,
+        };
+        let (start, end) = rule_span(doc, options.tables);
+        let (snapshot, offset) = scoped_snapshot(doc, start, end);
+        if let Some(op) = text_rules::run_tab_rules(&ResolvedContext::new(snapshot), rules) {
+            let op = shift_operation(&op, offset);
+            self.edit(doc, state, SessionEdit::Operation(&op), cx, &mut outcome);
+            self.autoformat(doc, state, cx, &mut outcome);
+            clamp_table_cursor(doc, options.tables, true);
+        }
+        outcome
+    }
+
     /// Move the cursor to the previous or next word start, across lines;
     /// table rows move by cell content.
     pub fn move_word(&self, doc: &mut Document, forward: bool, tables: bool) {
@@ -1289,6 +1319,28 @@ mod tests {
         // An unknown register does nothing.
         e.keys("@z");
         assert_eq!(e.text(), "a!\nb!\nc!\nd");
+    }
+
+    #[test]
+    fn back_tab_goes_to_the_previous_cell_and_outdents_lists() {
+        let cx = InputContext {
+            options: InputOptions::default(),
+            since_last_edit: Duration::from_secs(5),
+            calc: None,
+        };
+        let mut e = Editor::new("| A | B |\n| --- | --- |\n| 1 | 2 |");
+        e.state.vim.mode = VimMode::Insert;
+        e.doc.cursor_line = 2;
+        e.doc.cursor_col = 8;
+        e.session.back_tab(&mut e.doc, &mut e.state, &cx);
+        assert_eq!(e.cursor().0, 2);
+        assert!(e.cursor().1 < 6, "moved back into the first cell: {:?}", e.cursor());
+        let mut e = Editor::new("- a\n  - b");
+        e.state.vim.mode = VimMode::Insert;
+        e.doc.cursor_line = 1;
+        e.doc.cursor_col = 7;
+        e.session.back_tab(&mut e.doc, &mut e.state, &cx);
+        assert_eq!(e.text(), "- a\n- b");
     }
 
     #[test]

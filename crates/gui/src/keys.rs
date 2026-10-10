@@ -33,6 +33,8 @@ pub enum KeyCommand {
         forward: bool,
         select: bool,
     },
+    /// `Shift+Tab`: previous table cell, or outdent a list item.
+    BackTab,
     /// `Ctrl+Backspace`/`Ctrl+Delete`.
     DeleteWord {
         forward: bool,
@@ -143,6 +145,9 @@ pub fn map(k: &Keystroke, mode: EditingMode) -> KeyCommand {
         return cmd;
     }
     let m = k.modifiers;
+    if k.key == "tab" && m.shift && !m.control && !m.alt {
+        return KeyCommand::BackTab;
+    }
     if m.control && !m.alt {
         match k.key.as_str() {
             "left" | "right" => {
@@ -220,6 +225,14 @@ mod tests {
             k.key_char = Some(ch);
         }
         k
+    }
+
+    #[test]
+    fn shift_tab_is_its_own_command() {
+        for mode in [EditingMode::Vim, EditingMode::Standard] {
+            assert_eq!(map(&key("shift-tab"), mode), KeyCommand::BackTab);
+            assert_eq!(map(&key("tab"), mode), KeyCommand::Vim(VimKey::Tab));
+        }
     }
 
     #[test]

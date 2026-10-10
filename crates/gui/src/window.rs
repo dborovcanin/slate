@@ -926,6 +926,13 @@ impl SlateWindow {
                 }
             }
             KeyCommand::Move { key, select } => self.standard_move(Some(key), None, select, cx),
+            KeyCommand::BackTab => {
+                if self.host.input.mode() == VimMode::Insert {
+                    let before = self.snapshot_cursor();
+                    let outcome = self.host.back_tab();
+                    self.after_input(before, outcome, cx);
+                }
+            }
             KeyCommand::Word { forward, select } => self.word_move(forward, select, cx),
             KeyCommand::DeleteWord { forward } => self.delete_word(forward, cx),
             KeyCommand::Home { select } => self.standard_move(None, Some(false), select, cx),
