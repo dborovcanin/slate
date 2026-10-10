@@ -54,7 +54,7 @@ pub fn prepare_plain_paste<'a>(
         },
         delta: EditDelta {
             start_line: line,
-            old_span: 1,
+            old_span: usize::from(!lines.is_empty()),
             new_span: parts.len(),
         },
         cursor: after,

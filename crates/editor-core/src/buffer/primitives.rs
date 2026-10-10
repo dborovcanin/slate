@@ -131,7 +131,7 @@ pub fn prepare_primitive_edit<'a>(
         },
         delta: EditDelta {
             start_line: from.0,
-            old_span,
+            old_span: if lines.is_empty() { 0 } else { old_span },
             new_span,
         },
         cursor: after,
@@ -161,6 +161,9 @@ pub fn apply_primitive_edit(
             lines[from.0].insert_str(from.1, text);
         }
         Mutation::Split => {
+            if lines.is_empty() {
+                lines.push(String::new());
+            }
             let right = lines[from.0][from.1..].to_string();
             lines[from.0].truncate(from.1);
             lines.insert(from.0 + 1, right);
@@ -310,5 +313,31 @@ mod tests {
         );
         assert_eq!(lines, vec!["éa\nb"]);
         assert_eq!(cursor.column, 6);
+    }
+}
+
+#[cfg(test)]
+mod empty_buffer_tests {
+    use super::*;
+    #[test]
+    fn newline_initializes_an_empty_buffer() {
+        let mut lines = Vec::new();
+        let plan = prepare_primitive_edit(
+            &lines,
+            BufferCursor { line: 0, column: 0 },
+            PrimitiveEdit::Newline,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.delta,
+            EditDelta {
+                start_line: 0,
+                old_span: 0,
+                new_span: 2
+            }
+        );
+        let cursor = apply_primitive_edit(&mut lines, plan);
+        assert_eq!(lines, ["", ""]);
+        assert_eq!(cursor, BufferCursor { line: 1, column: 0 });
     }
 }
