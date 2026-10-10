@@ -551,7 +551,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 14: save and autosave jobs/policy.
 - [x] Step 15: script tickets and result validation.
 - [x] Step 16: application-wide rate service.
-- [ ] Step 17: headless host integration.
+- [x] Step 17: headless host integration.
 - [ ] Phase 8: shared semantic display and source mappings.
 - [ ] Final round: checks, performance A/B, live terminal and diff review.
 - [ ] Step 18: final contracts and readiness evidence.
@@ -1129,3 +1129,9 @@ cache. Identical rates skip calc invalidation; failures preserve installed
 rates. The host retains workers, receiver polling and joins. Shared policy/Send
 coverage plus existing actual-process startup/currency tests and all workspace
 checks pass, no new warnings. Note lifetimes do not affect global refresh.
+
+Step 17: a frontend-free integration host runs real SQLite save and calc jobs
+and delayed/out-of-order completions. Five tests cover save acknowledgement,
+conflicts, reminder joins/block edits/history, lifetime/epoch rejection, script
+switch-away/back, global rates and owned Send messages. Workspace checks pass;
+normal dependencies contain no terminal or GUI libraries.
