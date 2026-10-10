@@ -1,5 +1,6 @@
 //! `slate-gui`: the desktop front end. See docs/gui.md.
 mod browser;
+mod clipwatch;
 mod commands;
 mod completion;
 mod currency;

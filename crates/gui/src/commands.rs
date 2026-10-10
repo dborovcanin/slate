@@ -137,7 +137,23 @@ pub fn run_host_command(
                 Err(error) => notify_status(win, error, cx),
             }
         }
-        ClipWatch | ClipWatchStop => not_yet(win, "clipboard watching", cx),
+        ClipWatch => {
+            let current = cx.read_from_clipboard().and_then(|item| item.text());
+            let message = if win.clip_watch.start(current) {
+                "clip-watch started"
+            } else {
+                "clip-watch already active"
+            };
+            notify_status(win, message, cx);
+        }
+        ClipWatchStop => {
+            let message = if win.clip_watch.stop() {
+                "clip-watch stopped"
+            } else {
+                "clip-watch not active"
+            };
+            notify_status(win, message, cx);
+        }
         PasteImage => {
             if !win.paste_image(cx) {
                 notify_status(win, "no image on the clipboard", cx);

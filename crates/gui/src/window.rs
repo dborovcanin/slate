@@ -122,6 +122,7 @@ pub struct SlateWindow {
     /// Autocomplete popup, with the cursor it was computed for.
     pub(crate) currency: crate::currency::Currency,
     pub(crate) font_size: f32,
+    pub(crate) clip_watch: crate::clipwatch::ClipWatch,
     sidebar_search: Option<SidebarSearch>,
     search_bar: Option<SearchBar>,
     /// The last search, for `n` and `N`.
@@ -172,6 +173,7 @@ impl SlateWindow {
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
             currency,
+            clip_watch: Default::default(),
             font_size: settings.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE),
             sidebar_search: None,
             search_bar: None,
@@ -202,6 +204,7 @@ impl SlateWindow {
                     this.save(cx);
                 }
                 this.apply_currency(cx);
+                this.poll_clip_watch(cx);
             });
             if alive.is_err() {
                 break;
@@ -209,6 +212,25 @@ impl SlateWindow {
         })
         .detach();
         this
+    }
+
+    /// While clip-watch is on, paste text copied elsewhere into the note.
+    fn poll_clip_watch(&mut self, cx: &mut Context<Self>) {
+        if !self.clip_watch.enabled()
+            || self.host.locked()
+            || self.host.preview
+            || !matches!(self.host.input.mode(), VimMode::Insert | VimMode::Normal)
+        {
+            return;
+        }
+        let current = cx.read_from_clipboard().and_then(|item| item.text());
+        if let Some(text) = self.clip_watch.changed(current) {
+            let before = self.snapshot_cursor();
+            let outcome = self.host.insert_text(&text.replace("\r\n", "\n"));
+            self.after_input(before, outcome, cx);
+            self.set_status("clip-watch pasted");
+            cx.notify();
+        }
     }
 
     /// Apply a finished rates refresh: new rates change every conversion.
