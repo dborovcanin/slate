@@ -21,6 +21,20 @@ This document defines the canonical shared-core contract for editor semantics.
   clipboard, timers and executor choice. Shared job runners perform persistence
   and other I/O; frontends execute them and return results to the session.
 
+| Policy | Shared owner | Frontend responsibility |
+| --- | --- | --- |
+| Edit/history/reminder ordering and dirty identity | `NoteSession` | Translate input; present effects |
+| Autosave and save revision checks | Session save tickets/completion policy | Timers, worker execution and notifications |
+| Outside-change reload and leave decisions | Session lifecycle | Read stored state and drain outstanding saves before switching/reloading/closing |
+| Script result lifetime/text/access checks | Session script tickets | Run/cancel processes, reset Vim view state and show status |
+| Currency generations and cache publication | `RateService` | Spawn/join workers and dispatch installation effects to sessions |
+| Calc preparation/index publication | Session job tickets and fenced completions | Execute jobs and supply current environment/index epoch |
+| Calc reset and cross-note loading | Session calc provider and reset decisions | Supply handles, viewport range and selection |
+| Fold structure and rescans | Session | Collapsed view state, viewport maps and placeholders |
+| Undo coalescing | Session policy | Supply elapsed time and interaction boundaries |
+| Calc scheduling | Session work effects | Debounce, idle ticks, threads and `key_depth` |
+| Display semantics/source ownership | Session display modules | Font/cell geometry, wrapping, palette and painting |
+
 ## Current input/output contracts
 
 - Buffer contract (`editor_core::buffer`):
