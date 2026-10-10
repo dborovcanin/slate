@@ -59,6 +59,7 @@ impl NoteSession {
             register: None,
             text_changed: true,
             calc_effect: Default::default(),
+            fold_effect: Default::default(),
         })
     }
 }

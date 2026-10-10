@@ -268,7 +268,10 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
         app.folds.placeholder_hidden_lines.len(),
         app.editor.lines().len()
     );
-    assert_eq!(app.folds.range_by_start.len(), app.editor.lines().len());
+    assert_eq!(
+        app.session.folds.range_by_start.len(),
+        app.editor.lines().len()
+    );
     assert!(app.view.scroll_line > 0);
     assert!(app.view.scroll_line >= insert_scroll_before.saturating_sub(1));
 
@@ -287,7 +290,10 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
         app.folds.placeholder_hidden_lines.len(),
         app.editor.lines().len()
     );
-    assert_eq!(app.folds.range_by_start.len(), app.editor.lines().len());
+    assert_eq!(
+        app.session.folds.range_by_start.len(),
+        app.editor.lines().len()
+    );
     assert!(app.view.scroll_line > 0);
     assert!(app.view.scroll_line >= delete_scroll_before.saturating_sub(2));
 
@@ -362,7 +368,7 @@ fn large_doc_random_tail_edit_stress_keeps_state_consistent() {
             "step {step_idx}: fold_placeholder_hidden_lines size mismatch after op {op}"
         );
         assert_eq!(
-            app.folds.range_by_start.len(),
+            app.session.folds.range_by_start.len(),
             app.editor.lines().len(),
             "step {step_idx}: fold_range_by_start size mismatch after op {op}"
         );
@@ -518,12 +524,15 @@ fn line_deletes_defer_the_fold_rescan_until_a_fold_command_needs_it() {
     app.editor.cursor_line = 1;
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
-    assert!(app.folds.rescan_pending, "rescan waits for idle time");
+    assert!(
+        app.session.folds.rescan_pending,
+        "rescan waits for idle time"
+    );
     assert_eq!(app.folds.visible_to_real.len(), app.editor.lines().len());
 
     app.editor.cursor_line = 0;
     run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
-    assert!(!app.folds.rescan_pending);
+    assert!(!app.session.folds.rescan_pending);
     assert!(app.folds.collapsed_starts.contains(&0));
     assert_eq!(app.folds.visible_to_real, vec![0, 3, 4]);
 
@@ -543,7 +552,10 @@ fn undo_keeps_collapsed_folds_exact_and_defers_the_rescan_otherwise() {
         &db,
         &[Key::Char('d'), Key::Char('d'), Key::Char('u')],
     );
-    assert!(app.folds.rescan_pending, "nothing collapsed: rescan waits");
+    assert!(
+        app.session.folds.rescan_pending,
+        "nothing collapsed: rescan waits"
+    );
 
     app.editor.cursor_line = 0;
     run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
@@ -554,7 +566,7 @@ fn undo_keeps_collapsed_folds_exact_and_defers_the_rescan_otherwise() {
         &[Key::Char('d'), Key::Char('d'), Key::Char('u')],
     );
     assert!(
-        !app.folds.rescan_pending,
+        !app.session.folds.rescan_pending,
         "a collapsed fold forces the rescan"
     );
     assert!(app.folds.collapsed_starts.contains(&0));
@@ -888,11 +900,11 @@ fn typing_a_fence_into_place_rebuilds_the_fold_ranges() {
     app.editor.cursor_col = 0;
     run_keys(&mut app, &db, &[Key::Char('i'), Key::Char('~'), Key::Esc]);
     assert_eq!(app.editor.lines()[0], "~~~");
-    if app.folds.rescan_pending {
+    if app.session.folds.rescan_pending {
         app.recompute_folding();
     }
     assert_eq!(
-        app.folds.ranges,
+        app.session.folds.ranges,
         crate::editor_core::folding::build_fold_ranges(app.editor.lines())
     );
 

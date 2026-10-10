@@ -18,10 +18,10 @@ use crate::editor_core::buffer::primitives::PrimitiveEdit;
 use crate::editor_core::buffer::words;
 use crate::editor_core::buffer::EditDelta;
 use crate::editor_core::history::policy::{UndoGrouping, UndoSession};
+use crate::terminal::input;
 use crate::terminal::text_utils::{
     byte_index, char_col_at_byte, cursor_render_char_col, viewport_col_for_display_col,
 };
-use crate::terminal::{folding, input};
 use app_core::calc::ExternVar;
 use std::cmp::min;
 use std::path::{Path, PathBuf};
@@ -228,26 +228,17 @@ impl TerminalApp {
     }
 
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
-        // Keep startup cheap for very large notes: build a plain 1:1 visible
-        // map and defer expensive fold structure analysis until needed.
-        self.folds.ranges.clear();
-        self.folds.range_by_start = vec![None; self.editor.lines().len()];
+        self.session.folds.bootstrap(self.editor.lines().len());
         self.folds.collapsed_starts.clear();
-        self.folds.line_has_structure = vec![false; self.editor.lines().len()];
-        // Keep memory lean at startup; full snapshots are only needed once
-        // fold analysis actually runs.
-        self.folds.line_text_snapshot.clear();
-        self.folds.rescan_pending = false;
-        self.folds.analysis_ready = false;
         self.rebuild_fold_view_map();
     }
 
     fn ensure_fold_analysis_ready_for_command(&mut self) {
-        if !self.folds.analysis_ready
-            || self.folds.rescan_pending
-            || self.folds.range_by_start.len() != self.editor.lines().len()
-            || self.folds.line_has_structure.len() != self.editor.lines().len()
-            || self.folds.line_text_snapshot.len() != self.editor.lines().len()
+        if !self.session.folds.analysis_ready
+            || self.session.folds.rescan_pending
+            || self.session.folds.range_by_start.len() != self.editor.lines().len()
+            || self.session.folds.line_has_structure.len() != self.editor.lines().len()
+            || self.session.folds.line_text_snapshot.len() != self.editor.lines().len()
         {
             self.recompute_folding();
         }
@@ -304,10 +295,6 @@ impl TerminalApp {
             old_line_span,
             new_line_span,
         );
-    }
-
-    pub(super) fn line_has_fold_structure(text: &str) -> bool {
-        crate::editor_core::folding::upkeep::line_has_fold_structure(text)
     }
 
     pub(super) fn note_math_module_enabled(&self) -> bool {
@@ -437,108 +424,40 @@ impl TerminalApp {
     }
 
     pub(super) fn recompute_folding_if_needed(&mut self, delta: Option<EditDelta>) {
-        use crate::editor_core::folding::upkeep::{FoldUpkeep, FoldUpkeepFlags};
-        let flags = FoldUpkeepFlags {
-            reduced_features: self.large_note_reduced_features(),
-            rescan_pending: self.folds.rescan_pending,
-            has_collapsed: !self.folds.collapsed_starts.is_empty(),
-            view_line_count: self.folds.real_to_visible.len(),
-        };
-        let plan = crate::editor_core::folding::upkeep::plan_fold_upkeep_with_delta(
-            self.editor.lines(),
-            self.editor.cursor_line,
+        let reduced = self.large_note_reduced_features();
+        let effect = self.session.folds.upkeep(
+            &self.editor,
             delta,
-            &mut self.folds.line_has_structure,
-            &mut self.folds.line_text_snapshot,
-            &self.folds.ranges,
-            flags,
+            reduced,
+            !self.folds.collapsed_starts.is_empty(),
+            self.folds.real_to_visible.len(),
         );
-        match plan {
-            FoldUpkeep::Disabled => {
-                if !self.folds.ranges.is_empty() {
-                    self.folds.ranges.clear();
-                }
-                if self.folds.range_by_start.len() != self.editor.lines().len() {
-                    self.folds.range_by_start = vec![None; self.editor.lines().len()];
-                }
-                if !self.folds.collapsed_starts.is_empty() {
-                    self.folds.collapsed_starts.clear();
-                }
-                if self.folds.visible_to_real.len() != self.editor.lines().len()
-                    || self.folds.real_to_visible.len() != self.editor.lines().len()
-                    || self.folds.hidden_owner.len() != self.editor.lines().len()
-                    || self.folds.placeholder_hidden_lines.len() != self.editor.lines().len()
-                {
-                    self.rebuild_fold_view_map();
-                }
-                if self.folds.line_has_structure.len() != self.editor.lines().len() {
-                    self.folds.line_has_structure = vec![false; self.editor.lines().len()];
-                }
-                self.folds.line_text_snapshot.clear();
-                self.folds.rescan_pending = false;
-                self.folds.analysis_ready = false;
-            }
-            FoldUpkeep::PendingVisible { reset_map } | FoldUpkeep::Defer { reset_map } => {
-                if reset_map {
-                    self.folds.ranges.clear();
-                    self.folds.range_by_start = vec![None; self.editor.lines().len()];
-                    self.rebuild_fold_view_map();
-                }
-                self.folds.rescan_pending = true;
-                self.folds.analysis_ready = false;
-            }
-            FoldUpkeep::Recompute => {
-                self.folds.rescan_pending = false;
-                self.recompute_folding();
-            }
-            FoldUpkeep::Empty => {
-                self.apply_fold_ranges(Vec::new());
-                self.folds.analysis_ready = true;
-            }
-            FoldUpkeep::Mapped(ranges) => {
-                self.folds.rescan_pending = false;
-                self.apply_fold_ranges(ranges);
-                self.folds.analysis_ready = true;
-            }
-            FoldUpkeep::Unchanged => {}
+        self.apply_fold_effect(effect);
+    }
+    fn apply_fold_effect(&mut self, effect: note_session::folds::FoldEffect) {
+        if effect.clear_collapsed {
+            self.folds.collapsed_starts.clear();
+        }
+        let needs_view = !effect.clear_collapsed
+            || self.folds.visible_to_real.len() != self.editor.lines().len()
+            || self.folds.real_to_visible.len() != self.editor.lines().len()
+            || self.folds.hidden_owner.len() != self.editor.lines().len()
+            || self.folds.placeholder_hidden_lines.len() != self.editor.lines().len();
+        if effect.rebuild_view && needs_view {
+            self.folds.collapsed_starts.retain(|line| {
+                self.session
+                    .folds
+                    .range_by_start
+                    .get(*line)
+                    .is_some_and(|entry| entry.is_some())
+            });
+            self.rebuild_fold_view_map();
         }
     }
-
     pub(super) fn recompute_folding(&mut self) {
-        self.folds.line_has_structure = self
-            .editor
-            .lines()
-            .iter()
-            .map(|line| Self::line_has_fold_structure(line))
-            .collect();
-        self.folds.line_text_snapshot = self.editor.lines().to_vec();
-        self.recompute_folding_from_cached_structure();
+        let effect = self.session.folds.recompute(&self.editor);
+        self.apply_fold_effect(effect);
     }
-
-    pub(super) fn recompute_folding_from_cached_structure(&mut self) {
-        self.folds.rescan_pending = false;
-        let ranges = folding::build_fold_ranges(self.editor.lines());
-        self.apply_fold_ranges(ranges);
-        self.folds.analysis_ready = true;
-    }
-
-    fn apply_fold_ranges(&mut self, ranges: Vec<crate::editor_core::folding::FoldRange>) {
-        self.folds.ranges = ranges;
-        self.folds.range_by_start = vec![None; self.editor.lines().len()];
-        for range in &self.folds.ranges {
-            if range.start_line < self.folds.range_by_start.len() {
-                self.folds.range_by_start[range.start_line] = Some(*range);
-            }
-        }
-        self.folds.collapsed_starts.retain(|line| {
-            self.folds
-                .range_by_start
-                .get(*line)
-                .is_some_and(|entry| entry.is_some())
-        });
-        self.rebuild_fold_view_map();
-    }
-
     pub(super) fn rebuild_fold_view_map(&mut self) {
         let line_count = self.editor.lines().len();
         self.folds.visible_to_real.clear();
@@ -556,7 +475,8 @@ impl TerminalApp {
             .collapsed_starts
             .iter()
             .filter_map(|start| {
-                self.folds
+                self.session
+                    .folds
                     .range_by_start
                     .get(*start)
                     .and_then(|entry| *entry)
@@ -697,6 +617,7 @@ impl TerminalApp {
             return Some(owner);
         }
         if self
+            .session
             .folds
             .range_by_start
             .get(line)
@@ -707,7 +628,7 @@ impl TerminalApp {
 
         let mut best_start = None;
         let mut best_span = usize::MAX;
-        for range in &self.folds.ranges {
+        for range in &self.session.folds.ranges {
             if range.start_line < line && line <= range.end_line {
                 let span = range.end_line.saturating_sub(range.start_line);
                 if span < best_span {
@@ -766,6 +687,7 @@ impl TerminalApp {
         collapsed: bool,
     ) -> bool {
         let Some(range) = self
+            .session
             .folds
             .range_by_start
             .get(start_line)
@@ -862,7 +784,9 @@ impl TerminalApp {
         }
         let changed_line = changed_from_line.min(self.editor.lines().len().saturating_sub(1));
         self.invalidate_fence_checkpoints_from_line(changed_line);
-        self.recompute_folding_if_needed(delta);
+        if !session_edit {
+            self.recompute_folding_if_needed(delta);
+        }
         self.last_edit = Instant::now();
     }
 
@@ -925,7 +849,7 @@ impl TerminalApp {
             }
             // History may replace any lines; rescan, deferred to idle time
             // unless a collapsed fold depends on it.
-            self.folds.rescan_pending = true;
+            self.session.folds.rescan_pending = true;
             self.recompute_folding_if_needed(None);
             self.adjust_cursor();
             if self.mode == UiMode::Normal {
@@ -963,7 +887,7 @@ impl TerminalApp {
             }
             // History may replace any lines; rescan, deferred to idle time
             // unless a collapsed fold depends on it.
-            self.folds.rescan_pending = true;
+            self.session.folds.rescan_pending = true;
             self.recompute_folding_if_needed(None);
             self.adjust_cursor();
             if self.mode == UiMode::Normal {
@@ -1186,6 +1110,11 @@ impl TerminalApp {
 
     fn session_edit_context(&self) -> note_session::EditContext {
         note_session::EditContext {
+            folds: Some(note_session::folds::FoldInputs {
+                full_feature_line_limit: super::LARGE_NOTE_FULL_FEATURE_LINE_LIMIT,
+                has_collapsed: !self.folds.collapsed_starts.is_empty(),
+                view_line_count: self.folds.real_to_visible.len(),
+            }),
             grouping: UndoGrouping {
                 session: self.undo_session(),
                 elapsed: self.last_edit.elapsed(),
@@ -1240,6 +1169,7 @@ impl TerminalApp {
         self.pending_session_edit = outcome.text_changed || finalize;
         if self.pending_session_edit {
             self.apply_calc_effect(outcome.calc_effect);
+            self.apply_fold_effect(outcome.fold_effect);
         }
         Some(outcome)
     }
@@ -2030,7 +1960,7 @@ impl TerminalApp {
                 // once rather than reading intermediate buffers after the transaction.
                 self.rebuild_calc_line_metadata();
             }
-            self.folds.rescan_pending |= outcome.fold_rescan;
+
             self.mark_edited_with_delta(delta);
         }
         self.adjust_cursor_after_operation(op);

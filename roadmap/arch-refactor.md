@@ -546,7 +546,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 9: shared calc state.
 - [x] Step 10: session calc upkeep.
 - [x] Step 11: calc preparation/index jobs.
-- [ ] Step 12: session fold structure.
+- [x] Step 12: session fold structure.
 - [ ] Step 13: open/reload/outside-change/leave policy.
 - [ ] Step 14: save and autosave jobs/policy.
 - [ ] Step 15: script tickets and result validation.
@@ -1088,3 +1088,11 @@ recursive reads and publication. Late indexes catch up before exposing names;
 accepted completions repaint. Five shared race/Send tests and a repaint
 regression pass, as do workspace checks (no new warnings). Release large-note
 gates pass (13.32 s); no 30k/100k investigation threshold crossed.
+
+Step 12: fold structure, incremental upkeep, range indexing and rescans moved
+into the session. EditOutcome carries fold effects; the terminal retains
+collapse choices, line maps, placeholders and the z-prefix timer. Fold policy
+uses the resulting line count; a shared regression covers both threshold
+crossings. Workspace checks pass, no new warnings. A loaded performance run
+failed broadly; serial reruns pass all limits and the latest crosses no
+investigation thresholds (100k paste 9.60 ms versus baseline 9.12 ms).

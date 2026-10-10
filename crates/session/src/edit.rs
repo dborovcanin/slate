@@ -54,6 +54,7 @@ pub enum SessionEdit<'a> {
 #[derive(Clone, Copy)]
 pub struct EditContext {
     pub grouping: UndoGrouping,
+    pub folds: Option<crate::folds::FoldInputs>,
 }
 
 #[derive(Debug)]
@@ -66,6 +67,7 @@ pub struct EditOutcome {
     pub register: Option<editor_core::vim_actions::VimRegisterValue>,
     pub text_changed: bool,
     pub calc_effect: crate::calc_upkeep::CalcEffect,
+    pub fold_effect: crate::folds::FoldEffect,
 }
 
 impl NoteSession {
@@ -305,6 +307,20 @@ impl NoteSession {
         } else {
             Default::default()
         };
+        let fold_effect = if text_changed || finalize_empty_delete {
+            ctx.folds.map_or_else(Default::default, |inputs| {
+                self.folds.rescan_pending |= fold_rescan;
+                self.folds.upkeep(
+                    doc,
+                    Some(delta),
+                    doc.lines().len() > inputs.full_feature_line_limit,
+                    inputs.has_collapsed,
+                    inputs.view_line_count,
+                )
+            })
+        } else {
+            Default::default()
+        };
         let outcome = EditOutcome {
             delta,
             first_changed_line: delta.start_line,
@@ -314,6 +330,7 @@ impl NoteSession {
             register,
             text_changed,
             calc_effect,
+            fold_effect,
         };
         if text_changed || finalize_empty_delete {
             self.finish_edit(doc, ctx, text_changed.then_some(outcome.delta));
@@ -408,6 +425,7 @@ mod tests {
             Default::default(),
         );
         let ctx = EditContext {
+            folds: None,
             grouping: UndoGrouping {
                 session: UndoSession::Command,
                 elapsed: Duration::from_secs(1),
@@ -616,6 +634,32 @@ mod tests {
         assert!(!session.calc.stale);
         assert!(session.calc.results.iter().all(Option::is_none));
         assert!(session.calc.line_metadata.is_empty());
+    }
+
+    #[test]
+    fn fold_policy_uses_line_count_after_the_edit_in_both_directions() {
+        let (mut doc, mut session, mut ctx) = setup();
+        session.folds.recompute(&doc);
+        ctx.folds = Some(crate::folds::FoldInputs {
+            full_feature_line_limit: doc.lines().len(),
+            has_collapsed: false,
+            view_line_count: doc.lines().len(),
+        });
+        let inserted = session
+            .apply(
+                &mut doc,
+                SessionEdit::Primitive(PrimitiveEdit::Newline),
+                ctx,
+            )
+            .unwrap();
+        assert!(inserted.fold_effect.clear_collapsed);
+        assert!(!session.folds.analysis_ready);
+        let removed = session
+            .apply(&mut doc, SessionEdit::RemoveLines { start: 0, end: 1 }, ctx)
+            .unwrap();
+        assert!(!removed.fold_effect.clear_collapsed);
+        assert!(session.folds.analysis_ready);
+        assert_eq!(session.folds.line_text_snapshot, doc.lines());
     }
 
     #[test]

@@ -768,9 +768,9 @@ impl TerminalApp {
         self.session.calc.variable_names.shrink_to_fit();
         self.session.calc.line_metadata.shrink_to_fit();
         self.session.calc.prev_line_metadata.shrink_to_fit();
-        self.folds.line_has_structure.shrink_to_fit();
-        self.folds.line_text_snapshot.shrink_to_fit();
-        self.folds.range_by_start.shrink_to_fit();
+        self.session.folds.line_has_structure.shrink_to_fit();
+        self.session.folds.line_text_snapshot.shrink_to_fit();
+        self.session.folds.range_by_start.shrink_to_fit();
         self.folds.visible_to_real.shrink_to_fit();
         self.folds.real_to_visible.shrink_to_fit();
         self.folds.hidden_owner.shrink_to_fit();
@@ -1224,7 +1224,7 @@ impl TerminalApp {
                 status_visible: false,
                 dirty: true,
             },
-            folds: FoldingState::empty(Vec::new(), Vec::new()),
+            folds: FoldingState::empty(),
             command_bar_from_normal: false,
             clipboard_watch: ClipboardWatch {
                 enabled: false,
@@ -1431,8 +1431,8 @@ impl TerminalApp {
         }
 
         // Process any deferred fold recompute while the user is not typing.
-        if self.folds.rescan_pending {
-            self.folds.rescan_pending = false;
+        if self.session.folds.rescan_pending {
+            self.session.folds.rescan_pending = false;
             self.recompute_folding_for_note_size();
             self.render_state.dirty = true;
         }
