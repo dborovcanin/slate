@@ -1,4 +1,6 @@
 //! `slate-gui`: the desktop front end. See docs/gui.md.
+mod editor_lines;
+mod keys;
 mod note_view;
 mod theme;
 mod window;
