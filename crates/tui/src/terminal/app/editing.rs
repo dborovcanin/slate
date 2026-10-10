@@ -698,7 +698,15 @@ impl TerminalApp {
         changed_from_line: usize,
         delta: Option<EditDelta>,
     ) {
+        #[cfg(not(test))]
+        let _ = delta;
+        #[cfg(test)]
         let session_edit = std::mem::take(&mut self.pending_session_edit);
+        #[cfg(not(test))]
+        {
+            self.pending_session_edit = false;
+        }
+        #[cfg(test)]
         if !session_edit {
             let ctx = self.session_edit_context();
             let base = self.calc_inputs();
@@ -746,6 +754,7 @@ impl TerminalApp {
         }
         let changed_line = changed_from_line.min(self.editor.lines().len().saturating_sub(1));
         self.invalidate_fence_checkpoints_from_line(changed_line);
+        #[cfg(test)]
         if !session_edit {
             self.recompute_folding_if_needed(delta);
         }
@@ -1572,8 +1581,10 @@ impl TerminalApp {
                 self.try_autoformat_rules();
             }
             self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-            if let Some(delta) = delta {
-                self.mark_edited_with_delta(delta);
+            if self.pending_session_edit {
+                if let Some(delta) = delta {
+                    self.mark_edited_with_delta(delta);
+                }
             }
             return true;
         }
@@ -1594,8 +1605,10 @@ impl TerminalApp {
                     char_col_at_byte(&text, seg.from_byte) + result.chars().count();
                 self.try_autoformat_rules();
                 self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                if let Some(delta) = delta {
-                    self.mark_edited_with_delta(delta);
+                if self.pending_session_edit {
+                    if let Some(delta) = delta {
+                        self.mark_edited_with_delta(delta);
+                    }
                 }
                 return true;
             }

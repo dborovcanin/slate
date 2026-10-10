@@ -40,3 +40,6 @@ ratatui-image = { version = "11.1", default-features = false, features = ["cross
 [features]
 default = ["imap"]
 imap = ["dep:rustls", "dep:rustls-native-certs", "dep:mailparse"]
+
+[dev-dependencies]
+note-session = { path = "../session", features = ["test-support"] }

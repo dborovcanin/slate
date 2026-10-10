@@ -197,8 +197,9 @@ impl NoteSession {
         self.calc.pending_result_splices.clear();
         effect
     }
-    /// Adopt an externally replaced snapshot; primarily used by host fixtures.
-    /// Live text edits should use apply_with_upkeep instead.
+    /// Test fixture bridge after replacing a document snapshot.
+    /// Not present in normal frontend builds: live edits use apply_with_upkeep.
+    #[cfg(feature = "test-support")]
     pub fn record_external_edit(
         &mut self,
         doc: &mut Document,

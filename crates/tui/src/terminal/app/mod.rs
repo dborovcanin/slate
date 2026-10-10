@@ -1,4 +1,6 @@
-use note_session::{reminder_marks_of, LineReminderGhost, ReminderMarks};
+#[cfg(test)]
+use note_session::ReminderMarks;
+use note_session::{reminder_marks_of, LineReminderGhost};
 mod currency;
 mod scripts;
 use super::adapter::TerminalVimAdapter;

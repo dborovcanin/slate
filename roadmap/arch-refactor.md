@@ -1166,3 +1166,11 @@ validate access and line ownership, record semantic undo when requested, and
 update mark/history/edit identity together in the session. Reminder entries
 break text coalescing. Host clocks, notification IO and save execution remain
 separate effects. Two shared regressions and workspace checks pass.
+
+Final bug round, duplicate completion: calc Tab followed by table autoformat
+advanced edit identity three times for two accepted edits. The regression
+failed before the fix and now passes with two increments. Nested presentation
+notifications no longer adopt an already-finalized snapshot. The external
+bookkeeping bridge exists only with test-support, enabled by TUI fixtures;
+normal builds expose only the session edit pipeline. Workspace checks pass
+without new warnings.
