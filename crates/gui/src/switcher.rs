@@ -41,6 +41,10 @@ pub struct Switcher {
     /// Every note, or only the working collection's.
     pub all: bool,
     items: Vec<NoteSummary>,
+    /// `Tab`: search the text of the notes instead of their titles.
+    pub text: bool,
+    found: Vec<NoteSummary>,
+    snippets: std::collections::HashMap<String, String>,
 }
 
 impl Switcher {
@@ -50,6 +54,9 @@ impl Switcher {
             selected: 0,
             all: host.working.is_none(),
             items: Vec::new(),
+            text: false,
+            found: Vec::new(),
+            snippets: Default::default(),
         };
         s.load(host);
         s
@@ -64,8 +71,49 @@ impl Switcher {
         self.selected = 0;
     }
 
+    /// Run the full-text search for the query (text mode).
+    fn search_text(&mut self, host: &NoteHost) {
+        self.found.clear();
+        self.snippets.clear();
+        let collection = if self.all {
+            None
+        } else {
+            host.working.as_ref().map(|(id, _)| id.as_str())
+        };
+        let Ok(results) = host
+            .db
+            .search_notes_content_filtered(self.query.trim(), 50, collection)
+        else {
+            return;
+        };
+        for r in results {
+            // One row per note, at its first matching line.
+            if self.found.iter().any(|n| n.id == r.id) {
+                continue;
+            }
+            if let Ok(Some(meta)) = host.db.get_note_meta(&r.id) {
+                if !r.snippet.trim().is_empty() {
+                    self.snippets
+                        .insert(r.id.clone(), r.snippet.trim().to_string());
+                }
+                self.found.push(meta);
+            }
+        }
+    }
+
+    /// The query changed: refresh what depends on it.
+    fn query_changed(&mut self, host: &NoteHost) {
+        self.selected = 0;
+        if self.text {
+            self.search_text(host);
+        }
+    }
+
     /// Notes matching the query, best first (recent first when empty).
     pub fn matches(&self) -> Vec<&NoteSummary> {
+        if self.text {
+            return self.found.iter().collect();
+        }
         let mut scored: Vec<(i64, usize, &NoteSummary)> = self
             .items
             .iter()
@@ -116,6 +164,7 @@ pub fn on_switcher_key(
     let Overlay::Switcher(s) = &mut win.overlay else {
         return false;
     };
+    let host = &win.host;
     let count = s.matches().len();
     match (k.key.as_str(), ctrl) {
         ("escape", _) | ("p", true) => win.overlay = Overlay::None,
@@ -125,23 +174,26 @@ pub fn on_switcher_key(
             open_selected(win, cx);
             return true;
         }
+        // Tab: title search and full-text search take turns.
+        ("tab", false) => {
+            s.text = !s.text;
+            s.query_changed(host);
+        }
         ("backspace", false) => {
             s.query.pop();
-            s.selected = 0;
+            s.query_changed(host);
         }
         // Ctrl+W / Ctrl+Backspace: delete the last word of the query.
         ("w", true) | ("backspace", true) => {
             let trimmed = s.query.trim_end().len();
             let cut = s.query[..trimmed].rfind(' ').map_or(0, |i| i + 1);
             s.query.truncate(cut);
-            s.selected = 0;
+            s.query_changed(host);
         }
         ("l", true) => {
             s.all = !s.all;
-            let host = &win.host;
-            if let Overlay::Switcher(s) = &mut win.overlay {
-                s.load(host);
-            }
+            s.load(host);
+            s.query_changed(host);
         }
         ("n", true) => {
             win.overlay = Overlay::None;
@@ -165,7 +217,7 @@ pub fn on_switcher_key(
         _ => {
             if let Some(text) = typed {
                 s.query.push_str(&text);
-                s.selected = 0;
+                s.query_changed(host);
             }
         }
     }
@@ -316,6 +368,10 @@ fn popup(
             .child(
                 div()
                     .flex_none()
+                    .max_w(px(280.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_size(px(11.5))
                     .text_color(t.faint)
                     .child(r.detail),
@@ -408,13 +464,18 @@ pub fn render_switcher(
         .map(|n| Row {
             id: SharedString::from(format!("sw-{}", n.id)),
             label: display_title(n).to_string(),
-            detail: String::new(),
+            detail: s.snippets.get(&n.id).cloned().unwrap_or_default(),
             locked: locked(n),
         })
         .collect();
     let scope = match (&win.host.working, s.all) {
         (Some((_, name)), false) => name.clone(),
         _ => "All notes".to_string(),
+    };
+    let scope = if s.text {
+        format!("{scope} · text")
+    } else {
+        scope
     };
     popup(
         win,
@@ -424,6 +485,7 @@ pub fn render_switcher(
         s.selected,
         &[
             ("Enter", "open"),
+            ("Tab", "search text"),
             ("Ctrl+N", "new"),
             ("Ctrl+G", "collections"),
             ("Ctrl+R", "history"),
@@ -501,5 +563,30 @@ mod tests {
         assert!(fuzzy("tr", "Lisbon trip").unwrap() > fuzzy("tr", "Lisbon atrium").unwrap());
         // Case does not matter.
         assert_eq!(fuzzy("LIS", "lisbon"), fuzzy("lis", "LISBON"));
+    }
+
+    #[test]
+    fn tab_switches_between_title_and_text_search() {
+        let dir = std::env::temp_dir().join(format!("slate-gui-switch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = app_core::storage::Db::open(dir.join("notes.db")).unwrap();
+        for (id, body) in [("a", "# Garden\nroses and tulips\nmore tulips"), ("b", "# Budget\nrent")] {
+            db.create_note_with_context(id, Default::default(), None, None)
+                .unwrap();
+            db.save_note(id, body).unwrap();
+        }
+        let host = NoteHost::open(db, Some("b")).unwrap();
+        let mut s = Switcher::open(&host);
+        s.query = "tulips".into();
+        assert!(s.matches().is_empty(), "no title contains it");
+        s.text = true;
+        s.query_changed(&host);
+        let ids: Vec<&str> = s.matches().iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["a"], "one row per note");
+        assert!(s.snippets.contains_key("a"));
+        s.text = false;
+        s.query_changed(&host);
+        assert!(s.matches().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
