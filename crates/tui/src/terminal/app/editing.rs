@@ -1231,6 +1231,12 @@ impl TerminalApp {
             self.folds.rescan_pending = true;
             self.recompute_folding_if_needed();
             self.adjust_cursor();
+            if self.mode == UiMode::Normal {
+                self.editor.cursor_col = self
+                    .editor
+                    .cursor_col
+                    .min(line_char_len(self.current_line()).saturating_sub(1));
+            }
             self.adjust_scroll();
             self.history.checkpoint(
                 &self.editor.lines,
@@ -1269,6 +1275,12 @@ impl TerminalApp {
             self.folds.rescan_pending = true;
             self.recompute_folding_if_needed();
             self.adjust_cursor();
+            if self.mode == UiMode::Normal {
+                self.editor.cursor_col = self
+                    .editor
+                    .cursor_col
+                    .min(line_char_len(self.current_line()).saturating_sub(1));
+            }
             self.adjust_scroll();
             self.history.checkpoint(
                 &self.editor.lines,

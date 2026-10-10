@@ -535,7 +535,7 @@ approved unattended code changes and one commit per step, including mechanical
 moves. Existing golden cases and performance limits remain unchanged.
 
 - [x] Step 0: branch, clean main snapshot and baseline capture.
-- [ ] Step 1: Normal-mode undo/redo cursor regression.
+- [x] Step 1: Normal-mode undo/redo cursor regression.
 - [ ] Step 2: fold upkeep from exact edit spans.
 - [ ] Step 3: core same-line replacement plans.
 - [ ] Step 4: core line insertion/removal plans.
@@ -555,6 +555,11 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [ ] Phase 8: shared semantic display and source mappings.
 - [ ] Final round: checks, performance A/B, live terminal and diff review.
 - [ ] Step 18: final contracts and readiness evidence.
+
+Step 1: the added replay failed before the fix and passes afterwards; all
+existing cases remain unchanged. Restored Normal-mode cursors clamp before
+history checkpoints; Insert-mode exhaustion behavior is retained. Workspace
+tests, formatting and Clippy warning comparison passed.
 
 Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
 could not create a private runtime image; the approved rerun passed. Baseline
