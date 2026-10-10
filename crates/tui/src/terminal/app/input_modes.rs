@@ -86,7 +86,7 @@ impl TerminalApp {
             self.folds.pending_prefix_until = None;
         }
         let session = self.undo_session();
-        self.history.begin_input(session);
+        self.session.history.begin_input(session);
         match self.mode {
             UiMode::DatePicker => self.handle_date_picker_key(db, key)?,
             UiMode::Editor => self.handle_editor_key(db, key)?,
@@ -826,14 +826,14 @@ impl TerminalApp {
                     return Ok(());
                 }
                 let line_idx = self.editor.cursor_line;
-                let before_reminder = self.reminder_ghosts.get(&line_idx).cloned();
+                let before_reminder = self.session.reminder_ghosts.get(&line_idx).cloned();
                 let entry = LineReminderGhost {
                     remind_at_ms,
                     display_at: display_at.clone(),
                     line_text: self.current_line().to_string(),
                     reminded_at_ms: None,
                 };
-                self.reminder_ghosts.insert(line_idx, entry.clone());
+                self.session.reminder_ghosts.insert(line_idx, entry.clone());
                 self.push_reminder_undo_entry(line_idx, before_reminder, Some(entry));
                 self.reminders_changed_outside_text(db);
                 self.close_date_picker();

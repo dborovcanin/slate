@@ -187,11 +187,11 @@ impl TerminalApp {
                 self.scripts.pending_since = None;
                 self.command_selection_linewise = self.mode == UiMode::VisualLine;
                 self.command_selection = self.capture_visual_command_selection();
-                self.history.break_coalescing();
+                self.session.history.break_coalescing();
                 self.execute_terminal_command(db, &command);
                 self.command_selection = None;
                 self.command_selection_linewise = false;
-                self.history.break_coalescing();
+                self.session.history.break_coalescing();
             }
         } else {
             // Replay the prefix as ordinary input, then handle the breaking key
@@ -373,7 +373,7 @@ impl TerminalApp {
                     return;
                 }
                 if run.output != ScriptOutput::Message {
-                    self.history.break_coalescing();
+                    self.session.history.break_coalescing();
                     let op = crate::editor_core::scripts::plan_result(run.range, response.text);
                     self.apply_edit_operation(&op);
                     self.editor.selection_anchor = None;
@@ -386,7 +386,7 @@ impl TerminalApp {
                         self.vim_state.pending_count = None;
                         self.vim_state.count_buffer.clear();
                     }
-                    self.history.break_coalescing();
+                    self.session.history.break_coalescing();
                     self.adjust_cursor();
                     self.adjust_scroll();
                     self.status = response

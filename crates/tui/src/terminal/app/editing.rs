@@ -209,7 +209,7 @@ impl TerminalApp {
         if before == after {
             return;
         }
-        self.undo_policy.record_reminder(ReminderUndoEntry {
+        self.session.undo_policy.record_reminder(ReminderUndoEntry {
             line_idx,
             before,
             after,
@@ -217,8 +217,8 @@ impl TerminalApp {
     }
 
     fn record_history_after_edit(&mut self, grouping: UndoGrouping, delta: Option<EditDelta>) {
-        self.undo_policy.record_text(
-            &mut self.history,
+        self.session.undo_policy.record_text(
+            &mut self.session.history,
             &self.editor.lines,
             HistoryCursor {
                 line: self.editor.cursor_line,
@@ -1059,7 +1059,7 @@ impl TerminalApp {
         };
         self.invalidate_joined_text_cache();
         self.render_caches.table_formula_segment_cache.clear();
-        self.dirty = true;
+        self.session.dirty = true;
         if changed_from_line == 0 {
             self.switcher.needs_title_refresh = true;
         }
@@ -1133,6 +1133,7 @@ impl TerminalApp {
         // Splices are only meaningful for the edit that recorded them.
         self.calc.pending_result_splices.clear();
         self.record_history_after_edit(grouping, delta);
+        self.session.note_changed();
         self.last_edit = Instant::now();
     }
 
@@ -1189,10 +1190,10 @@ impl TerminalApp {
     ) -> Result<(), String> {
         match state {
             Some(reminder) => {
-                self.reminder_ghosts.insert(line_idx, reminder);
+                self.session.reminder_ghosts.insert(line_idx, reminder);
             }
             None => {
-                self.reminder_ghosts.remove(&line_idx);
+                self.session.reminder_ghosts.remove(&line_idx);
             }
         }
         self.reminders_changed_outside_text(db);
@@ -1200,9 +1201,9 @@ impl TerminalApp {
     }
 
     fn undo_text_action(&mut self) {
-        let keep_cursor_on_exhaust = self.history.undo_depth() == 1;
+        let keep_cursor_on_exhaust = self.session.history.undo_depth() == 1;
         let cursor_before_undo = (self.editor.cursor_line, self.editor.cursor_col);
-        if let Some(cursor) = self.history.undo(&mut self.editor.lines) {
+        if let Some(cursor) = self.session.history.undo(&mut self.editor.lines) {
             self.invalidate_joined_text_cache();
             if keep_cursor_on_exhaust {
                 self.editor.cursor_line = cursor_before_undo
@@ -1214,7 +1215,8 @@ impl TerminalApp {
                     cursor.line.min(self.editor.lines.len().saturating_sub(1));
                 self.editor.cursor_col = cursor.col;
             }
-            self.dirty = true;
+            self.session.dirty = true;
+            self.session.note_changed();
             self.last_edit = Instant::now();
             // The step's reminders come back with its text.
             self.restore_reminders_from_history();
@@ -1240,14 +1242,14 @@ impl TerminalApp {
                     .min(line_char_len(self.current_line()).saturating_sub(1));
             }
             self.adjust_scroll();
-            self.history.checkpoint(
+            self.session.history.checkpoint(
                 &self.editor.lines,
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
             self.status = format!(
                 "undo ({} left)",
-                self.undo_policy.undo_depth().saturating_sub(1)
+                self.session.undo_policy.undo_depth().saturating_sub(1)
             );
         } else {
             self.status = "already at oldest change".to_string();
@@ -1255,11 +1257,12 @@ impl TerminalApp {
     }
 
     fn redo_text_action(&mut self) {
-        if let Some(cursor) = self.history.redo(&mut self.editor.lines) {
+        if let Some(cursor) = self.session.history.redo(&mut self.editor.lines) {
             self.invalidate_joined_text_cache();
             self.editor.cursor_line = cursor.line.min(self.editor.lines.len().saturating_sub(1));
             self.editor.cursor_col = cursor.col;
-            self.dirty = true;
+            self.session.dirty = true;
+            self.session.note_changed();
             self.last_edit = Instant::now();
             // The step's reminders come back with its text.
             self.restore_reminders_from_history();
@@ -1284,19 +1287,19 @@ impl TerminalApp {
                     .min(line_char_len(self.current_line()).saturating_sub(1));
             }
             self.adjust_scroll();
-            self.history.checkpoint(
+            self.session.history.checkpoint(
                 &self.editor.lines,
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
-            self.status = format!("redo ({} left)", self.history.redo_depth());
+            self.status = format!("redo ({} left)", self.session.history.redo_depth());
         } else {
             self.status = "already at newest change".to_string();
         }
     }
 
     pub(super) fn undo(&mut self, db: &Db) {
-        let Some(action) = self.undo_policy.undo_action().cloned() else {
+        let Some(action) = self.session.undo_policy.undo_action().cloned() else {
             self.status = "already at oldest change".to_string();
             return;
         };
@@ -1310,11 +1313,11 @@ impl TerminalApp {
                 self.status = format!("undo reminder on line {}", entry.line_idx + 1);
             }
         }
-        self.undo_policy.complete_undo();
+        self.session.undo_policy.complete_undo();
     }
 
     pub(super) fn redo(&mut self, db: &Db) {
-        let Some(action) = self.undo_policy.redo_action().cloned() else {
+        let Some(action) = self.session.undo_policy.redo_action().cloned() else {
             self.status = "already at newest change".to_string();
             return;
         };
@@ -1328,7 +1331,7 @@ impl TerminalApp {
                 self.status = format!("redo reminder on line {}", entry.line_idx + 1);
             }
         }
-        self.undo_policy.complete_redo();
+        self.session.undo_policy.complete_redo();
     }
 
     pub(super) fn run_calc_recompute(&mut self) {

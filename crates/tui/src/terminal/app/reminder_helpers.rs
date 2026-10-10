@@ -1,62 +1,10 @@
 use super::{LineReminderGhost, ReminderMarks, TerminalApp};
-use crate::editor_core::history::LineDelta;
 use crate::storage::{Db, Note};
 use app_core::reminders::{block_line_fates, LineEdit};
 use app_core::storage::{NoteAccessMode, ReminderLine};
+pub(super) use note_session::PendingLineChange;
+use note_session::{move_lines, reminder_marks_of};
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
-
-/// A line change an edit reported before the buffer changed.
-#[derive(Debug, Clone)]
-pub(super) enum PendingLineChange {
-    /// A text edit with exact coordinates.
-    Edit(LineEdit),
-    /// `old_len` lines from `start` replaced as a block by `new_len` lines;
-    /// `fates` says where each old line of the block went.
-    Block {
-        start: usize,
-        old_len: usize,
-        new_len: usize,
-        fates: Vec<Option<usize>>,
-    },
-}
-
-impl PendingLineChange {
-    fn line_change(&self) -> isize {
-        match self {
-            Self::Edit(edit) => {
-                edit.inserted_breaks as isize - (edit.to_line - edit.from_line) as isize
-            }
-            Self::Block {
-                old_len, new_len, ..
-            } => *new_len as isize - *old_len as isize,
-        }
-    }
-
-    /// Where each of `lines` (ascending) goes.
-    fn fates(&self, lines: &[usize]) -> Vec<Option<usize>> {
-        match self {
-            Self::Edit(edit) => edit.fates(lines),
-            Self::Block {
-                start,
-                old_len,
-                new_len,
-                fates,
-            } => lines
-                .iter()
-                .map(|line| {
-                    if line < start {
-                        Some(*line)
-                    } else if *line >= start + old_len {
-                        Some(line + new_len - old_len)
-                    } else {
-                        fates[line - start].map(|idx| start + idx)
-                    }
-                })
-                .collect(),
-        }
-    }
-}
 
 /// Reminder ghosts for `note` shown as `lines`, after placing its stored
 /// reminders on the text (`Db::reconcile_reminders`, for text that may have
@@ -87,16 +35,6 @@ pub(super) fn load_note_reminder_ghosts(
         .collect())
 }
 
-/// `ghosts` as undo history marks: sorted by line.
-pub(super) fn reminder_marks_of(ghosts: &FxHashMap<usize, LineReminderGhost>) -> ReminderMarks {
-    let mut marks: Vec<(usize, LineReminderGhost)> = ghosts
-        .iter()
-        .map(|(line, ghost)| (*line, ghost.clone()))
-        .collect();
-    marks.sort_by_key(|(line, _)| *line);
-    Arc::new(marks)
-}
-
 // Ownership: the open note's reminders while it is edited. They live here,
 // move with each edit, travel with undo history, and are stored with the
 // note's text, never ahead of it.
@@ -104,21 +42,21 @@ impl TerminalApp {
     /// Loads the open note's reminders as stored with its text, dropping any
     /// unsaved reminder changes.
     pub(super) fn load_reminders(&mut self, db: &Db) -> Result<(), String> {
-        self.reminder_ghosts =
+        self.session.reminder_ghosts =
             load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines)?;
-        self.pending_line_edits.clear();
-        self.reminders_generation = self.reminders_generation.wrapping_add(1);
-        self.persisted_reminders_generation = self.reminders_generation;
+        self.session.pending_line_edits.clear();
+        self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
+        self.session.persisted_reminders_generation = self.session.reminders_generation;
         Ok(())
     }
 
     pub(super) fn reminder_marks(&self) -> ReminderMarks {
-        reminder_marks_of(&self.reminder_ghosts)
+        reminder_marks_of(&self.session.reminder_ghosts)
     }
 
     /// Whether reminders changed since they were last stored.
     pub(super) fn reminders_unsaved(&self) -> bool {
-        self.reminders_generation != self.persisted_reminders_generation
+        self.session.reminders_generation != self.session.persisted_reminders_generation
     }
 
     /// Reminders can be stored only with notes in the database.
@@ -129,6 +67,7 @@ impl TerminalApp {
     /// The reminders to store with the current text.
     pub(super) fn reminder_lines(&self) -> Vec<ReminderLine> {
         let mut lines: Vec<ReminderLine> = self
+            .session
             .reminder_ghosts
             .iter()
             .map(|(line_idx, ghost)| ReminderLine {
@@ -152,10 +91,11 @@ impl TerminalApp {
     /// undone): it is stored right away when the text is saved, else with
     /// the next save of the text.
     pub(super) fn reminders_changed_outside_text(&mut self, db: &Db) {
-        self.reminders_generation = self.reminders_generation.wrapping_add(1);
+        self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
         // A change worth saving: a paused autosave tries again.
+        self.session.note_changed();
         self.last_edit = std::time::Instant::now();
-        self.history.set_marks(self.reminder_marks());
+        self.session.history.set_marks(self.reminder_marks());
         self.render_state.dirty = true;
         self.persist_reminders_if_text_saved(db);
     }
@@ -163,15 +103,15 @@ impl TerminalApp {
     /// Stores reminder changes on their own while the stored text is the
     /// buffer's, checked against its revision.
     pub(super) fn persist_reminders_if_text_saved(&mut self, db: &Db) {
-        if self.dirty || !self.reminders_unsaved() || !self.active_note_holds_reminders() {
+        if self.session.dirty || !self.reminders_unsaved() || !self.active_note_holds_reminders() {
             return;
         }
         // An autosave in flight decides the stored revision first.
         self.poll_background_save(db, true);
-        if self.dirty || !self.reminders_unsaved() {
+        if self.session.dirty || !self.reminders_unsaved() {
             return;
         }
-        let generation = self.reminders_generation;
+        let generation = self.session.reminders_generation;
         match db.replace_reminders_if(
             &self.active_note.id,
             Some(&self.active_note.updated_at),
@@ -180,7 +120,7 @@ impl TerminalApp {
             Ok(revision) => {
                 // Our own checked write: its revision is the one we hold.
                 self.active_note.updated_at = revision.updated_at;
-                self.persisted_reminders_generation = generation;
+                self.session.persisted_reminders_generation = generation;
             }
             Err(error) => {
                 self.status = format!("reminders not saved yet: {error}");
@@ -193,11 +133,12 @@ impl TerminalApp {
     /// even where an empty line is left behind, as for the note's only line.
     /// The text change alone cannot tell that from emptying a line.
     pub(super) fn drop_reminders_on_deleted_lines(&mut self, start: usize, end: usize) {
-        let before = self.reminder_ghosts.len();
-        self.reminder_ghosts
+        let before = self.session.reminder_ghosts.len();
+        self.session
+            .reminder_ghosts
             .retain(|line, _| *line < start || *line > end);
-        if self.reminder_ghosts.len() != before {
-            self.reminders_generation = self.reminders_generation.wrapping_add(1);
+        if self.session.reminder_ghosts.len() != before {
+            self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
         }
     }
 
@@ -223,7 +164,8 @@ impl TerminalApp {
     /// The reminders to store with a save of the text: always while there
     /// are any (their line text follows edits), and after any change.
     pub(super) fn reminders_for_save(&self, saving_text: bool) -> Option<Vec<ReminderLine>> {
-        let needed = self.reminders_unsaved() || (saving_text && !self.reminder_ghosts.is_empty());
+        let needed =
+            self.reminders_unsaved() || (saving_text && !self.session.reminder_ghosts.is_empty());
         (needed && self.active_note_holds_reminders()).then(|| self.reminder_lines())
     }
 
@@ -236,11 +178,12 @@ impl TerminalApp {
         to: (usize, usize),
         inserted_breaks: usize,
     ) {
-        if self.reminder_ghosts.is_empty() {
+        if self.session.reminder_ghosts.is_empty() {
             return;
         }
         let len = |line: usize| self.editor.lines.get(line).map_or(0, String::len);
-        self.pending_line_edits
+        self.session
+            .pending_line_edits
             .push(PendingLineChange::Edit(LineEdit {
                 from_line: from.0,
                 from_col: from.1,
@@ -257,17 +200,19 @@ impl TerminalApp {
     /// move exactly, lines inside are matched ([`block_line_fates`]). Call
     /// before the lines change.
     pub(super) fn note_block_replace(&mut self, start: usize, old_len: usize, new: &[String]) {
-        if self.reminder_ghosts.is_empty() {
+        if self.session.reminder_ghosts.is_empty() {
             return;
         }
         let end = (start + old_len).min(self.editor.lines.len());
         let fates = block_line_fates(&self.editor.lines[start..end], new);
-        self.pending_line_edits.push(PendingLineChange::Block {
-            start,
-            old_len: end - start,
-            new_len: new.len(),
-            fates,
-        });
+        self.session
+            .pending_line_edits
+            .push(PendingLineChange::Block {
+                start,
+                old_len: end - start,
+                new_len: new.len(),
+                fates,
+            });
     }
 
     /// `count` lines are about to be inserted before line `at`.
@@ -286,80 +231,36 @@ impl TerminalApp {
     /// they account for the whole change; otherwise its changed block is
     /// matched line by line ([`block_line_fates`]), never guessed.
     pub(super) fn move_reminders_with_recorded_edit(&mut self) {
-        let edits = std::mem::take(&mut self.pending_line_edits);
-        let delta = self.history.take_last_delta();
-        if self.reminder_ghosts.is_empty() {
-            if !self.history.current_marks().is_empty() {
-                self.history.record_marks(self.reminder_marks());
+        let edits = std::mem::take(&mut self.session.pending_line_edits);
+        let delta = self.session.history.take_last_delta();
+        if self.session.reminder_ghosts.is_empty() {
+            if !self.session.history.current_marks().is_empty() {
+                self.session.history.record_marks(self.reminder_marks());
             }
             return;
         }
         let Some(delta) = delta else {
             return;
         };
-        let moved = move_lines(&self.reminder_ghosts, &edits, &delta);
-        if moved.len() != self.reminder_ghosts.len()
+        let moved = move_lines(&self.session.reminder_ghosts, &edits, &delta);
+        if moved.len() != self.session.reminder_ghosts.len()
             || moved
                 .keys()
-                .any(|line| !self.reminder_ghosts.contains_key(line))
+                .any(|line| !self.session.reminder_ghosts.contains_key(line))
         {
-            self.reminder_ghosts = moved;
-            self.reminders_generation = self.reminders_generation.wrapping_add(1);
+            self.session.reminder_ghosts = moved;
+            self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
         }
-        self.history.record_marks(self.reminder_marks());
+        self.session.history.record_marks(self.reminder_marks());
     }
 
     /// After undo or redo: the reminders the history step holds.
     pub(super) fn restore_reminders_from_history(&mut self) {
-        self.pending_line_edits.clear();
-        let marks = self.history.current_marks().clone();
+        self.session.pending_line_edits.clear();
+        let marks = self.session.history.current_marks().clone();
         if *marks != *self.reminder_marks() {
-            self.reminder_ghosts = marks.iter().cloned().collect();
-            self.reminders_generation = self.reminders_generation.wrapping_add(1);
+            self.session.reminder_ghosts = marks.iter().cloned().collect();
+            self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
         }
     }
-}
-
-/// `ghosts` keyed by where their lines are after `delta`.
-fn move_lines(
-    ghosts: &FxHashMap<usize, LineReminderGhost>,
-    edits: &[PendingLineChange],
-    delta: &LineDelta,
-) -> FxHashMap<usize, LineReminderGhost> {
-    let mut lines: Vec<usize> = ghosts.keys().copied().collect();
-    lines.sort_unstable();
-    let delta_change = delta.inserted.len() as isize - delta.removed.len() as isize;
-    let edits_change: isize = edits.iter().map(PendingLineChange::line_change).sum();
-    let targets: Vec<Option<usize>> = if !edits.is_empty() && edits_change == delta_change {
-        // The edits applied in order; each keeps lines ascending.
-        let mut current: Vec<Option<usize>> = lines.iter().map(|line| Some(*line)).collect();
-        for edit in edits {
-            let alive: Vec<usize> = current.iter().flatten().copied().collect();
-            let mut fates = edit.fates(&alive).into_iter();
-            for slot in current.iter_mut().filter(|slot| slot.is_some()) {
-                *slot = fates.next().flatten();
-            }
-        }
-        current
-    } else {
-        let block_end = delta.start + delta.removed.len();
-        let fates = block_line_fates(&delta.removed, &delta.inserted);
-        lines
-            .iter()
-            .map(|line| {
-                if *line < delta.start {
-                    Some(*line)
-                } else if *line >= block_end {
-                    Some((*line as isize + delta_change) as usize)
-                } else {
-                    fates[line - delta.start].map(|idx| delta.start + idx)
-                }
-            })
-            .collect()
-    };
-    lines
-        .iter()
-        .zip(targets)
-        .filter_map(|(line, target)| Some((target?, ghosts[line].clone())))
-        .collect()
 }

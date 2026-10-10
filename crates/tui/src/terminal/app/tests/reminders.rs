@@ -19,7 +19,7 @@ fn app_with_reminders(body: &str, lines: &[usize]) -> (Db, TerminalApp, PathBuf)
         .expect("reminder");
     }
     app.load_reminders(&db).expect("reminders");
-    app.history.set_marks(app.reminder_marks());
+    app.session.history.set_marks(app.reminder_marks());
     app.autosave_enabled = false;
     app.mode = UiMode::Normal;
     (db, app, path)
@@ -28,6 +28,7 @@ fn app_with_reminders(body: &str, lines: &[usize]) -> (Db, TerminalApp, PathBuf)
 /// Reminders shown: (line, due, display, notified), by line.
 fn shown(app: &TerminalApp) -> Vec<(usize, i64, String, Option<i64>)> {
     let mut rows: Vec<_> = app
+        .session
         .reminder_ghosts
         .iter()
         .map(|(line, ghost)| {
@@ -107,7 +108,7 @@ fn backward_word_delete_preserves_unicode_reminders_and_physical_line_joins() {
     assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
     app.undo(&db);
     assert_eq!(app.editor.lines[0], "αβ_γ !!");
-    app.history.break_coalescing();
+    app.session.history.break_coalescing();
     app.editor.cursor_line = 2;
     app.editor.cursor_col = 0;
     app.folds.visible_to_real = vec![0, 2];
@@ -312,11 +313,15 @@ fn a_merged_edit_that_cancels_itself_keeps_history_aligned() {
     // Typing and erasing a character on the reminded line, where the step
     // began: the merged step cancels itself and is dropped.
     app.editor.cursor_col = 0;
-    let depth = app.history.undo_depth();
+    let depth = app.session.history.undo_depth();
     run_keys(&mut app, &db, &[Key::Char('i'), Key::Char('x')]);
-    assert_eq!(app.history.undo_depth(), depth + 1);
+    assert_eq!(app.session.history.undo_depth(), depth + 1);
     run_keys(&mut app, &db, &[Key::Backspace]);
-    assert_eq!(app.history.undo_depth(), depth, "the step cancelled itself");
+    assert_eq!(
+        app.session.history.undo_depth(),
+        depth,
+        "the step cancelled itself"
+    );
     run_keys(&mut app, &db, &[Key::Esc]);
     assert_eq!(app.editor.lines, vec!["milk", "c"]);
     assert_eq!(shown(&app), vec![moved(1, 0)]);
@@ -383,7 +388,8 @@ fn reminder_changes_interleaved_with_text_undo_in_order() {
 #[test]
 fn notification_state_moves_and_saves_with_the_reminder() {
     let (db, mut app, path) = app_with_reminders("milk\nend", &[0]);
-    app.reminder_ghosts
+    app.session
+        .reminder_ghosts
         .get_mut(&0)
         .expect("ghost")
         .reminded_at_ms = Some(5);
@@ -461,8 +467,8 @@ fn changing_a_line_keeps_its_reminder() {
 fn reminders_deferred_at_startup_load_before_the_first_edit() {
     let (db, mut app, path) = app_with_reminders("- [ ] buy milk\n- [ ] buy eggs", &[0]);
     // As at startup with background tasks: not loaded yet.
-    app.reminder_ghosts.clear();
-    app.history.set_marks(app.reminder_marks());
+    app.session.reminder_ghosts.clear();
+    app.session.history.set_marks(app.reminder_marks());
     app.startup_reminder_hydration_pending = true;
     run_keys(&mut app, &db, &DD);
     assert_eq!(shown(&app), vec![]);

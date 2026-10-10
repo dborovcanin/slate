@@ -928,7 +928,7 @@ fn vim_remind_set_is_undoable_and_redoable() {
     assert_eq!(app.mode, UiMode::DatePicker);
 
     run_keys(&mut app, &db, &[Key::Enter]);
-    assert!(!app.reminder_ghosts.is_empty());
+    assert!(!app.session.reminder_ghosts.is_empty());
     assert_eq!(
         db.list_reminders(&app.active_note.id)
             .expect("list reminders after remind set")
@@ -937,7 +937,7 @@ fn vim_remind_set_is_undoable_and_redoable() {
     );
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert!(app.reminder_ghosts.is_empty());
+    assert!(app.session.reminder_ghosts.is_empty());
     assert!(db
         .list_reminders(&app.active_note.id)
         .expect("list reminders after undo")
@@ -1288,10 +1288,10 @@ fn non_vim_typing_coalesces_until_a_pause_then_starts_a_new_step() {
     run_keys(&mut app, &db, &[Key::Char('b')]);
     app.last_edit = Instant::now() - Duration::from_millis(100);
     run_keys(&mut app, &db, &[Key::Char('c')]);
-    assert_eq!(app.history.undo_depth(), 1);
+    assert_eq!(app.session.history.undo_depth(), 1);
     app.last_edit = Instant::now() - Duration::from_secs(1);
     run_keys(&mut app, &db, &[Key::Char('d')]);
-    assert_eq!(app.history.undo_depth(), 2);
+    assert_eq!(app.session.history.undo_depth(), 2);
     app.undo(&db);
     assert_eq!(app.editor.lines, vec!["abc"]);
     app.undo(&db);
@@ -1420,13 +1420,13 @@ fn app_with_reminder(body: &str, line: usize) -> (Db, TerminalApp, std::path::Pa
     )
     .expect("reminder");
     app.load_reminders(&db).expect("reminders");
-    app.history.set_marks(app.reminder_marks());
+    app.session.history.set_marks(app.reminder_marks());
     app.mode = UiMode::Normal;
     (db, app, path)
 }
 
 fn reminder_lines(app: &TerminalApp) -> Vec<usize> {
-    let mut lines: Vec<usize> = app.reminder_ghosts.keys().copied().collect();
+    let mut lines: Vec<usize> = app.session.reminder_ghosts.keys().copied().collect();
     lines.sort_unstable();
     lines
 }
@@ -1437,7 +1437,10 @@ fn deleting_a_reminded_task_does_not_pass_the_reminder_to_the_next() {
     app.editor.cursor_line = 0;
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
     assert_eq!(app.editor.lines, vec!["- [ ] buy eggs".to_string()]);
-    assert!(app.reminder_ghosts.is_empty(), "buy eggs gets no reminder");
+    assert!(
+        app.session.reminder_ghosts.is_empty(),
+        "buy eggs gets no reminder"
+    );
 
     // Undo brings the line and its reminder back.
     run_keys(&mut app, &db, &[Key::Char('u')]);

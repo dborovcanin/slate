@@ -540,7 +540,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 3: core same-line replacement plans.
 - [x] Step 4: core line insertion/removal plans.
 - [x] Step 5: document crate and terminal view separation.
-- [ ] Step 6: undo, dirty and reminder session state.
+- [x] Step 6: undo, dirty and reminder session state.
 - [ ] Step 7: session edit pipeline and undo/redo.
 - [ ] Step 8: private document text.
 - [ ] Step 9: shared calc state.
@@ -589,6 +589,11 @@ Step 5: `note-session::Document` owns text/cache/cursor/selection; viewport
 state stays in terminal `ViewState`. Existing dependencies only. The temporary
 thread-spawn probe failed under Clippy from the workspace root and was removed.
 Document tests and full workspace checks passed with no new warnings.
+
+Step 6: undo/dirty/reminder state and pure mapping moved into `NoteSession`.
+Save/leave/render identity uses `edit_seq()`; terminal Instants remain for
+debounce. Existing save-race, reminder and workspace tests passed; no new
+Clippy warnings. Failed-save pause semantics remain unchanged until step 14.
 
 Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
 could not create a private runtime image; the approved rerun passed. Baseline

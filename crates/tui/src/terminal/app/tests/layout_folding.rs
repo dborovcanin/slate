@@ -857,7 +857,7 @@ fn status_bar_shows_mode_pill_position_and_fresh_messages() {
 #[test]
 fn title_bar_shows_title_first_and_dirty_marker() {
     let (db, mut app, path) = app_with_note("# Weekly review\nbody");
-    app.dirty = true;
+    app.session.dirty = true;
     let rows = screen_rows(&mut app);
     assert!(
         rows[0].starts_with(" Weekly review •  n1"),

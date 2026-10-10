@@ -866,7 +866,7 @@ impl TerminalApp {
         use crate::editor_core::command_catalog::NoteSecurityAction;
         let action_label = action.as_str();
         // The note is re-read from the store, so unsaved edits must land first.
-        if self.dirty && !self.can_leave_note(db) {
+        if self.session.dirty && !self.can_leave_note(db) {
             return;
         }
         let result = match action {
@@ -897,7 +897,7 @@ impl TerminalApp {
     fn unlock_active_note(&mut self, db: &Db, password: &str) -> Result<(), String> {
         let note = db.unlock_note(&self.active_note.id, password)?;
         // Only a buffer that was unlocked before holds the note's real text.
-        if self.dirty && self.active_note.is_unlocked {
+        if self.session.dirty && self.active_note.is_unlocked {
             self.active_note.is_unlocked = true;
             self.save(db)?;
         } else {
@@ -1672,7 +1672,11 @@ impl TerminalApp {
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::RemindToggle => {
-                    match self.reminder_ghosts.remove(&self.editor.cursor_line) {
+                    match self
+                        .session
+                        .reminder_ghosts
+                        .remove(&self.editor.cursor_line)
+                    {
                         Some(before_reminder) => {
                             self.push_reminder_undo_entry(
                                 self.editor.cursor_line,
@@ -1737,7 +1741,7 @@ impl TerminalApp {
                         self.status = "usage: backup export <path.zip>".to_string();
                         return;
                     };
-                    if self.dirty {
+                    if self.session.dirty {
                         if let Err(error) = self.save(db) {
                             self.status = format!("backup failed: save failed: {error}");
                             return;
@@ -1765,7 +1769,7 @@ impl TerminalApp {
                         self.status = "usage: backup load <path.zip>".to_string();
                         return;
                     };
-                    if self.dirty {
+                    if self.session.dirty {
                         if let Err(error) = self.save(db) {
                             self.status = format!("backup load failed: save failed: {error}");
                             return;
@@ -2379,9 +2383,9 @@ impl TerminalApp {
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
-        let reminders = self.reminders_for_save(self.dirty);
-        let reminders_generation = self.reminders_generation;
-        if !self.dirty {
+        let reminders = self.reminders_for_save(self.session.dirty);
+        let reminders_generation = self.session.reminders_generation;
+        if !self.session.dirty {
             if let Some(reminders) = reminders {
                 // Only reminders changed: store them against the saved text.
                 let revision = db.replace_reminders_if(
@@ -2390,7 +2394,7 @@ impl TerminalApp {
                     &reminders,
                 )?;
                 self.active_note.updated_at = revision.updated_at;
-                self.persisted_reminders_generation = reminders_generation;
+                self.session.persisted_reminders_generation = reminders_generation;
             }
             self.record_perf_duration("tui.save", "noop", started.elapsed());
             return Ok(());
@@ -2411,15 +2415,15 @@ impl TerminalApp {
             },
         )?;
         if stores_reminders {
-            self.persisted_reminders_generation = reminders_generation;
+            self.session.persisted_reminders_generation = reminders_generation;
         }
         // Only the revision moves on; the document itself stays in
         // `self.editor.lines` and is never round-tripped through the store.
         self.active_note.id = saved.id;
         self.active_note.updated_at = saved.updated_at;
         self.editor.joined_text_cache = Some(body);
-        self.dirty = false;
-        self.history.checkpoint(
+        self.session.dirty = false;
+        self.session.history.checkpoint(
             &self.editor.lines,
             self.editor.cursor_line,
             self.editor.cursor_col,
@@ -2449,8 +2453,8 @@ impl TerminalApp {
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
-        let reminders = self.reminders_for_save(self.dirty);
-        if !self.dirty && reminders.is_none() {
+        let reminders = self.reminders_for_save(self.session.dirty);
+        if !self.session.dirty && reminders.is_none() {
             return Ok(());
         }
         if !self.active_note_is_editable() {
@@ -2459,13 +2463,15 @@ impl TerminalApp {
         }
         // The text and its reminders are taken together, so what is stored
         // always matches.
-        let body = self.dirty.then(|| {
+        let body = self.session.dirty.then(|| {
             self.editor
                 .joined_text_cache
                 .clone()
                 .unwrap_or_else(|| join_lines(&self.editor.lines))
         });
-        let reminders_generation = reminders.as_ref().map(|_| self.reminders_generation);
+        let reminders_generation = reminders
+            .as_ref()
+            .map(|_| self.session.reminders_generation);
         let note_id = self.active_note.id.clone();
         let expected_revision = self.active_note.updated_at.clone();
         let options = app_core::note_sources::SaveOptions {
@@ -2495,7 +2501,7 @@ impl TerminalApp {
             rx,
             reminders_generation,
             note_id,
-            edit_mark: self.last_edit,
+            edit_mark: self.session.edit_seq(),
             expected_revision,
         });
         Ok(())
@@ -2543,7 +2549,7 @@ impl TerminalApp {
             return;
         }
         if let Some(generation) = job.reminders_generation {
-            self.persisted_reminders_generation = generation;
+            self.session.persisted_reminders_generation = generation;
         }
         let (saved, saved_text) = saved;
         if self.active_note.updated_at == job.expected_revision {
@@ -2555,9 +2561,9 @@ impl TerminalApp {
             self.render_state.dirty = true;
             return;
         }
-        if self.last_edit == job.edit_mark {
-            self.dirty = false;
-            self.history.checkpoint(
+        if self.session.edit_seq() == job.edit_mark {
+            self.session.dirty = false;
+            self.session.history.checkpoint(
                 &self.editor.lines,
                 self.editor.cursor_line,
                 self.editor.cursor_col,
@@ -2584,16 +2590,16 @@ impl TerminalApp {
                 Ok(()) => return true,
                 Err(error) => format!("save failed: {error}"),
             }
-        } else if self.dirty || self.reminders_unsaved() {
+        } else if self.session.dirty || self.reminders_unsaved() {
             "no write since last change".to_string()
         } else {
             return true;
         };
-        if self.leave_refused_at == Some(self.last_edit) {
+        if self.leave_refused_at == Some(self.session.edit_seq()) {
             self.leave_refused_at = None;
             return true;
         }
-        self.leave_refused_at = Some(self.last_edit);
+        self.leave_refused_at = Some(self.session.edit_seq());
         self.status = format!("{problem} (:w saves, :e! reloads, repeat to leave without saving)");
         false
     }
@@ -2653,7 +2659,7 @@ impl TerminalApp {
         if revision == self.active_note.updated_at {
             return;
         }
-        if self.dirty || self.reminders_unsaved() {
+        if self.session.dirty || self.reminders_unsaved() {
             if self.outside_change_reported.as_deref() != Some(revision.as_str()) {
                 self.outside_change_reported = Some(revision);
                 self.status =
@@ -2706,12 +2712,12 @@ impl TerminalApp {
             .clone()
             .unwrap_or_else(|| join_lines(&self.editor.lines));
         if let Some(op) = crate::editor_core::operations::replace_text(&text, &note.body) {
-            self.history.break_coalescing();
+            self.session.history.break_coalescing();
             self.apply_edit_operation(&op);
-            self.history.break_coalescing();
+            self.session.history.break_coalescing();
             // The buffer now holds the stored text.
-            self.dirty = false;
-            self.history.checkpoint(
+            self.session.dirty = false;
+            self.session.history.checkpoint(
                 &self.editor.lines,
                 self.editor.cursor_line,
                 self.editor.cursor_col,
@@ -2743,12 +2749,13 @@ impl TerminalApp {
         }
         self.last_reminder_check = Instant::now();
 
-        if self.reminder_ghosts.is_empty() {
+        if self.session.reminder_ghosts.is_empty() {
             return;
         }
 
         let now_ms = notifications::now_epoch_ms();
         let mut due_lines = self
+            .session
             .reminder_ghosts
             .iter()
             .filter_map(|(line_idx, reminder)| {
@@ -2765,7 +2772,7 @@ impl TerminalApp {
         }
 
         for line_idx in due_lines {
-            let Some(reminder) = self.reminder_ghosts.get(&line_idx).cloned() else {
+            let Some(reminder) = self.session.reminder_ghosts.get(&line_idx).cloned() else {
                 continue;
             };
             let body = self
@@ -2790,7 +2797,7 @@ impl TerminalApp {
                 continue;
             }
 
-            if let Some(entry) = self.reminder_ghosts.get_mut(&line_idx) {
+            if let Some(entry) = self.session.reminder_ghosts.get_mut(&line_idx) {
                 entry.reminded_at_ms = Some(now_ms);
             }
             self.reminders_changed_outside_text(db);
@@ -3069,7 +3076,8 @@ impl TerminalApp {
         self.editor.cursor_col = 0;
         self.view.scroll_line = 0;
         self.view.scroll_col = 0;
-        self.dirty = false;
+        self.session.dirty = false;
+        self.session.note_changed();
         self.last_edit = Instant::now();
         self.search.query.clear();
         self.search.matches.clear();
@@ -3077,13 +3085,13 @@ impl TerminalApp {
         self.rebuild_wiki_link_note_suggestions_cache();
         self.render_caches.wiki_link_render_cache.clear();
         self.render_caches.wiki_link_line_render_cache.clear();
-        self.history = super::build_history_for_note(
+        self.session.history = super::build_history_for_note(
             &self.editor.lines,
             self.editor.cursor_line,
             self.editor.cursor_col,
             self.reminder_marks(),
         );
-        self.undo_policy.clear();
+        self.session.undo_policy.clear();
         self.render_state.fence_checkpoints.truncate(1);
         self.render_state.fence_checkpoints_valid_through = 0;
         if self.calc_cross_note_enabled() && self.editor.lines.iter().any(|l| l.contains("[[")) {
@@ -3141,7 +3149,7 @@ impl TerminalApp {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);
         }
-        self.history.checkpoint(
+        self.session.history.checkpoint(
             &self.editor.lines,
             self.editor.cursor_line,
             self.editor.cursor_col,

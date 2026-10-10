@@ -1,3 +1,4 @@
+use note_session::{reminder_marks_of, LineReminderGhost, ReminderMarks, ReminderUndoEntry};
 mod currency;
 mod scripts;
 use super::adapter::TerminalVimAdapter;
@@ -13,7 +14,7 @@ use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
 use crate::editor_core::completion::VariableAutocompleteState;
-use crate::editor_core::history::policy::{UndoAction, UndoPolicy};
+use crate::editor_core::history::policy::UndoAction;
 use crate::editor_core::history::LineHistory;
 use crate::editor_core::vim_actions::{VimRegisterMode, VimRegisterValue as VimRegister};
 
@@ -208,24 +209,6 @@ struct TerminalStartupMetrics {
 
 const MAX_UNDO_ENTRIES: usize = 500;
 const MAX_COMMAND_HISTORY_ENTRIES: usize = 100;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LineReminderGhost {
-    remind_at_ms: i64,
-    display_at: String,
-    line_text: String,
-    reminded_at_ms: Option<i64>,
-}
-
-/// The open note's reminders by line, as undo history carries them.
-type ReminderMarks = std::sync::Arc<Vec<(usize, LineReminderGhost)>>;
-
-#[derive(Debug, Clone)]
-struct ReminderUndoEntry {
-    line_idx: usize,
-    before: Option<LineReminderGhost>,
-    after: Option<LineReminderGhost>,
-}
 
 #[derive(Debug, Clone)]
 struct SwitcherDeleteConfirm {
@@ -462,7 +445,7 @@ struct BackgroundSave {
     note_id: String,
     /// `last_edit` when the saved text was taken: later edits keep the note
     /// dirty once the save lands.
-    edit_mark: Instant,
+    edit_mark: u64,
     /// Revision the save was checked against. When the note's revision has
     /// moved on meanwhile (e.g. a module change), the saved one is stale.
     expected_revision: String,
@@ -495,7 +478,7 @@ struct SelectionStatsKey {
     linewise: bool,
     anchor: (usize, usize),
     cursor: (usize, usize),
-    last_edit: Instant,
+    edit_seq: u64,
 }
 
 struct RenderState {
@@ -619,6 +602,7 @@ pub(super) struct WebSearchResponse {
 }
 
 struct TerminalApp {
+    session: note_session::NoteSession,
     active_note: Note,
     /// Encrypted collection whose password unlocks the open note.
     active_note_key_collection: Option<String>,
@@ -659,7 +643,6 @@ struct TerminalApp {
     note_creation_theme: ThemeConfig,
     /// `[daily]` settings used by `:today`.
     daily_config: app_core::config::DailyNotesConfig,
-    dirty: bool,
     last_edit: Instant,
     status: String,
     command_input: String,
@@ -672,10 +655,10 @@ struct TerminalApp {
     force_quit: bool,
     /// Edit mark of a buffer whose autosave failed; autosave waits for the
     /// next edit (or an explicit save) instead of retrying in a loop.
-    autosave_paused_at: Option<Instant>,
+    autosave_paused_at: Option<u64>,
     /// Edit mark of a buffer `can_leave_note` refused to leave; leaving
     /// again without editing in between discards its unsaved changes.
-    leave_refused_at: Option<Instant>,
+    leave_refused_at: Option<u64>,
     backup: BackupState,
     /// Autosave writing on a background thread, if one is in flight.
     background_save: Option<BackgroundSave>,
@@ -700,14 +683,10 @@ struct TerminalApp {
     // Calc ghost cache
     calc: CalcCache,
     calc_runtime: CalcRuntime,
-    reminder_ghosts: FxHashMap<usize, LineReminderGhost>, // 0-based line index
     /// Coordinates of edits applied since the last history record, for
     /// moving reminders with them (`note_line_edit`).
-    pending_line_edits: Vec<reminder_helpers::PendingLineChange>,
     /// Bumped whenever the reminders change; equal to the persisted one when
     /// they are stored as they are.
-    reminders_generation: u64,
-    persisted_reminders_generation: u64,
     last_reminder_check: Instant,
     /// When the stored note was last checked for changes made outside this
     /// session (`maybe_take_outside_change`).
@@ -747,8 +726,6 @@ struct TerminalApp {
     // Clipboard watch
     clipboard_watch: ClipboardWatch,
     // Undo/redo
-    history: LineHistory<ReminderMarks>,
-    undo_policy: UndoPolicy<ReminderUndoEntry>,
     perf_trace: PerfTraceState,
     /// Terminal graphics support for the image preview. `None` until the
     /// first preview, which queries the terminal, so startup never pays for it.
@@ -797,7 +774,7 @@ impl TerminalApp {
         self.folds.real_to_visible.shrink_to_fit();
         self.folds.hidden_owner.shrink_to_fit();
         self.folds.placeholder_hidden_lines.shrink_to_fit();
-        self.history.compact();
+        self.session.history.compact();
     }
 
     pub(super) fn working_collection_status_suffix(&self) -> String {
@@ -1113,6 +1090,7 @@ impl TerminalApp {
         };
 
         let mut app = Self {
+            session: note_session::NoteSession::new(history, reminder_ghosts),
             active_note,
             active_note_key_collection: None,
             scripts: scripts::ScriptState::new(app_core::config::load_script_config()),
@@ -1151,7 +1129,6 @@ impl TerminalApp {
             background_tasks_enabled,
             note_creation_theme,
             daily_config: app_core::config::DailyNotesConfig::default(),
-            dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
             command_input: String::new(),
@@ -1211,10 +1188,6 @@ impl TerminalApp {
                 last_view_eval_range: None,
                 index_sync_pending: false,
             },
-            reminder_ghosts,
-            pending_line_edits: Vec::new(),
-            reminders_generation: 0,
-            persisted_reminders_generation: 0,
             last_reminder_check: Instant::now(),
             outside_change_checked_at: Instant::now(),
             outside_change_reported: None,
@@ -1257,8 +1230,6 @@ impl TerminalApp {
                 last_text: None,
                 last_poll: Instant::now(),
             },
-            history,
-            undo_policy: UndoPolicy::default(),
             perf_trace: PerfTraceState {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()
@@ -1427,7 +1398,7 @@ impl TerminalApp {
     /// first, so they stay in the database the restore sets aside.
     fn apply_staged_restore(&mut self, db: &Db) -> Result<String, String> {
         self.poll_background_save(db, true);
-        if self.dirty {
+        if self.session.dirty {
             self.save(db)?;
         }
         if !crate::commands::backup::apply_restore_in_session(db)? {
@@ -1474,10 +1445,10 @@ impl TerminalApp {
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
         self.poll_background_save(db, false);
-        if !self.autosave_enabled || self.autosave_paused_at == Some(self.last_edit) {
+        if !self.autosave_enabled || self.autosave_paused_at == Some(self.session.edit_seq()) {
             return Ok(());
         }
-        if (self.dirty || self.reminders_unsaved())
+        if (self.session.dirty || self.reminders_unsaved())
             && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS)
         {
             self.start_background_autosave(db)?;
@@ -1522,13 +1493,13 @@ impl TerminalApp {
                 }
             }
             // Placed against the stored text: wait for unsaved edits to land.
-            if self.dirty {
+            if self.session.dirty {
                 return;
             }
             let started = Instant::now();
             match self.load_reminders(db) {
                 Ok(()) => {
-                    self.history.set_marks(self.reminder_marks());
+                    self.session.history.set_marks(self.reminder_marks());
                     self.record_perf_duration(
                         "tui.idle.dispatch",
                         "startup_reminder_hydration",
