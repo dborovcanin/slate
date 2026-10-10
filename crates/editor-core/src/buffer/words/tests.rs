@@ -205,3 +205,18 @@ fn backward_deletion_joins_physical_lines_and_protects_table_cell_edges() {
     assert_eq!(apply_word_delete(&mut line, range), 5);
     assert_eq!(line, "| αβ  | end |");
 }
+
+#[test]
+fn backward_deletion_in_later_cells_uses_character_bounds_after_unicode() {
+    let doc = lines(&["| é🙂 | alpha beta | tail |"]);
+    let start = doc[0].chars().position(|c| c == 'a').unwrap();
+    let Some(BackwardWordDelete::WithinLine(range)) =
+        prepare_backward_word_delete(&doc, cursor(0, start + 5), true)
+    else {
+        panic!("word delete");
+    };
+    let mut line = doc[0].clone();
+    let result = apply_word_delete(&mut line, range);
+    assert_eq!(line, "| é🙂 |  beta | tail |");
+    assert_eq!(result, start);
+}

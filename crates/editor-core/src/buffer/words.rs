@@ -169,8 +169,8 @@ pub fn prepare_backward_word_delete(
         table::table_cell_word_delete_start(
             line,
             cursor.column,
-            span.edit_start(),
-            line[..span.navigation_anchor()].chars().count(),
+            char_column_for_byte(line, span.edit_start()),
+            char_column_for_byte(line, span.navigation_anchor()),
         )?
     } else {
         let chars: Vec<char> = line.chars().collect();
@@ -204,6 +204,14 @@ pub fn prepare_backward_word_delete(
         start_byte,
         end_byte,
     }))
+}
+
+fn char_column_for_byte(text: &str, byte: usize) -> usize {
+    let mut boundary = byte.min(text.len());
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    text[..boundary].chars().count()
 }
 
 pub fn apply_word_delete(line: &mut String, range: WordDeleteRange) -> usize {
