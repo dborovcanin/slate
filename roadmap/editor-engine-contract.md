@@ -203,6 +203,7 @@ The host still orders text/reminder undo actions and presents cursor clamps whil
 lifecycle extraction is in progress. Direct synchronous calc can rewrite trailers
 before history records; keyboard calc may defer until afterwards. During this
 transition the terminal requests `defer_history` and calls `finish_edit` once
-after upkeep. Calc-derived replacements stay inside that transaction. This
-continuation and the public derived-edit request must disappear when calc moves
-in step 10; they are not the final front-end contract.
+after upkeep. Calc-derived replacements stay inside that transaction. The public derived-edit request was removed in Step 10b: full calc and
+trailer rewriting now run inside the session. The deferred-history
+continuation remains pending edit-upkeep coordination in Step 10c; it is
+not the final front-end contract.

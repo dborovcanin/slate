@@ -1060,4 +1060,13 @@ and generation reuse; extern variables are acquired only after evaluation
 guards. Two shared tests cover suffix remapping and absolute range slots.
 Workspace checks pass with no new warnings. Release large-note gates pass
 (13.23 s), with no 30k/100k investigation thresholds crossed. Full recompute
-and edit-upkeep coordination remain for Step 10b; Step 10 stays unchecked.
+remains for Step 10b, followed by edit-upkeep coordination; Step 10 stays unchecked.
+
+Step 10b: full/incremental calc recomputation, pathological-window policy,
+table seed reuse, selection-aware trailer rewrites and cache snapshots moved
+into the session. The public DerivedLineReplace bypass was removed. Lazy
+extern lookup occurs inside actual incremental recomputation. Shared trailer
+coverage and all workspace checks pass, with no new warnings. Release
+large-note gates pass (13.29 s), no 30k/100k investigation thresholds crossed.
+A separate Step 10c coordinates edit upkeep and removes deferred history;
+Step 10 remains unchecked until that boundary is complete.

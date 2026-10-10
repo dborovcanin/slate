@@ -27,12 +27,6 @@ pub enum SessionEdit<'a> {
         linewise: bool,
         delete: bool,
     },
-    /// Calc rewrites belong to the originating edit, not an independent undo step.
-    DerivedLineReplace {
-        line: usize,
-        range: Range<usize>,
-        text: &'a str,
-    },
     Primitive(PrimitiveEdit<'a>),
     LineReplace {
         line: usize,
@@ -87,7 +81,6 @@ impl NoteSession {
         let mut fold_rescan = false;
         let mut register = None;
         let mut text_changed = true;
-        let mut derived = false;
         let delta = match edit {
             SessionEdit::EnsureBuffer => {
                 if doc.lines.is_empty() {
@@ -174,13 +167,7 @@ impl NoteSession {
                 doc.set_cursor(cursor);
                 delta
             }
-            SessionEdit::DerivedLineReplace { line, range, text } => {
-                let plan = prepare_line_replace(&doc.lines, line, range, text)?;
-                let delta = plan.delta;
-                apply_line_replace(&mut doc.lines, plan);
-                derived = true;
-                delta
-            }
+
             SessionEdit::Primitive(edit) => {
                 let plan = prepare_primitive_edit(&doc.lines, doc.cursor(), edit)?;
                 let delta = plan.delta;
@@ -253,7 +240,7 @@ impl NoteSession {
                 }
             }
         };
-        if text_changed && !derived {
+        if text_changed {
             doc.text_generation = doc.text_generation.wrapping_add(1);
             doc.joined_text_cache = None;
             self.dirty = true;
@@ -268,7 +255,7 @@ impl NoteSession {
             register,
             text_changed,
         };
-        if !ctx.defer_history && text_changed && !derived {
+        if !ctx.defer_history && text_changed {
             self.finish_edit(doc, ctx, outcome.delta);
         }
         Some(outcome)

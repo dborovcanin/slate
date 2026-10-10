@@ -120,3 +120,73 @@ pub fn calc_data_from_result(result: NoteEvaluationResult) -> CalcData {
         variable_names,
     }
 }
+
+use app_core::cross_note::CrossNoteVarIndex;
+use std::sync::{Arc, Mutex};
+/// Full-note eval that also reads/writes the shared cross-note variable index.
+/// Use this instead of `compute_calc_data` for whole-document recomputes so that
+/// cross-note variable references resolve correctly and exported variables stay
+/// visible to other notes.
+pub fn compute_calc_data_for_note(
+    engine: &CalcEngine,
+    lines: &[String],
+    variables_enabled: bool,
+    cross_note_enabled: bool,
+    table_enabled: bool,
+    note_id: &str,
+    cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
+) -> CalcData {
+    // File notes cannot be linked, so they neither import nor export.
+    let linkable = cross_note_enabled && editor_core::markdown_tokens::is_note_link_id(note_id);
+    let has_cross_note_syntax = linkable && lines.iter().any(|l| l.contains("[["));
+
+    let (extern_vars, precomputed_refs) = if has_cross_note_syntax {
+        // Scan outside the lock: TUI runs on a single event-loop thread so
+        // no concurrent eval can race update_deps for the same note_id.
+        let refs = app_core::calc::scan_cross_note_refs(lines);
+        let extern_vars = if let Ok(mut index) = cross_note_var_index.lock() {
+            index.update_deps(note_id, &refs);
+            index.extern_vars_for(note_id)
+        } else {
+            Vec::new()
+        };
+        (extern_vars, Some(refs))
+    } else {
+        (Vec::new(), None)
+    };
+
+    let result = engine.evaluate_note_context(
+        lines,
+        NoteEvaluationOptions {
+            variables_enabled,
+            cross_note_enabled,
+            table_enabled,
+            eval_range: None,
+            extern_vars,
+            precomputed_refs,
+            ..Default::default()
+        },
+    );
+
+    if linkable {
+        if let Ok(mut index) = cross_note_var_index.lock() {
+            index.update_exports(note_id, &result.variables, &result.variable_values);
+            index.update_deps(note_id, &result.cross_note_refs);
+        }
+    }
+
+    let mut variable_names = result
+        .variables
+        .into_iter()
+        .map(|entry| entry.normalized)
+        .collect::<Vec<_>>();
+    variable_names.sort();
+    variable_names.dedup();
+
+    CalcData {
+        first_line: result.first_line,
+        line_results: result.line_results,
+        cell_results: result.table_cell_results,
+        variable_names,
+    }
+}
