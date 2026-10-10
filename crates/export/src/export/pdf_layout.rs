@@ -4,7 +4,7 @@ use super::pdf_style::{
     PdfExportPalette, PdfRgbColor, StyledChar, TextStyle, HELVETICA_BOLD_CHAR_WIDTHS,
     HELVETICA_CHAR_WIDTHS,
 };
-use crate::terminal::render::VariableNames;
+use note_session::variables::VariableNames;
 use app_core::calc::{CalcEngine, NoteEvaluationOptions};
 use editor_core::calc_plan;
 use editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType};

@@ -16,6 +16,7 @@ note-session = { path = "../session" }
 app-core = { path = "../app-core" }
 editor-core = { path = "../editor-core" }
 slate-mcp = { path = "../mcp" }
+slate-export = { path = "../export" }
 ulid = "1"
 regex = "1"
 aho-corasick = "1"
