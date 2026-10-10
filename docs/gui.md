@@ -34,8 +34,8 @@ unaffected.
   plus host commands: write/quit/reload, today, date, modules, collections
   (create, delete, purge, join, leave), reminders (`:remind`), scripts
   (`:run`), export to Markdown or text, note encryption and decryption.
-- **Collection browser** (`Ctrl+O`) and **note history** (`Ctrl+Shift+H`)
-  with diff preview and restore.
+- **Collection browser** (`Ctrl+B`) and **note history** (`Ctrl+Shift+H`, or
+  `Shift+H` / `Ctrl+R` on a note in the browser) with diff preview and restore.
 - **Encrypted notes:** locked notes show a placeholder and ask for the
   password; `:encrypt` / `:decrypt` prompt for it.
 - **Images:** a line that is only `![alt](src)` is drawn as the image (scaled to
@@ -43,7 +43,26 @@ unaffected.
   and `:paste-image` import a clipboard image into the note.
 - **Wiki links:** `[[id]]` shows the target note's title away from the cursor
   (via `note_session::display::wiki`); `Ctrl+]` and `gd` follow them.
-- **Tables:** hover shows + bars to add a row or column.
+- **Tables:** the row under the cursor shows the edited cell with its cursor;
+  click a cell to edit it. `Tab`/`Shift+Tab`, `Enter`, the arrows, `Backspace`
+  and `Delete` follow the terminal app's table rules (columns realign as you
+  type, cells merge at their edges, pipes are never eaten). Hover shows +
+  bars to add a row or column.
+- **Autocomplete:** variable and formula-helper names, `[[ID]].variable`, and
+  `[[` note and `#heading` links open a popup as in the terminal app:
+  `Up`/`Down` move, `Tab` or `Enter` accept, `Esc` closes. Names appear after
+  `variable_autocomplete_min_chars` characters.
+- **Word keys:** `Ctrl+Left`/`Ctrl+Right` move by word (with `Shift`, extend the
+  selection in standard mode), `Ctrl+Backspace` deletes the previous word.
+- **Sidebar search:** the box at the top of the sidebar (`Ctrl+Shift+F`) finds
+  notes by title and by text; `Up`/`Down` and `Enter` open a result.
+- **Exchange rates:** cached rates are installed at startup and refreshed in
+  the background (`[currency]` in the config); `:currency refresh` runs one
+  now.
+- **Theme:** `[theme]` in the config (color scheme, accent, `[theme.colors]`)
+  drives the colours, like the terminal app; View › Theme can switch to the
+  built-in dark or light look. `none` colours have no meaning in a window and
+  are ignored.
 - **Clipboard:** yanks go to the system clipboard; `p` with an empty register
   and Ctrl+V paste from it.
 
@@ -80,14 +99,14 @@ the editing mode, the theme and the sidebar are remembered in
 
 These are reported in the status bar when invoked:
 
-- PDF export, `:backup`, `:web-search`, `:currency refresh`, clip-watch,
+- PDF export, `:backup`, `:web-search`, clip-watch,
   folding, in-note search (`/`), macros.
 - Vertical motion follows logical lines, not wrapped rows (`gj`/`gk` too).
 - IME composition and accessibility are untested.
 
 Terminal-only behavior that the shared modules do not own yet (fold-aware
-motion, table-cell motion, autoformat after typing, autocomplete popups) is
-the main gap between the two front ends; see `roadmap/arch-refactor.md`.
+motion) is the main gap between the two front ends; see
+`roadmap/arch-refactor.md`.
 
 ## Why a separate workspace
 

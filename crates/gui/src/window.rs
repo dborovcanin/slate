@@ -51,6 +51,8 @@ fn word_at(text: &str, col: usize) -> (usize, usize) {
 }
 
 pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Format", "Calc", "Help"];
+type CellBounds = std::rc::Rc<std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>>>;
+
 /// The sidebar's search box while it has the keyboard.
 #[derive(Default)]
 pub(crate) struct SidebarSearch {
@@ -86,6 +88,8 @@ pub struct SlateWindow {
     hover_table: Option<(usize, usize)>,
     /// Text layouts from the last paint, by line, to map mouse positions to characters.
     layouts: std::cell::RefCell<std::collections::HashMap<usize, gpui::TextLayout>>,
+    /// Painted cell bounds of table rows, by line.
+    cell_bounds: std::cell::RefCell<std::collections::HashMap<usize, CellBounds>>,
     /// Where a mouse drag started; set while the left button is held.
     drag_anchor: Option<(usize, usize)>,
     /// Window size in pixels from the last paint, to reveal far jumps and fit the status bar.
@@ -135,6 +139,7 @@ impl SlateWindow {
             overlay: Default::default(),
             hover_table: None,
             layouts: Default::default(),
+            cell_bounds: Default::default(),
             drag_anchor: None,
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
@@ -987,8 +992,11 @@ impl SlateWindow {
 
     /// The source column under `position` on line `ix`, from the last paint.
     fn column_at(&self, ix: usize, position: gpui::Point<gpui::Pixels>) -> Option<usize> {
-        let layout = self.layouts.borrow().get(&ix)?.clone();
         let line = self.cache.get(ix)?.as_ref()?;
+        if let LineKind::TableRow { cursor, .. } = &line.kind {
+            return self.table_column_at(ix, cursor.as_ref().map(|c| c.cell), position);
+        }
+        let layout = self.layouts.borrow().get(&ix)?.clone();
         let map = line.map.as_ref()?;
         // gpui panics for a layout that was measured but never painted.
         let index = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1008,6 +1016,40 @@ impl SlateWindow {
                 .unwrap_or(len)
                 .min(len),
         )
+    }
+
+    /// Source column for a click in table row `ix`: inside the cell that was
+    /// hit, at the clicked character in the cell being edited and at the end
+    /// of its content in the others.
+    fn table_column_at(
+        &self,
+        ix: usize,
+        active: Option<usize>,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<usize> {
+        let bounds = self.cell_bounds.borrow().get(&ix)?.borrow().clone();
+        let cell = bounds
+            .iter()
+            .position(|b| position.x < b.right())
+            .unwrap_or(bounds.len().checked_sub(1)?);
+        let (start, end) = self.host.table_cell_span(ix, cell)?;
+        if active != Some(cell) {
+            return Some(end);
+        }
+        let layout = self.layouts.borrow().get(&ix)?.clone();
+        let index = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            layout.index_for_position(position)
+        }))
+        .ok()?;
+        let byte = match index {
+            Ok(b) | Err(b) => b,
+        };
+        let text = self.cache.get(ix)?.as_ref().and_then(|l| match &l.kind {
+            LineKind::TableRow { cells, .. } => cells.get(cell).map(|c| c.text.clone()),
+            _ => None,
+        })?;
+        let chars = text[..byte.min(text.len())].chars().count();
+        Some((start + chars).min(end))
     }
 
     /// Button down on line `ix`: place the cursor at the character, or select
@@ -1181,7 +1223,10 @@ impl SlateWindow {
             _ => None,
         };
         let preview = self.host.preview;
+        let cells: Option<CellBounds> = matches!(line.kind, LineKind::TableRow { .. })
+            .then(|| self.cell_bounds.borrow_mut().entry(ix).or_default().clone());
         let style = LineStyle {
+            cells: cells.as_ref(),
             image: image.as_ref(),
             theme: &t,
             sans: &self.fonts.sans,

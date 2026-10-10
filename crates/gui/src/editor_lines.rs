@@ -1,6 +1,6 @@
 //! Painting one editor line from a `LineView`.
 use crate::images::ImageSlot;
-use crate::note_view::{LineKind, LineView, Run, TableCell};
+use crate::note_view::{LineKind, LineView, Run, TableCell, TableCursor};
 use crate::theme::Theme;
 use gpui::{
     canvas, div, img, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString,
@@ -24,6 +24,9 @@ pub struct LineStyle<'a> {
     pub focused: bool,
     /// The decoded image of an `LineKind::Image` line.
     pub image: Option<&'a ImageSlot>,
+    /// Receives where each cell of a table row was painted, for mouse
+    /// hit-testing.
+    pub cells: Option<&'a std::rc::Rc<std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>>>>,
 }
 
 /// Styled text for `runs`, with the selection and a block cursor drawn as
@@ -124,7 +127,17 @@ fn merge(
 
 /// The line's text with its cursor and selection, as one run so it wraps.
 fn text_with_cursor(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> AnyElement {
-    let (text, bar) = styled(&line.runs, line.selection.as_ref(), line.cursor, s);
+    cursor_text(&line.runs, line.selection.as_ref(), line.cursor, s, layout)
+}
+
+fn cursor_text(
+    runs: &[Run],
+    selection: Option<&Range<usize>>,
+    cursor: Option<usize>,
+    s: &LineStyle,
+    layout: &mut Option<TextLayout>,
+) -> AnyElement {
+    let (text, bar) = styled(runs, selection, cursor, s);
     // The window maps mouse positions to characters through this layout.
     let text_layout = text.layout().clone();
     *layout = Some(text_layout.clone());
@@ -174,7 +187,17 @@ fn checkbox(checked: bool, t: &Theme) -> impl IntoElement {
     }
 }
 
-fn table_row(cells: &[TableCell], header: bool, t: &Theme) -> AnyElement {
+fn table_row(
+    cells: &[TableCell],
+    header: bool,
+    cursor: Option<TableCursor>,
+    s: &LineStyle,
+    layout: &mut Option<TextLayout>,
+) -> AnyElement {
+    let t = s.theme;
+    if let Some(store) = s.cells {
+        store.borrow_mut().resize(cells.len(), Default::default());
+    }
     div()
         .w_full()
         .flex()
@@ -191,16 +214,44 @@ fn table_row(cells: &[TableCell], header: bool, t: &Theme) -> AnyElement {
             } else {
                 t.text
             };
+            let active = cursor.filter(|c| c.cell == i);
+            let content = match active {
+                Some(c) => {
+                    let runs = [Run {
+                        text: cell.text.clone(),
+                        style: Default::default(),
+                    }];
+                    cursor_text(&runs, None, Some(c.col), s, layout)
+                }
+                None => div().child(cell.text.clone()).into_any_element(),
+            };
+            let store = s.cells.cloned();
             div()
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .px(px(12.0))
                 .py(px(3.0))
                 .text_color(color)
                 .when(i > 0, |d| d.flex().justify_end())
+                .when(active.is_some(), |d| d.bg(t.active.opacity(0.5)))
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .child(cell.text.clone())
+                .child(content)
+                .child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, _, _, _| {
+                            if let Some(store) = &store {
+                                if let Some(slot) = store.borrow_mut().get_mut(i) {
+                                    *slot = bounds;
+                                }
+                            }
+                        },
+                    )
+                    .absolute()
+                    .size_full(),
+                )
         }))
         .into_any_element()
 }
@@ -273,7 +324,11 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
             )
             .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
             .into_any_element(),
-        LineKind::TableRow { cells, header } => table_row(cells, *header, t),
+        LineKind::TableRow {
+            cells,
+            header,
+            cursor,
+        } => table_row(cells, *header, *cursor, s, layout),
         // The header row already draws the rule under it.
         LineKind::TableDelimiter => div().into_any_element(),
         LineKind::Image { alt, .. } => image_box(s.image, alt, t),

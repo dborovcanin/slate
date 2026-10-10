@@ -46,6 +46,12 @@ pub struct Run {
     pub style: SemanticStyle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableCursor {
+    pub cell: usize,
+    pub col: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableCell {
     pub text: String,
@@ -65,6 +71,8 @@ pub enum LineKind {
     TableRow {
         cells: Vec<TableCell>,
         header: bool,
+        /// The cursor's cell and its character offset in that cell's text.
+        cursor: Option<TableCursor>,
     },
     /// The `| --- |` row under a table header; drawn as the header rule.
     TableDelimiter,
@@ -924,6 +932,34 @@ impl NoteHost {
         }
     }
 
+    /// The cell the cursor is in and where in its text; past the row's end
+    /// it sits at the end of the last cell.
+    fn table_cursor(&self, index: usize, cells: &[TableCell]) -> Option<TableCursor> {
+        use note_session::display::table::{
+            table_cell_content_start_char, table_cell_info_at_char,
+        };
+        let last = cells.len().checked_sub(1)?;
+        let cell = table_cell_info_at_char(self.doc.lines(), index, self.doc.cursor_col)
+            .map_or(last, |info| info.column_index.min(last));
+        let start = table_cell_content_start_char(&self.doc.lines()[index], cell)?;
+        let len = cells[cell].text.chars().count();
+        Some(TableCursor {
+            cell,
+            col: self.doc.cursor_col.saturating_sub(start).min(len),
+        })
+    }
+
+    /// Source columns `(start, end)` of cell `cell`'s content in row `index`.
+    pub fn table_cell_span(&self, index: usize, cell: usize) -> Option<(usize, usize)> {
+        let line = self.doc.lines().get(index)?;
+        let start = note_session::display::table::table_cell_content_start_char(line, cell)?;
+        let len = table_syntax::split_table_cells(line)
+            .get(cell)?
+            .chars()
+            .count();
+        Some((start, start + len))
+    }
+
     fn table_line(&self, index: usize, text: &str) -> LineView {
         let lines = self.doc.lines();
         let mut view = LineView {
@@ -943,7 +979,7 @@ impl NoteHost {
         let header = table_syntax::is_delimiter_line_in(lines, index + 1);
         let results = self.session.calc().cell_results.get(index);
         let is_cursor = index == self.doc.cursor_line && !self.preview;
-        let cells = table_syntax::split_table_cells(text)
+        let cells: Vec<TableCell> = table_syntax::split_table_cells(text)
             .into_iter()
             .enumerate()
             .map(|(cell_index, raw)| {
@@ -961,7 +997,14 @@ impl NoteHost {
                 }
             })
             .collect();
-        view.kind = LineKind::TableRow { cells, header };
+        let cursor = is_cursor
+            .then(|| self.table_cursor(index, &cells))
+            .flatten();
+        view.kind = LineKind::TableRow {
+            cells,
+            header,
+            cursor,
+        };
         view
     }
 }
@@ -1102,13 +1145,13 @@ mod tests {
     fn tables_show_formula_values_except_on_the_cursor_row() {
         let mut f = fixture(LISBON);
         let lines = f.host.lines(8, 12);
-        let LineKind::TableRow { cells, header } = &lines[0].kind else {
+        let LineKind::TableRow { cells, header, .. } = &lines[0].kind else {
             panic!("header row")
         };
         assert!(*header);
         assert_eq!(cells[0].text, "Item");
         assert_eq!(lines[1].kind, LineKind::TableDelimiter);
-        let LineKind::TableRow { cells, header } = &lines[2].kind else {
+        let LineKind::TableRow { cells, header, .. } = &lines[2].kind else {
             panic!("body row")
         };
         assert!(!*header);
