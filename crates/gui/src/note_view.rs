@@ -105,6 +105,17 @@ pub struct LineView {
     pub below: Option<String>,
     /// A reminder's time, drawn as a pill after the text.
     pub chip: Option<String>,
+    /// Search matches in the runs' characters; the current one is flagged.
+    pub found: Vec<(Range<usize>, bool)>,
+}
+
+/// The matches of an in-note search.
+#[derive(Debug, Clone, Default)]
+pub struct Find {
+    pub query_lower: String,
+    /// `(line, start column, end column)` in order.
+    pub matches: Vec<(usize, usize, usize)>,
+    pub current: usize,
 }
 
 /// `![alt](src)` and nothing else on the line.
@@ -149,6 +160,8 @@ pub struct NoteHost {
     /// The working collection `(id, name)`: the sidebar lists its notes and
     /// new notes join it. `None` shows every note.
     pub working: Option<(String, String)>,
+    /// The in-note search: matches to highlight and step through.
+    pub find: Option<Find>,
     /// Preview mode: no cursor, so every line shows as rendered.
     pub preview: bool,
     /// Titles of all notes by id, for wiki-link display.
@@ -218,6 +231,7 @@ impl NoteHost {
             notes,
             working: None,
             preview: false,
+            find: None,
             titles: Default::default(),
             last_edit: None,
             insert_only: false,
@@ -331,6 +345,45 @@ impl NoteHost {
     /// One key through the shared input pipeline; calc stays current.
     pub fn handle_key(&mut self, key: VimKey) -> InputOutcome {
         self.run_input(|session, doc, input, cx| session.handle_key(doc, input, key, cx))
+    }
+
+    /// Search the note for `query` (case-insensitive), starting from the
+    /// cursor; returns the number of matches.
+    pub fn set_find(&mut self, query: &str) -> usize {
+        if query.is_empty() {
+            self.find = None;
+            return 0;
+        }
+        let query_lower = query.to_lowercase();
+        let mut matches = Vec::new();
+        editor_core::search::find_matches(self.doc.lines(), &query_lower, &mut matches);
+        let cursor = (self.doc.cursor_line, self.doc.cursor_col);
+        let current = matches
+            .iter()
+            .position(|m| (m.0, m.1) >= cursor)
+            .unwrap_or(0);
+        let count = matches.len();
+        self.find = Some(Find {
+            query_lower,
+            matches,
+            current,
+        });
+        count
+    }
+
+    /// Make match `delta` away (wrapping) the current one and move the
+    /// cursor there; `None` when there are no matches.
+    pub fn find_step(&mut self, delta: isize) -> Option<(usize, usize)> {
+        let find = self.find.as_mut()?;
+        let len = find.matches.len() as isize;
+        if len == 0 {
+            return None;
+        }
+        find.current = (find.current as isize + delta).rem_euclid(len) as usize;
+        let (line, col, _) = find.matches[find.current];
+        self.doc.cursor_line = line;
+        self.doc.cursor_col = col;
+        Some((line, col))
     }
 
     /// Move to the previous or next word start.
@@ -919,6 +972,18 @@ impl NoteHost {
             Some(None) => (None, true),
             None => (None, false),
         };
+        let found = self.find.as_ref().map_or_else(Vec::new, |f| {
+            let first = f.matches.partition_point(|m| m.0 < index);
+            f.matches[first..]
+                .iter()
+                .take_while(|m| m.0 == index)
+                .enumerate()
+                .filter_map(|(i, &(_, a, b))| {
+                    let range = shown(a, Affinity::After)?..shown(b, Affinity::Before)?;
+                    Some((range, first + i == f.current))
+                })
+                .collect()
+        });
         LineView {
             kind,
             runs: runs(&styled, start),
@@ -932,6 +997,7 @@ impl NoteHost {
             display_skip: map.source_to_display(start, Affinity::After).unwrap_or(0),
             below,
             chip: None,
+            found,
         }
     }
 
@@ -976,6 +1042,7 @@ impl NoteHost {
             display_skip: 0,
             below: None,
             chip: None,
+            found: Vec::new(),
         };
         if table_syntax::is_delimiter_line_in(lines, index) {
             return view;
@@ -1260,6 +1327,27 @@ mod tests {
         // Backspace never eats a pipe.
         let (lines, _) = table_after((2, 2), &[VimKey::Backspace]);
         assert!(lines[2].matches('|').count() == 3, "{:?}", lines[2]);
+    }
+
+    #[test]
+    fn find_highlights_and_steps_through_matches() {
+        let mut f = fixture("Rent is due\nnothing\nrent again, RENT");
+        assert_eq!(f.host.set_find("rent"), 3);
+        // From the cursor at the start: the first match is current.
+        assert_eq!(f.host.find.as_ref().unwrap().current, 0);
+        let marks = |f: &Fixture, line: usize| f.host.lines(line, line + 1)[0].found.clone();
+        assert_eq!(marks(&f, 0), vec![(0..4, true)]);
+        assert!(marks(&f, 1).is_empty());
+        assert_eq!(marks(&f, 2), vec![(0..4, false), (12..16, false)]);
+        assert_eq!(f.host.find_step(1), Some((2, 0)));
+        assert_eq!(f.host.find_step(1), Some((2, 12)));
+        // Wraps around in both directions.
+        assert_eq!(f.host.find_step(1), Some((0, 0)));
+        assert_eq!(f.host.find_step(-1), Some((2, 12)));
+        assert_eq!(f.host.set_find("zzz"), 0);
+        assert_eq!(f.host.find_step(1), None);
+        assert_eq!(f.host.set_find(""), 0);
+        assert!(f.host.find.is_none());
     }
 
     #[test]

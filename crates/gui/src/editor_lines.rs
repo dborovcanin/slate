@@ -35,6 +35,7 @@ pub struct LineStyle<'a> {
 /// highlights. A bar cursor is drawn between two texts by the caller.
 fn styled(
     runs: &[Run],
+    found: &[(Range<usize>, bool)],
     selection: Option<&Range<usize>>,
     block: Option<usize>,
     s: &LineStyle,
@@ -63,6 +64,19 @@ fn styled(
     // Later highlights override earlier ones; split the base runs so the
     // overlays below always land on whole runs.
     let mut overlays: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    for (range, current) in found {
+        overlays.push((
+            bytes(range.clone()),
+            HighlightStyle {
+                background_color: Some(if *current {
+                    t.search_current.opacity(0.55)
+                } else {
+                    t.search_match.opacity(0.3)
+                }),
+                ..Default::default()
+            },
+        ));
+    }
     if let Some(sel) = selection {
         overlays.push((
             bytes(sel.clone()),
@@ -129,17 +143,25 @@ fn merge(
 
 /// The line's text with its cursor and selection, as one run so it wraps.
 fn text_with_cursor(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> AnyElement {
-    cursor_text(&line.runs, line.selection.as_ref(), line.cursor, s, layout)
+    cursor_text(
+        &line.runs,
+        &line.found,
+        line.selection.as_ref(),
+        line.cursor,
+        s,
+        layout,
+    )
 }
 
 fn cursor_text(
     runs: &[Run],
+    found: &[(Range<usize>, bool)],
     selection: Option<&Range<usize>>,
     cursor: Option<usize>,
     s: &LineStyle,
     layout: &mut Option<TextLayout>,
 ) -> AnyElement {
-    let (text, bar) = styled(runs, selection, cursor, s);
+    let (text, bar) = styled(runs, found, selection, cursor, s);
     // The window maps mouse positions to characters through this layout.
     let text_layout = text.layout().clone();
     *layout = Some(text_layout.clone());
@@ -243,7 +265,7 @@ fn table_row(
                         text: cell.text.clone(),
                         style: Default::default(),
                     }];
-                    cursor_text(&runs, None, Some(c.col), s, layout)
+                    cursor_text(&runs, &[], None, Some(c.col), s, layout)
                 }
                 None => div().child(cell.text.clone()).into_any_element(),
             };

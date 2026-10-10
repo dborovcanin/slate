@@ -70,6 +70,13 @@ fn edited_label(updated_at: &str) -> String {
 /// Line height relative to the text size.
 const LINE_HEIGHT_RATIO: f32 = 26.0 / 14.0;
 
+/// The find bar while a search is being typed.
+pub(crate) struct SearchBar {
+    query: String,
+    /// Where the cursor was, restored by `Esc`.
+    origin: (usize, usize),
+}
+
 /// The sidebar's search box while it has the keyboard.
 #[derive(Default)]
 pub(crate) struct SidebarSearch {
@@ -116,6 +123,9 @@ pub struct SlateWindow {
     pub(crate) currency: crate::currency::Currency,
     pub(crate) font_size: f32,
     sidebar_search: Option<SidebarSearch>,
+    search_bar: Option<SearchBar>,
+    /// The last search, for `n` and `N`.
+    last_search: String,
     completion: Option<Completion>,
     completion_pos: (usize, usize),
     completion_min: usize,
@@ -164,6 +174,8 @@ impl SlateWindow {
             currency,
             font_size: settings.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE),
             sidebar_search: None,
+            search_bar: None,
+            last_search: String::new(),
             completion: None,
             completion_pos: (0, 0),
             completion_min: usize::from(
@@ -398,6 +410,8 @@ impl SlateWindow {
     ) {
         let (old_cursor, old_anchor) = before;
         if outcome.text_changed {
+            // Match positions are stale after an edit; `n` searches again.
+            self.host.find = None;
             let first = outcome
                 .first_changed_line
                 .unwrap_or_else(|| self.top_line());
@@ -549,8 +563,9 @@ impl SlateWindow {
                 self.completion_pos = self.cursor_pos();
             }
             HostRequest::OpenCommandBar => crate::overlays::open_command_bar(self, ":", cx),
-            HostRequest::OpenSearch => self.set_status("search is not in the desktop app yet"),
-            HostRequest::SearchNext | HostRequest::SearchPrev => {}
+            HostRequest::OpenSearch => self.open_search(cx),
+            HostRequest::SearchNext => self.search_step(1, cx),
+            HostRequest::SearchPrev => self.search_step(-1, cx),
             HostRequest::Unsupported(intent) => {
                 self.set_status(format!("{intent:?} is not in the desktop app yet"))
             }
@@ -873,10 +888,7 @@ impl SlateWindow {
             KeyCommand::FollowLink => crate::commands::follow_link(self, cx),
             KeyCommand::CollectionBrowser => crate::overlays::open_browser(self, cx),
             KeyCommand::History => crate::overlays::open_history(self, cx),
-            KeyCommand::Find => {
-                self.set_status("search is not in the desktop app yet");
-                cx.notify();
-            }
+            KeyCommand::Find => self.open_search(cx),
             KeyCommand::Bold => self.run_command("format bold", cx),
             KeyCommand::Italic => self.run_command("format italic", cx),
             KeyCommand::NewNote => crate::commands::new_note(self, cx),
@@ -913,6 +925,9 @@ impl SlateWindow {
         if self.sidebar_search.is_some() && self.sidebar_search_key(ev, cx) {
             return;
         }
+        if self.search_bar.is_some() && self.search_key(ev, cx) {
+            return;
+        }
         if self.host.preview {
             self.preview_key(ev, cx);
             return;
@@ -931,6 +946,103 @@ impl SlateWindow {
                 cx.notify();
             }
         }
+    }
+
+    /// `/` or `Ctrl+F`: ask for a search term.
+    pub(crate) fn open_search(&mut self, cx: &mut Context<Self>) {
+        if self.host.locked() || self.host.preview {
+            return;
+        }
+        self.search_bar = Some(SearchBar {
+            query: String::new(),
+            origin: self.cursor_pos(),
+        });
+        cx.notify();
+    }
+
+    /// Show the search's current match: move there and repaint.
+    fn show_match(&mut self, cx: &mut Context<Self>) {
+        self.restyle();
+        self.reveal_cursor();
+        cx.notify();
+    }
+
+    /// `n` / `N`, and the bar's next and previous.
+    pub(crate) fn search_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.host.find.is_none() && !self.last_search.is_empty() {
+            let query = self.last_search.clone();
+            self.host.set_find(&query);
+        }
+        if self.host.find.is_none() {
+            self.set_status("no previous search");
+            cx.notify();
+            return;
+        }
+        match self.host.find_step(delta) {
+            Some(_) => self.show_match(cx),
+            None => {
+                self.set_status(format!("no matches for {}", self.last_search));
+                cx.notify();
+            }
+        }
+    }
+
+    /// Keys while the search bar is open; `true` when handled.
+    fn search_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let k = &ev.keystroke;
+        let m = k.modifiers;
+        let Some(bar) = &mut self.search_bar else {
+            return false;
+        };
+        let typed = !m.control && !m.platform && !m.alt;
+        match k.key.as_str() {
+            "escape" => {
+                let (line, col) = bar.origin;
+                self.search_bar = None;
+                self.host.find = None;
+                self.host.doc.cursor_line = line;
+                self.host.doc.cursor_col = col;
+                self.show_match(cx);
+            }
+            "enter" => {
+                self.last_search = bar.query.clone();
+                self.search_bar = None;
+                cx.notify();
+            }
+            "tab" if m.shift => self.search_step(-1, cx),
+            "up" => self.search_step(-1, cx),
+            "p" if m.control => self.search_step(-1, cx),
+            "tab" | "down" => self.search_step(1, cx),
+            "n" if m.control => self.search_step(1, cx),
+            key if key == "backspace" || (typed && k.key_char.is_some()) => {
+                if k.key == "backspace" {
+                    bar.query.pop();
+                } else if let Some(ch) = k
+                    .key_char
+                    .as_deref()
+                    .filter(|c| !c.chars().any(char::is_control))
+                {
+                    bar.query.push_str(ch);
+                }
+                let query = bar.query.clone();
+                self.last_search = query.clone();
+                self.host.set_find(&query);
+                // Search as you type, from where the search began.
+                let (line, col) = self.search_bar.as_ref().map_or((0, 0), |b| b.origin);
+                self.host.doc.cursor_line = line;
+                self.host.doc.cursor_col = col;
+                self.host.set_find(&query);
+                self.host.find_step(0);
+                self.show_match(cx);
+            }
+            _ => {
+                if !(m.control || m.platform) {
+                    return true;
+                }
+                return false;
+            }
+        }
+        true
     }
 
     /// Keys while the sidebar search has focus; `true` when handled.
@@ -1836,6 +1948,53 @@ impl SlateWindow {
             )
     }
 
+    /// The find bar, at the editor's top right.
+    fn search_bar_view(&self) -> Option<AnyElement> {
+        let bar = self.search_bar.as_ref()?;
+        let t = self.theme;
+        let (current, total) = self
+            .host
+            .find
+            .as_ref()
+            .map_or((0, 0), |f| (f.current + 1, f.matches.len()));
+        Some(
+            div()
+                .absolute()
+                .top(px(46.0))
+                .right(px(28.0))
+                .w(px(340.0))
+                .h(px(34.0))
+                .px(px(12.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .rounded(px(8.0))
+                .bg(t.menu)
+                .border_1()
+                .border_color(t.blue)
+                .shadow_lg()
+                .text_size(px(13.0))
+                .child(div().text_color(t.muted).child("Find"))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(t.text)
+                        .font_family(self.fonts.mono.clone())
+                        .child(format!("{}▏", bar.query)),
+                )
+                .child(div().text_size(px(11.5)).text_color(t.faint).child(
+                    if bar.query.is_empty() {
+                        String::new()
+                    } else if total == 0 {
+                        "no matches".to_string()
+                    } else {
+                        format!("{current}/{total}")
+                    },
+                ))
+                .into_any_element(),
+        )
+    }
+
     /// The autocomplete list, hanging under the text it completes.
     fn completion_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let open = self.completion.as_ref()?;
@@ -2189,6 +2348,7 @@ impl Render for SlateWindow {
                     .child(self.status_bar())
             })
             .children(self.completion_popup(cx))
+            .children(self.search_bar_view())
             .children(crate::overlays::render(self, window, cx))
     }
 }
