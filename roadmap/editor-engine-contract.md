@@ -12,8 +12,14 @@ This document defines the canonical shared-core contract for editor semantics.
   - module-command planning (`CommandId` + current module state -> deterministic plan)
 - `crates/editor-core/src/folding.rs` owns fold-range computation plus incremental line-edit mapping/rebuild decisions.
 - `crates/editor-core/src/history.rs` owns the line undo store and its generic attached marks.
-- The terminal app must call this contract for semantic decisions.
-- The terminal app remains responsible for rendering, UI state, persistence side effects, and I/O.
+- `crates/session` coordinates these lower-level contracts through `NoteSession`.
+  In the buffer/history contracts below, "host" means the session unless the
+  responsibility explicitly concerns frontend input, geometry or I/O.
+- Frontends call session transactions for note-text changes and semantic undo;
+  they read the separate `Document` and may move its cursor/selection.
+- Frontends own rendering, viewport/collapse choices, input mapping, dialogs,
+  clipboard, timers and executor choice. Shared job runners perform persistence
+  and other I/O; frontends execute them and return results to the session.
 
 ## Current input/output contracts
 
@@ -131,11 +137,12 @@ This document defines the canonical shared-core contract for editor semantics.
   line counts, stale/viewport state and host thresholds without scanning text.
   Hosts execute skip, defer, viewport refresh, remap/recompute or idle work.
   `plan_result_remap` checks unchanged metadata prefix/suffix and affected text;
-  it borrows metadata rather than copying hash arrays. Worker fencing and timing
-  remain host-owned.
-- Fold upkeep (`folding::upkeep::plan_fold_upkeep`) updates affected structure
+  it borrows metadata rather than copying hash arrays. The session owns worker
+  result acceptance; frontend executors and timers own dispatch and timing.
+- Fold upkeep (`folding::upkeep::plan_fold_upkeep_with_delta`) updates affected structure
   and text-cache entries and returns view effects, mapped ranges or a rescan
-  decision. It defers expensive analysis when no collapsed ranges are visible;
+  decision. Exact `EditDelta` spans locate edits; callers without a delta retain
+  cursor-based fallback. It defers expensive analysis when no collapsed ranges are visible;
   the host applies the decision and owns viewport maps and the idle tick.
 - Completion (`completion`) owns prefix spans in character columns, candidate
   precedence and filtering. Hosts supply variable/export/title data and retain
@@ -169,9 +176,14 @@ This document defines the canonical shared-core contract for editor semantics.
 
 ## Determinism requirements
 
-- For identical inputs, output must be identical.
-- Contract methods must avoid side effects.
-- Runtime side effects (db writes, clipboard, notifications) happen outside this contract.
+- The lower-level `editor-core` plans produce identical outputs for identical inputs
+  and avoid runtime side effects.
+- Session transactions mutate their explicit document/session state. They have no
+  clock, event loop or executor; elapsed input timing and scheduling inputs come
+  from the frontend.
+- Job runners may perform database writes, dependency loads, cache reads/writes
+  and script-backed rate fetches. Clipboard and notification delivery remain
+  frontend I/O. Result acceptance and acknowledgement belong to shared policy.
 
 ## Replay fixtures
 
@@ -187,30 +199,135 @@ Terminal behavior is frozen by replay tests in `crates/tui/src/terminal/app/test
 - `crates/tui/src/terminal/tests/golden/markdown_replay.json`
 - `crates/tui/src/terminal/tests/golden/calc_replay.json`
 
-## Note session extraction
+## Note session and document
 
 `note_session::Document` carries source lines, character cursor/selection, joined
-text cache and text generation. Terminal viewport state lives separately.
-`NoteSession::apply` prepares and consumes a `SessionEdit` against that document;
-requests cover in-place primitives, character replacements, paste/import,
-whole-line edits, visual ranges, word deletion and byte-offset operations.
-Outcomes describe source-line deltas, calc invalidation and register effects.
-Typing outcomes use empty vectors and do not allocate. Boundary primitives and
-unchanged replacements do not advance dirty state, generation or edit identity.
+text cache and text generation. Source lines are private to the crate and exposed
+as `lines() -> &[String]`. `from_lines`/`from_text` initialize a document; `set_text`
+is for open/reload initialization, never an interactive edit bypass. Viewport
+state lives separately. Public cursor/selection fields use Unicode scalar columns;
+exact text edit metadata and command operation offsets use UTF-8 bytes.
 
-The session owns text history, dirty state, edit counters, reminder mapping and
-calc upkeep. Front ends use `apply_with_upkeep` for a complete edit transaction;
-`apply` is the same pipeline without calc upkeep. The host supplies a borrowed `CalcProvider` for evaluation inputs and lazy
-external-data reads, invoked only for actual synchronous recomputation. The session chooses
-skip, remap, viewport refresh, idle scheduling or recomputation after the current
-key; `CalcEffect` carries the required host scheduling. `CalcInputs` and the
-provider borrow existing state, with no extern-variable copy or index lock on
-skip/remap paths. Calc-derived trailer rewrites run inside the session before
-synchronous history finalization; keyboard recomputation retains its existing
-end-of-key ordering. `defer_history` and the public `finish_edit` continuation
-were removed. Final cursor positions for replacement and continuation pruning
-are supplied or computed before history records; unchanged completion may move
-the presentation caret without advancing dirty state or edit identity.
+`NoteSession` owns note lifetime/identity, access and stored revision, dirty state,
+edit sequence, history/undo policy, reminder marks, calc state and fold structure.
+`apply` prepares and consumes a `SessionEdit` against the separate document.
+Requests cover primitives, character replacements, paste/import, whole-line edits,
+visual ranges, word deletion, byte-offset operations and ticketed script output.
+Outcomes describe source-line deltas, register values and calc/fold effects.
+Boundary primitives and unchanged replacements preserve dirty state, generation
+and edit identity. Typing does not copy the document or allocate edit-plan vectors.
 
-The host still orders text/reminder undo actions and presents cursor clamps while
-lifecycle extraction is in progress.
+Frontends use `apply_with_upkeep` with calc/fold inputs for a complete transaction.
+`apply` uses the same mutation/history pipeline without calc upkeep; it is useful
+for hosts that intentionally handle derived-state scheduling separately. The
+borrowed `CalcProvider` supplies evaluation inputs, dependency preloads and lazy
+external values only on paths that evaluate. Skip/remap paths do not copy extern
+variables or acquire their index lock. If synchronous evaluation needs a provider
+and none is supplied, the session preserves the edit/history transaction and
+returns `CalcWork::Idle`; the host must execute the deferred work.
+
+The session records exact reminder changes before mutation, invalidates text,
+updates derived state, records text history and then maps attached reminders.
+Calc-derived trailer replacements remain inside this transaction before synchronous
+history finalization. End-of-key deferred recomputation preserves input grouping.
+Final replacement/pruning cursor positions are established before recording history.
+Frontends apply scheduling effects, repaint invalidation and view-map changes after
+shared methods return.
+
+## Semantic undo and reminders
+
+`undo_action_with_upkeep` and `redo_action_with_upkeep` select and acknowledge the
+shared text/reminder action sequence. Hosts supply `UndoContext`, optional calc
+inputs/provider and fold inputs. Text restoration updates generation/dirty state,
+clears pending calc splices, performs shared upkeep, normalizes the source cursor
+(including Normal-mode and table bounds), and checkpoints it. Reminder restoration
+updates marks/generation/edit identity without a text-generation change. Locked
+sessions reject restoration. Hosts must not additionally call policy
+`complete_undo`/`complete_redo`.
+
+Convenience `undo`/`redo` and `undo_action`/`redo_action` follow semantic action order
+without supplied calc/fold upkeep. A reminder-only convenience operation returns
+no text outcome. Frontends displaying derived state should use the upkeep APIs.
+The host may call `checkpoint_restored_cursor` again after relocating the caret out
+of a collapsed view; it keeps shared source-cursor rules while geometry stays local.
+
+`set_reminder` validates access, database-backed reminder support and line bounds,
+ignores unchanged requests, and atomically updates the mark map, optional semantic
+undo entry, reminder generation, edit identity and history marks. Notification
+acknowledgements use `record_undo = false`. `reminder_changed_outside_text` provides
+shared bookkeeping for host reconciliation that already changed the map. Persistence
+and notification delivery remain explicit host execution.
+
+## Note lifecycle and saving
+
+`open` starts a new `session_id`, including switching away and back to the same
+note. It loads the document/metadata and resets history, undo, reminders, calc,
+folds and pending policy state. Hosts read the note/reminders and call
+`install_reminders`; database loading does not move into the session.
+`outside_change` distinguishes unchanged, deleted, conflicting and reloadable
+revisions, suppressing repeat conflict/deletion messages. Reminder changes count
+as unsaved state. `leave_decision` permits repeated discard only at the same edit
+identity after required save/drain work.
+
+Stored-body replacement is a normal undoable `SessionEdit::Operation` planned by
+`prepare_stored_replacement`; `acknowledge_reload` advances the stored revision and
+clears dirty state without removing that history entry.
+
+`request_save` captures body/reminders together with expected revision, note
+lifetime, edit sequence and reminder generation. Manual saves transfer an existing
+joined-text allocation; background saves clone the snapshot while retaining the
+frontend cache. `jobs::run_save` performs the write and returns the owned snapshot.
+`complete_save` restores that allocation only when current, acknowledges reminder
+snapshots and advances revision only when the expected revision still matches.
+Newer typing remains dirty. Failures pause background saving at the current edit
+identity until another edit; explicit saves may retry. Hosts drain/reconcile an
+in-flight save before switch, reload or close. Results from other lifetimes are
+ignored rather than applied to a reopened note.
+
+## Jobs, script results and exchange rates
+
+Calc preparation/index jobs and results own their inputs and support
+`Send + 'static` executor messages. Tickets capture note/session, text generation,
+feature mask, cross-note state, shared-index epoch and currency generation.
+Completion rejects other lifetimes/environments. Prepared contexts can be reused
+across text edits because evaluation revalidates their text/options; stale snapshot
+refs receive no generation acknowledgement or active-note dependency publication.
+Background indexes catch up current text before exposing names and retain newer
+foreground state. Dependency export loads retain the dispatch epoch through all
+publication points. Frontends own workers/receivers and request fresh work after a
+rejected completion when needed.
+
+`ScriptTicket` captures lifetime, note ID, generation, editable state, byte range
+and output kind. `accept_script_result` validates them and returns an optional
+`SessionEdit`; application revalidates again so delayed requests cannot overwrite
+intervening edits. Replacement output is an isolated undo transaction. Message
+output is validated without changing text. Frontends execute/cancel script processes
+and handle status and input-mode transitions.
+
+`RateService` lives beside sessions and survives note switches. Startup cache
+loading and rate fetches use owned jobs; the host chooses their executor. The
+service permits one active refresh, applies each completion once, ignores canceled
+or older generations and preserves installed rates on failure. Cache publication
+is fenced against cancellation/newer jobs. Identical rate values do not invalidate
+calculations merely because provider/fetch dates changed. After a changed result,
+the host calls session calc invalidation and shared cross-note index invalidation.
+
+## Shared display semantics and source coordinates
+
+`note_session::display` owns Markdown reveal rules, semantic styles, formula/table
+substitution and media/source interpretation. Frontends choose actual colors,
+terminal cells or pixels, wrapping, scrolling and device input. `SemanticContext`
+styles lines using fence/language state and borrowed `LineDecorations`; cached keys
+include text, variable identity, cursor reveal state and decoration ranges. Unchanged
+lines reuse semantic token/style state; local edits do not require a per-frame
+whole-document parse.
+
+`SourceDisplayMap` and `MappedLineBuilder` use Unicode scalar columns. Provenance
+separates copied source, generated text owned by a source span, and unowned ghosts.
+Hidden spans retain zero-width entries. Caret boundary affinity controls ambiguous
+edges; clicking generated text returns its owner rather than inventing an editable
+position. Compose maps through formula/table substitution and marker hiding before
+mapping selections or clicks. Helpers convert scalar columns to/from UTF-8 bytes
+and UTF-16 units; the frontend remains responsible for cell/pixel geometry and IME
+composition lifetimes. Table display width/layout may remain frontend-specific
+while the source ownership map is shared.

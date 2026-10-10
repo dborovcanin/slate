@@ -1,11 +1,12 @@
 # Architecture Refactor: Core-Owned Editing
 
-Status: phases 1–3, 5 and 6 implemented, phase 4 partial; phases 7 (shared
-note session) and 8 (shared display model) planned (2026-10-10). See
-"Follow-ups". Execution reference for moving editing semantics
-out of `crates/tui` into the core crates. Ownership rules come from
-`AGENTS.md` and `roadmap/plan.md` ("Ownership Rules"); the existing contract
-is `roadmap/editor-engine-contract.md`.
+Status: phases 1–8 implemented and session execution complete on `session`
+(2026-10-10). Ready for a separate UI implementation using the shared contract.
+The unchanged absolute startup baseline remains a qualification gap on both
+main and this branch; see "Completion checks". Execution reference for moving editing
+semantics out of `crates/tui` into shared crates. Ownership rules come from
+`AGENTS.md` and `roadmap/plan.md` ("Ownership Rules"); the current contract is
+`roadmap/editor-engine-contract.md`.
 
 ## Goal
 
@@ -92,9 +93,9 @@ Verdicts: **core** moves to a core crate, **host** stays in `crates/tui`,
 | Calc scheduling (debounce, idle ticks, `key_depth`) | `editing.rs` | host | timing is host policy |
 | Clipboard, image import/preview, export, backup, IMAP | various | host | I/O |
 
-`editor-core` does not depend on `app-core`, so calc evaluation stays a host
-call; only the decision of what to evaluate moves. No new crate is needed for
-any phase below.
+`editor-core` does not depend on `app-core`. The original phases 1–6 moved
+evaluation decisions only; phase 7 added `note-session` to own orchestration
+and call both cores without changing that dependency direction.
 
 ## Seam: exact edits and `EditDelta`
 
@@ -241,7 +242,7 @@ DB lookups stay in the host.
 Done when completion and search logic is tested in core and the terminal keeps
 only popup state and DB lookups.
 
-### Phase 7: shared note session (planned)
+### Phase 7: shared note session (implemented)
 
 **Why, and why now.** Phases 1–6 deferred a session layer: moving editing
 semantics first kept it from wrapping `TerminalApp`'s mix of policy and
@@ -326,7 +327,7 @@ switch-away/back script rejection, global currency refresh across note
 switches, and reminder positions through joins, block replacements and
 undo/redo.
 
-### Phase 8: shared display model (planned)
+### Phase 8: shared display model (implemented)
 
 Move the presentation rules both front ends need into a shared,
 framework-independent model: which markdown markers are hidden or revealed
@@ -401,12 +402,12 @@ Reminder mapping orchestration is required by phase 7.
 | --- | --- | --- |
 | 1. Buffer primitives | Complete | Offset helpers, text changes, typing and plain/table paste delegate to core |
 | 2. Undo store and policy | Complete | Core owns span recording, grouping, redo truncation, self-cancelling text markers and text/reminder action order; host supplies time/session boundaries and applies effects |
-| 3. Word motions | Complete | Core owns word motions and backward deletion; host supplies lazy visible neighbors and retains edit bookkeeping |
-| 4. Vim intent execution | Partial | Visual selection, operator/text-object plans, registers and cursor placement are core-owned; paste and open-line buffer edits remain in the host |
-| 5. Post-edit planning | Complete | `plan_after_edit`, `plan_result_remap` and fold upkeep decisions are core-owned; fold upkeep still locates edits from the cursor (see "Follow-ups") |
-| 6. Completion and search | Complete | Prefixes, candidates, wiki-link queries and search matching are core-owned; applying a picked completion still edits in the host |
-| 7. Shared note session | Planned | Step-by-step plan in "Phase 7 implementation plan"; starts with the undo cursor fix and the fold-upkeep and host-only-edit follow-ups |
-| 8. Shared display model | Planned | |
+| 3. Word motions | Complete | Core owns motions and backward deletion; terminal supplies visible neighbors and the session finalizes edits |
+| 4. Vim intent execution | Complete | Plans, registers and cursor placement are core-owned; session applies visual edits, paste and open-line insertion |
+| 5. Post-edit planning | Complete | Session owns calc evaluation/upkeep and fold structure; exact edit deltas locate changes independently of the cursor |
+| 6. Completion and search | Complete | Shared parsing/search and session-applied completion edits; terminal owns popups and selection |
+| 7. Shared note session | Complete | Steps 0–17: private document text, atomic edits/history, calc/folds, lifecycle, save/scripts/rates and a headless host |
+| 8. Shared display model | Complete | Semantic roles, markdown/table/formula/media transforms, explicit source mappings and bounded caches; terminal retains geometry and palette |
 
 Track progress by which semantic decisions have a canonical core owner,
 which terminal paths delegate to it, and which core regression tests cover
@@ -414,23 +415,25 @@ the contract. Record remaining host-owned correctness policy explicitly.
 File sizes and import counts may describe the codebase, but reducing them is
 not an acceptance criterion.
 
-### Host-owned correctness policy
+### Current correctness ownership
 
-Policy that stays in `TerminalApp` after phases 1–6. Phase 7 moves note-local
-policy into the shared session and application-wide currency policy into the
-rate service in the same crate. Pure scheduling (timers, threads, idle ticks) stays with
-each front end.
+The phase 1–6 inventory above is historical. Phase 7 moved note-local policy
+into `note-session`, which may call `app-core` without reversing the
+`editor-core` dependency. Application-wide rates live beside the session.
+Front ends execute effects and supply explicit time/view/environment inputs.
 
-| Policy | Where | Notes |
+| Policy | Shared owner | Terminal responsibility |
 | --- | --- | --- |
-| Autosave and save revision checks | `command_search_switcher.rs`: `save_with_options`, `start_background_autosave`, `poll_background_save` | optimistic concurrency against the stored revision |
-| Outside-change reload | `maybe_take_outside_change`, `reload_active_note` | |
-| Script results discarded unless `note_id` and `text_generation` still match | `scripts.rs`: `poll_script_result` | edits or note switches during a run drop the result |
-| Currency results applied globally | `currency.rs`: `apply_currency_result` | no note check; identical rates skipped; one fetch at a time |
-| Viewport calc preparation installed only for the same note | `editing.rs`: `install_viewport_calc_preparation` | changed text caught by rehashing in the calc cache and the reset `cross_note_refs_generation`; cross-note index writes fenced by `epoch()` |
-| Script and currency cancellation | `scripts.rs`, `currency.rs` | process-group termination lives in `app_core::scripts` |
-| Clock for undo coalescing | `mark_edited_from_line_with_span` | elapsed time supplied to core; grouping decisions are core-owned |
-| Calc scheduling (debounce, idle ticks, `key_depth`) | `editing.rs` | timing only; decisions move in phase 5 |
+| Edit/history/reminder ordering and dirty identity | `NoteSession` | Translate input; present effects |
+| Autosave and save revision checks | Session save tickets/completion policy | Timers, worker execution and notifications |
+| Outside-change reload and leave decisions | Session lifecycle | Read stored state and drain outstanding saves before switching/reloading/closing |
+| Script result lifetime/text/access checks | Session script tickets | Run/cancel processes, reset Vim view state and show status |
+| Currency generations and cache publication | `RateService` | Spawn/join workers and dispatch installation effects to sessions |
+| Calc preparation/index publication | Session job tickets and fenced completions | Execute jobs and supply current environment/index epoch |
+| Fold structure | Session | Collapsed view state, viewport maps and placeholders |
+| Undo coalescing | Session policy | Supply elapsed time and interaction boundaries |
+| Calc scheduling | Session work effects | Debounce, idle ticks, threads and `key_depth` |
+| Display semantics/source ownership | Session display modules | Font/cell geometry, wrapping, palette and painting |
 
 ## Phase 5 performance comparison (2026-10-10)
 
@@ -480,53 +483,45 @@ are recorded with the completion report below.
 
 ## Completion checks (2026-10-10)
 
-- Workspace tests: 1,294 passed, six ignored benchmarks; full doctest pass.
-- `cargo fmt --all -- --check` and diff whitespace checks passed.
-- `cargo clippy --workspace --all-targets --locked` passed with existing warnings;
-  new completion/search re-exports were moved before the shim's test module.
-- Final unified performance check: table and large-note gates passed. Startup
-  remained above the existing baseline on both this branch and clean `main`.
-  Five clean-main runs had median config load 0.850 ms (limit 0.255 ms) and
-  app-core open 2.215 ms (limit 0.742 ms), using the same active config/database.
-- Startup qualification is deferred at the user's request. Performance limits
-  were kept unchanged. Review can proceed; this is not a claim that every merge
-  qualification gate is green.
-- Live terminal: a tmux run of a debug build (Vim mode, isolated config and
-  data directories) covering typing, visual delete, `o`, Ctrl-W, yank/paste,
-  undo/redo and calc results produced the same screens as `main`, with the
-  prepared-plan debug assertions active.
+- Workspace: **1,383 tests passed**, six ignored benchmarks, all doctests passed.
+  Step 0 had 1,294 tests. Shared session tests include 109 unit tests and five
+  headless integration tests; terminal tests still exercise the adapters.
+- `cargo fmt --all --check`, Clippy workspace/all-targets with locked offline
+  dependencies, and `git diff --check` pass. Clippy has existing warnings; the
+  baseline comparison found no new warnings.
+- No direct terminal source-line mutations; no clock reads or thread creation in
+  session sources. The temporary lint probe rejects `Instant::now` and
+  `thread::spawn` using the actual session disallowed-method configuration.
+- Normal dependency tree for `note-session` has no terminal/GUI framework.
+- All 48 original terminal Vim golden cases are identical; one reproduced
+  Normal-mode undo-cursor regression was added. Other replay fixtures and all
+  performance limit files are unchanged.
+- Three alternating large-note samples and five table/startup samples per side
+  were measured against clean main `af2a090`. No large-note metric crosses both
+  investigation thresholds. Final table and large-note gates pass on both sides.
+  Startup exceeds the unchanged absolute baseline on both sides; paired startup
+  medians are lower on this branch. Full measurements are recorded below.
+- Final diff audit rechecked text ownership, typing allocations, job fencing,
+  frontend compatibility and source-coordinate contracts. Found bugs have
+  separate fixes and regressions; the final audit found no new actionable bugs.
+- Live terminal: ten isolated tmux A/B scenarios qualified, comparing SQLite
+  bodies/reminders, normalized screens and terminal caret cells. Only the exact
+  Step 1 cursor corrections differ; details and evidence are recorded below.
 
 ## Follow-ups
 
-Found in the pre-merge review. None blocks the merge; each needs its own
-change with core tests.
+The previous fold-delta, host-only mutation, repeated Vim paste splice,
+Normal-mode undo cursor, document state and display-model findings are resolved
+by this execution. Shared regressions and the terminal adapter exercise their
+replacement paths.
 
-- **Fold upkeep from `EditDelta`.** `folding::upkeep::plan_fold_upkeep` infers
-  a one-line insert or delete at the cursor line. Pass the edit's `EditDelta`
-  instead, so edits away from the cursor (undo and redo, a mouse paste or
-  multiple cursors in another front end) map folds without a rescan. It also
-  clones the current line three times per keystroke.
-- **Host-only text edits.** These still mutate `editor.lines` in the terminal
-  crate without a core plan, and most record history through the
-  whole-document diff (`mark_edited`):
-  - applying a variable autocomplete pick (`apply_variable_autocomplete_pick`)
-  - applying a calc result with Tab (`apply_calc_tab`)
-  - calc trailer refresh in `run_calc_recompute`
-  - wiki-link selection and heading-suffix removal
-  - removing an empty table continuation row
-    (`prune_empty_table_continuation_row_at_cursor`)
-  - Vim linewise and charwise paste, and open-line insertion (phase 4)
-- **Vim paste performance.** Linewise paste inserts and clones one line at a
-  time, which is O(pasted lines × note lines); use one splice.
-- **Search allocation.** `search::find_matches` lowercases a copy of every line
-  on each query change; reuse one buffer.
-- **Document state.** Now phase 7.
-- **Pre-existing bug, also on `main`.** Typing `one`/`two`, then `o` with
-  `three`/`four`, `gg V d`, `u`, Ctrl-R, `u` and `x` in Vim mode joins the
-  first two lines (`onetwo`) instead of deleting a character. The restored
-  cursor is probably left past the line end; undo should clamp it as Normal
-  mode does.
-- **Display model.** Now phase 8.
+- **Search allocation:** query changes still lowercase each line; buffer reuse
+  remains a separate optimization, outside this extraction.
+- **Startup qualification:** the unchanged absolute startup limits fail on this
+  machine for clean main as well. Retain this gate for a separately measured fix.
+- **GUI implementation:** use the shared session/display contracts, then qualify
+  GPUI input/IME, UTF-16 composition ranges, fonts, pixel layout, accessibility and
+  platform behavior. The GUI and its dependencies are not part of this branch.
 
 ## Session execution (2026-10-10)
 
@@ -552,9 +547,9 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 15: script tickets and result validation.
 - [x] Step 16: application-wide rate service.
 - [x] Step 17: headless host integration.
-- [ ] Phase 8: shared semantic display and source mappings.
-- [ ] Final round: checks, performance A/B, live terminal and diff review.
-- [ ] Step 18: final contracts and readiness evidence.
+- [x] Phase 8: shared semantic display and source mappings.
+- [x] Final round: checks, performance A/B, live terminal and diff review.
+- [x] Step 18: final contracts and readiness evidence.
 
 Step 1: the added replay failed before the fix and passes afterwards; all
 existing cases remain unchanged. Restored Normal-mode cursors clamp before
@@ -1195,3 +1190,110 @@ display model. A bounded 32-row cache keys source, segment coordinates,
 evaluation values/errors and cursor; oversized rows bypass it. Shared Unicode
 and error/pending regressions pass; fresh workspace and runtime qualification
 follow this extraction.
+
+## Final paired performance qualification
+
+Three alternating release samples per side against `af2a090`, each with its own
+target directory, in the same isolated config/data environment. Values are
+medians of the per-run p50/p95 milliseconds. All six samples passed the existing
+large-note gates. No metric with at least five observations at 30k/100k crossed
+both investigation thresholds (p50 +10% and +0.3 ms); 400k remains report-only.
+The initial undo/redo regression was reproduced, fixed, and measured again.
+
+| Action | Lines | Main p50 / p95 ms | Session p50 / p95 ms |
+| --- | ---: | ---: | ---: |
+| enter | 30,000 | 0.78 / 1.74 | 0.59 / 1.66 |
+| open_line | 30,000 | 0.76 / 0.83 | 0.60 / 0.63 |
+| paste_line | 30,000 | 5.17 / 5.28 | 5.06 / 5.51 |
+| redo | 30,000 | 4.71 / 4.83 | 4.65 / 4.92 |
+| type_calc | 30,000 | 0.54 / 0.65 | 0.45 / 0.62 |
+| type_prose | 30,000 | 0.47 / 0.62 | 0.47 / 0.72 |
+| type_table | 30,000 | 0.72 / 0.92 | 0.65 / 0.82 |
+| undo | 30,000 | 4.73 / 5.07 | 4.69 / 4.84 |
+| enter | 100,000 | 2.96 / 6.71 | 2.47 / 5.67 |
+| open_line | 100,000 | 3.44 / 4.36 | 2.37 / 2.62 |
+| paste_line | 100,000 | 9.68 / 10.82 | 9.65 / 10.61 |
+| redo | 100,000 | 10.24 / 11.26 | 10.46 / 11.36 |
+| type_calc | 100,000 | 0.34 / 0.42 | 0.33 / 0.41 |
+| type_prose | 100,000 | 0.41 / 0.47 | 0.41 / 0.47 |
+| type_table | 100,000 | 0.74 / 0.79 | 0.71 / 0.76 |
+| undo | 100,000 | 10.19 / 11.14 | 10.68 / 11.85 |
+| enter | 400,000 | 12.46 / 17.30 | 11.17 / 16.43 |
+| open_line | 400,000 | 12.43 / 13.65 | 9.83 / 11.89 |
+| paste_line | 400,000 | 27.24 / 29.88 | 27.80 / 30.13 |
+| redo | 400,000 | 34.55 / 37.24 | 36.52 / 38.32 |
+| type_calc | 400,000 | 0.35 / 0.68 | 0.36 / 0.64 |
+| type_prose | 400,000 | 0.63 / 0.87 | 0.59 / 0.84 |
+| type_table | 400,000 | 1.77 / 1.80 | 1.78 / 1.82 |
+| undo | 400,000 | 35.57 / 37.40 | 37.08 / 38.97 |
+
+Five alternating table/startup runs per side (ms):
+
+| Table metric, median worst p95 | Main | Session |
+| --- | ---: | ---: |
+| format_table_lines_with_cache | 1.222 | 1.234 |
+| run_doc_change_rules_with_cache | 0.046 | 0.042 |
+| run_doc_change_rules_with_cache_widen | 0.316 | 0.301 |
+| table_cell_cursor_info_cached | 0.008 | 0.008 |
+
+| Startup mark, median | Main | Session |
+| --- | ---: | ---: |
+| config_ensured | 0.087 | 0.063 |
+| config_loaded | 0.277 | 0.232 |
+| app_core_opened | 1.857 | 1.663 |
+| note_fetch_complete | 1.958 | 1.765 |
+| line_split_ready | 1.973 | 1.785 |
+
+Unified `perf-check`: table and large-note gates pass on both sides. Startup
+fails on both sides against the unchanged absolute baseline: session
+app_core_opened 1.603 ms vs 0.742 ms limit, config_ensured 0.059 vs 0.038,
+note_fetch_complete 1.699 vs 0.787, line_split_ready 1.710 vs 0.791. This
+pre-existing qualification gap is retained; this branch does not claim all
+performance gates are green.
+
+Raw final samples and computed medians: `/tmp/slate-session-final-ab/`.
+Initial samples, including the checkpoint regression:
+`/tmp/slate-session-final-ab-initial/`. Workspace verification:
+`/tmp/slate-session-phase8-formula-{0,1,2,3}.log`. These are local execution
+artifacts; the tables above preserve their conclusions in the repository.
+
+## Final live-terminal qualification and readiness
+
+Debug binaries for main `af2a090` and session `c48002b`, isolated config/data per
+scenario, no display or system clipboard. Tested typing/Enter/Backspace joins,
+visual and linewise delete, yank with both pastes, `o`/`O`, undo/redo including
+the Step 1 regression, calc-variable changes and table-cell edit/undo, reminder
+join/undo, autosave plus note switches, and script cancellation on a note switch.
+
+Ten scenarios qualified. Stored bodies and terminal caret cells match except
+the intended Step 1 deletion (`four` becomes `fou` in the fixed branch). Screens
+match except the same Normal-mode undo clamp: three other scenarios report valid
+footer columns instead of main's past-end columns (visual delete: 6 → 5, open-line
+redo: 6 → 5, calc/table undo: 13 → 12). Those comparisons assert identical source
+and all other screen rows; they do not waive unrelated visual differences.
+The empty-open case has identical text, screen and caret on both sides.
+
+Reminder probes assert line 1 and persisted `line_text` before the join, after
+the Backspace join and after undo; both sides use a fixed picker time. Autosave
+probes assert both note bodies, including a later edit after switching back.
+Script probes assert the real process started before switching, never reached
+its completion marker after its normal runtime, and changed neither note with
+stale output. Headless tests separately qualify exact save/revision/late-result
+races; timing a live switch alone is not proof of those races.
+
+Evidence: `/tmp/slate-session-live-final/qualified-comparison.json`, per-side
+screens, cursor positions, SQLite snapshots and reminder checkpoints in that
+directory. The original strict comparison retains the four reviewed differences.
+Early harness attempts were corrected to use supported Backspace joins, Insert-
+mode new-note keys and explicit switcher selection; they are not counted as
+product failures or successful qualification. A vanished debug build directory
+was rebuilt, and the completed suite used a separate binary copy.
+
+The final audit's reproduced bugs each have an independent fix and regression.
+All session-plan steps and Phase 8 are complete; contracts describe the canonical
+frontend boundary. No GPUI code or dependencies were added. This is architecture
+readiness for UI work, with the startup baseline gap explicitly retained, not
+a claim that every performance or future GUI/platform gate is green.
+
+The clean main worktree and its separate target directory were removed after
+qualification; raw logs and runtime evidence remain in the paths above.
