@@ -283,129 +283,63 @@ impl TerminalApp {
         if !matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
             return false;
         }
-
+        if self.editor.lines.is_empty() {
+            self.editor.lines.push(String::new());
+        }
+        use crate::editor_core::buffer::primitives::BufferCursor;
         let anchor = self
             .editor
             .selection_anchor
             .unwrap_or((self.editor.cursor_line, self.editor.cursor_col));
-        let mut start_line = min(anchor.0, self.editor.cursor_line);
-        let mut end_line = std::cmp::max(anchor.0, self.editor.cursor_line);
-
-        if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
-        }
-        start_line = start_line.min(self.editor.lines.len().saturating_sub(1));
-        end_line = end_line.min(self.editor.lines.len().saturating_sub(1));
-
-        let mut yanked = Vec::new();
-        if self.mode == UiMode::VisualLine {
-            for i in start_line..=end_line {
-                if i < self.editor.lines.len() {
-                    yanked.push(self.editor.lines[i].clone());
-                }
-            }
-            if delete {
-                self.note_deleted_lines(start_line, end_line);
-                for _ in start_line..=end_line {
-                    if start_line < self.editor.lines.len() {
-                        self.editor.lines.remove(start_line);
-                    }
-                }
-                if self.editor.lines.is_empty() {
-                    self.editor.lines.push(String::new());
-                }
-                self.editor.cursor_line = start_line.min(self.editor.lines.len().saturating_sub(1));
-                self.editor.cursor_col = 0;
-            }
-        } else {
-            let (start_col, end_col) = if anchor.0 == self.editor.cursor_line {
-                (
-                    min(anchor.1, self.editor.cursor_col),
-                    std::cmp::max(anchor.1, self.editor.cursor_col),
-                )
-            } else if anchor.0 < self.editor.cursor_line {
-                (anchor.1, self.editor.cursor_col)
-            } else {
-                (self.editor.cursor_col, anchor.1)
-            };
-
-            if start_line == end_line {
-                let line = &self.editor.lines[start_line];
-                let chars: Vec<char> = line.chars().collect();
-                let c_start = min(start_col, chars.len());
-                let c_end = min(end_col + 1, chars.len());
-
-                yanked.push(chars[c_start..c_end].iter().collect::<String>());
-
-                if delete {
-                    let mut new_line: String = chars[..c_start].iter().collect();
-                    let tail: String = chars[c_end..].iter().collect();
-                    new_line.push_str(&tail);
-                    self.editor.lines[start_line] = new_line;
-                    self.editor.cursor_col = c_start;
-                }
-            } else {
-                let l1_chars: Vec<char> = self.editor.lines[start_line].chars().collect();
-                let l1_start = min(start_col, l1_chars.len());
-                yanked.push(l1_chars[l1_start..].iter().collect::<String>());
-
-                for i in (start_line + 1)..end_line {
-                    if i < self.editor.lines.len() {
-                        yanked.push(self.editor.lines[i].clone());
-                    }
-                }
-
-                let ln_chars: Vec<char> = self.editor.lines[end_line].chars().collect();
-                let ln_end = min(end_col + 1, ln_chars.len());
-                yanked.push(ln_chars[..ln_end].iter().collect::<String>());
-
-                if delete {
-                    let bytes = |chars: &[char]| chars.iter().map(|ch| ch.len_utf8()).sum();
-                    self.note_line_edit(
-                        (start_line, bytes(&l1_chars[..l1_start])),
-                        (end_line, bytes(&ln_chars[..ln_end])),
-                        0,
-                    );
-                    let mut new_l1: String = l1_chars[..l1_start].iter().collect();
-                    let tail: String = ln_chars[ln_end..].iter().collect();
-                    new_l1.push_str(&tail);
-
-                    for _ in start_line..=end_line {
-                        if start_line < self.editor.lines.len() {
-                            self.editor.lines.remove(start_line);
-                        }
-                    }
-                    self.editor.lines.insert(start_line, new_l1);
-                    self.editor.cursor_line = start_line;
-                    self.editor.cursor_col = l1_start;
-                }
-            }
-        }
-
-        if yanked.is_empty() {
+        let Some(plan) = crate::editor_core::vim_actions::buffer::prepare_visual_selection(
+            &self.editor.lines,
+            BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
+            BufferCursor {
+                line: anchor.0,
+                column: anchor.1,
+            },
+            self.mode == UiMode::VisualLine,
+            delete,
+        ) else {
             return false;
+        };
+        if let Some((start, end)) = plan.deleted_lines {
+            self.note_deleted_lines(start, end);
         }
-
-        let register = if self.mode == UiMode::VisualLine {
-            VimRegister::linewise(yanked.join("\n"))
-        } else {
-            VimRegister::charwise(yanked.join("\n"))
+        if let Some(edit) = plan.exact_edit {
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+        }
+        let (register, cursor) = plan.apply(&mut self.editor.lines);
+        self.editor.cursor_line = cursor.line;
+        self.editor.cursor_col = cursor.column;
+        let register = VimRegister {
+            text: register.text,
+            mode: match register.mode {
+                crate::editor_core::vim_actions::VimRegisterMode::Linewise => {
+                    VimRegisterMode::Linewise
+                }
+                crate::editor_core::vim_actions::VimRegisterMode::Charwise => {
+                    VimRegisterMode::Charwise
+                }
+            },
         };
         if delete {
             let _ = self.set_vim_register(register);
         } else {
             let _ = self.set_clipboard_register(register);
         }
-
         self.mode = UiMode::Normal;
         self.editor.selection_anchor = None;
         self.command_selection = None;
         self.command_selection_linewise = false;
-        self.status = if delete {
-            self.with_clipboard_status("-- NORMAL --")
+        self.status = self.with_clipboard_status(if delete {
+            "-- NORMAL --"
         } else {
-            self.with_clipboard_status("-- NORMAL -- (yanked)")
-        };
+            "-- NORMAL -- (yanked)"
+        });
         if delete {
             self.mark_edited();
         }
@@ -724,10 +658,22 @@ impl TerminalApp {
                         self.move_cursor_left_word();
                     }
                 }
-                crate::editor_core::vim::VimIntent::MoveLineStart => self.editor.cursor_col = 0,
+                crate::editor_core::vim::VimIntent::MoveLineStart => {
+                    self.editor.cursor_col =
+                        crate::editor_core::vim_actions::buffer::insert_entry_column(
+                            self.editor.cursor_col,
+                            0,
+                            action.intent,
+                        )
+                }
                 crate::editor_core::vim::VimIntent::MoveLineEnd => {
                     let line_len = line_char_len(self.current_line());
-                    self.editor.cursor_col = line_len.saturating_sub(1);
+                    self.editor.cursor_col =
+                        crate::editor_core::vim_actions::buffer::insert_entry_column(
+                            self.editor.cursor_col,
+                            line_len,
+                            action.intent,
+                        );
                 }
                 crate::editor_core::vim::VimIntent::MoveDocStart => self.editor.cursor_line = 0,
                 crate::editor_core::vim::VimIntent::MoveDocEnd => {
@@ -747,33 +693,59 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::AppendInsert => {
                     let line_len = line_char_len(self.current_line());
-                    if self.editor.cursor_col < line_len {
-                        self.editor.cursor_col += 1;
-                    }
+                    self.editor.cursor_col =
+                        crate::editor_core::vim_actions::buffer::insert_entry_column(
+                            self.editor.cursor_col,
+                            line_len,
+                            action.intent,
+                        );
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
                 crate::editor_core::vim::VimIntent::InsertLineStart => {
-                    self.editor.cursor_col = 0;
+                    self.editor.cursor_col =
+                        crate::editor_core::vim_actions::buffer::insert_entry_column(
+                            self.editor.cursor_col,
+                            0,
+                            action.intent,
+                        );
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
                 crate::editor_core::vim::VimIntent::AppendLineEnd => {
-                    self.editor.cursor_col = line_char_len(self.current_line());
+                    self.editor.cursor_col =
+                        crate::editor_core::vim_actions::buffer::insert_entry_column(
+                            self.editor.cursor_col,
+                            line_char_len(self.current_line()),
+                            action.intent,
+                        );
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
                 crate::editor_core::vim::VimIntent::OpenLineBelow => {
-                    self.editor.cursor_col = line_char_len(self.current_line());
+                    self.editor.cursor_col =
+                        crate::editor_core::vim_actions::buffer::insert_entry_column(
+                            self.editor.cursor_col,
+                            line_char_len(self.current_line()),
+                            action.intent,
+                        );
                     self.insert_newline();
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
                 crate::editor_core::vim::VimIntent::OpenLineAbove => {
-                    self.editor.cursor_col = 0;
+                    self.editor.cursor_col =
+                        crate::editor_core::vim_actions::buffer::insert_entry_column(
+                            self.editor.cursor_col,
+                            0,
+                            action.intent,
+                        );
                     let current = self.editor.cursor_line;
                     self.note_lines_inserted(current, 1);
-                    self.editor.lines.insert(current, String::new());
+                    crate::editor_core::vim_actions::buffer::insert_empty_line_above(
+                        &mut self.editor.lines,
+                        current,
+                    );
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
@@ -813,23 +785,11 @@ impl TerminalApp {
                     if !self.clipboard.is_empty() {
                         match self.clipboard.mode {
                             VimRegisterMode::Linewise => {
-                                let normalized = self
-                                    .clipboard
-                                    .text
-                                    .strip_suffix('\n')
-                                    .unwrap_or_else(|| self.clipboard.text.as_str());
-                                let lines = if normalized.is_empty() {
-                                    vec![String::new()]
-                                } else {
-                                    normalized
-                                        .split('\n')
-                                        .map(|line| line.to_string())
-                                        .collect::<Vec<_>>()
-                                };
-                                let mut repeated = Vec::with_capacity(lines.len() * count);
-                                for _ in 0..count {
-                                    repeated.extend(lines.iter().cloned());
-                                }
+                                let repeated =
+                                    crate::editor_core::vim_actions::buffer::linewise_paste_lines(
+                                        &self.clipboard.text,
+                                        count,
+                                    );
                                 if !repeated.is_empty() {
                                     let insert_at = self.editor.cursor_line + 1;
                                     self.note_lines_inserted(insert_at, repeated.len());
@@ -846,11 +806,11 @@ impl TerminalApp {
                                 let mut inserted = false;
                                 for _ in 0..count {
                                     let line_len = line_char_len(self.current_line());
-                                    if self.editor.cursor_col < line_len {
-                                        self.editor.cursor_col += 1;
-                                    } else {
-                                        self.editor.cursor_col = line_len;
-                                    }
+                                    self.editor.cursor_col =
+                                        crate::editor_core::vim_actions::buffer::paste_after_column(
+                                            self.editor.cursor_col,
+                                            line_len,
+                                        );
                                     self.insert_paste(&text);
                                     inserted = true;
                                 }

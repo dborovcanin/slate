@@ -185,7 +185,7 @@ Done when the terminal word motions only wrap core functions, and core tests
 cover punctuation and whitespace classes, line edges, folded neighbors and
 table cells.
 
-### Phase 4: vim intent execution
+### Phase 4: vim intent execution (complete)
 
 Split `apply_vim_actions` by intent group (motions, operators, text objects,
 visual selection, paste/registers). Core returns `EditOperation` plus
@@ -197,6 +197,16 @@ moves.
 Done when each intent group executes through core, with its replay fixtures
 added before the move, and the host keeps only macros, system clipboard and
 status messages.
+
+Phase 4 keeps line-buffer visual plans separate from byte-offset operator plans:
+selected text, replacement spans, register modes and resulting cursors are core
+owned without joining large notes. Insert-entry placement, horizontal prose
+movement and fallback register preparation also execute in core. Folded-line
+lookup, screen movement and markdown display-boundary exits remain presentation
+adapters; clipboard/image import, macro replay, reminder attachment, undo I/O,
+and status are host effects. The existing operator/text-object plans stay scoped.
+Unicode visual deletion, reverse multiline selection and counted EOF paste
+fixtures were added and passed before the move.
 
 ### Phase 5: post-edit planning
 

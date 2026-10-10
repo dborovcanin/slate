@@ -3321,17 +3321,21 @@ impl TerminalApp {
             return;
         }
 
-        if self.editor.cursor_col > 0 {
-            self.editor.cursor_col -= 1;
-            return;
-        }
         let current_virtual = self.current_virtual_line();
-        if current_virtual > 0 {
-            if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
-                self.editor.cursor_line = prev_real;
-                self.editor.cursor_col = line_char_len(self.current_line());
-            }
-        }
+        let neighbour = current_virtual
+            .checked_sub(1)
+            .and_then(|idx| self.real_line_for_virtual(idx));
+        let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
+            &self.editor.lines,
+            crate::editor_core::buffer::primitives::BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
+            false,
+            neighbour,
+        );
+        self.editor.cursor_line = cursor.line;
+        self.editor.cursor_col = cursor.column;
     }
 
     pub(super) fn move_cursor_right(&mut self) {
@@ -3357,23 +3361,25 @@ impl TerminalApp {
             return;
         }
 
-        let line_len = line_char_len(self.current_line());
-        if self.editor.cursor_col < line_len {
-            self.editor.cursor_col += 1;
-            self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
-            return;
-        }
         let current_virtual = self.current_virtual_line();
-        if current_virtual + 1 < self.visible_line_count() {
-            if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
-                self.editor.cursor_line = next_real;
-                self.editor.cursor_col = 0;
-                self.editor.markdown_formatting_right_boundary_exit = None;
-                return;
-            }
-        }
-
-        self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
+        let neighbour = self.real_line_for_virtual(current_virtual + 1);
+        let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
+            &self.editor.lines,
+            crate::editor_core::buffer::primitives::BufferCursor {
+                line: self.editor.cursor_line,
+                column: self.editor.cursor_col,
+            },
+            true,
+            neighbour,
+        );
+        self.editor.markdown_formatting_right_boundary_exit =
+            if cursor.line == self.editor.cursor_line {
+                boundary_exit_anchor
+            } else {
+                None
+            };
+        self.editor.cursor_line = cursor.line;
+        self.editor.cursor_col = cursor.column;
     }
 
     /// Cell positions of the cursor line's chars (see

@@ -1,3 +1,4 @@
+pub mod buffer;
 use crate::operations::replace_range;
 use crate::types::{EditOperation, OperationSelection, SelectionSnapshot};
 use crate::vim::VimIntent;
