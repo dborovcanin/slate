@@ -405,7 +405,7 @@ impl SlateWindow {
     pub(crate) fn after_input(
         &mut self,
         before: (usize, Option<(usize, usize)>),
-        outcome: InputOutcome,
+        mut outcome: InputOutcome,
         cx: &mut Context<Self>,
     ) {
         let (old_cursor, old_anchor) = before;
@@ -427,6 +427,9 @@ impl SlateWindow {
                     line.max(cursor).max(old_cursor),
                 );
             }
+        }
+        if let Some(notice) = outcome.notice.take() {
+            self.set_status(notice);
         }
         self.update_completion(outcome.text_changed);
         for request in outcome.requests {
@@ -2101,7 +2104,10 @@ impl SlateWindow {
             VimMode::VisualLine => ("V-LINE", t.muted),
         };
         let vim = self.mode == EditingMode::Vim;
-        let pending = self.host.input.pending_keys();
+        let mut pending = self.host.input.pending_keys();
+        if let Some(register) = self.host.input.macro_recording() {
+            pending = format!("● rec @{register} {pending}");
+        }
         let position = if vim {
             format!("{}:{}", line + 1, self.host.doc.cursor_col + 1)
         } else {

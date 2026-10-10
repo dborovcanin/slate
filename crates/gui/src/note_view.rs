@@ -112,7 +112,6 @@ pub struct LineView {
 /// The matches of an in-note search.
 #[derive(Debug, Clone, Default)]
 pub struct Find {
-    pub query_lower: String,
     /// `(line, start column, end column)` in order.
     pub matches: Vec<(usize, usize, usize)>,
     pub current: usize,
@@ -363,11 +362,7 @@ impl NoteHost {
             .position(|m| (m.0, m.1) >= cursor)
             .unwrap_or(0);
         let count = matches.len();
-        self.find = Some(Find {
-            query_lower,
-            matches,
-            current,
-        });
+        self.find = Some(Find { matches, current });
         count
     }
 
@@ -1327,6 +1322,15 @@ mod tests {
         // Backspace never eats a pipe.
         let (lines, _) = table_after((2, 2), &[VimKey::Backspace]);
         assert!(lines[2].matches('|').count() == 3, "{:?}", lines[2]);
+    }
+
+    #[test]
+    fn macros_run_through_the_host() {
+        let mut f = fixture("a\nb\nc");
+        keys(&mut f, "qaA!⎋jq");
+        assert!(f.host.input.macro_recording().is_none());
+        keys(&mut f, "@a");
+        assert_eq!(f.host.doc.lines(), ["a!", "b!", "c"]);
     }
 
     #[test]

@@ -37,9 +37,40 @@ pub struct InputState {
     pub register: VimRegisterValue,
     /// Column kept across vertical moves through shorter lines.
     desired_col: Option<usize>,
+    /// The register a macro is being recorded into (`q{r}` ... `q`).
+    macro_recording: Option<char>,
+    macros: rustc_hash::FxHashMap<char, Vec<MacroStep>>,
+    /// A macro is replaying: its steps are not recorded again.
+    replaying: bool,
+}
+
+/// One recorded step of a macro: a Normal-mode action, or a key typed in
+/// Insert mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacroStep {
+    Action(VimAction),
+    InsertKey(VimKey),
+}
+
+/// Most steps one `@{r}` may run.
+const MACRO_STEP_BUDGET: usize = 10_000;
+
+fn recordable_intent(intent: VimIntent) -> bool {
+    !matches!(
+        intent,
+        VimIntent::StartMacroRecord
+            | VimIntent::StopMacroRecord
+            | VimIntent::PlayMacro
+            | VimIntent::OpenCommandBar
+            | VimIntent::OpenSearch
+    )
 }
 
 impl InputState {
+    /// The register being recorded, if any.
+    pub fn macro_recording(&self) -> Option<char> {
+        self.macro_recording
+    }
     pub fn mode(&self) -> VimMode {
         self.vim.mode
     }
@@ -122,9 +153,26 @@ pub struct InputOutcome {
     /// Calc work the host still schedules (viewport or idle passes).
     pub calc_work: CalcWork,
     pub requests: Vec<HostRequest>,
+    /// A message for the status line (macro recording and replay).
+    pub notice: Option<String>,
 }
 
 impl InputOutcome {
+    fn merge(&mut self, other: InputOutcome) {
+        self.handled |= other.handled;
+        if other.text_changed {
+            self.text_changed = true;
+            self.first_changed_line = match (self.first_changed_line, other.first_changed_line) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        if other.calc_work != CalcWork::Done {
+            self.calc_work = other.calc_work;
+        }
+        self.requests.extend(other.requests);
+    }
+
     fn absorb(&mut self, outcome: &EditOutcome) {
         if outcome.text_changed {
             self.text_changed = true;
@@ -344,13 +392,22 @@ impl NoteSession {
             UndoSession::Command
         });
         if state.vim.mode == VimMode::Insert {
+            if let (Some(register), false) = (state.macro_recording, state.replaying) {
+                if !matches!(key, VimKey::Ctrl(_)) {
+                    state
+                        .macros
+                        .entry(register)
+                        .or_default()
+                        .push(MacroStep::InsertKey(key));
+                }
+            }
             return self.handle_insert_key(doc, state, key, cx);
         }
         let mode_before = state.vim.mode;
         let context = VimContext {
             has_search_matches: false,
             line_count: doc.lines().len(),
-            macro_recording: false,
+            macro_recording: state.macro_recording.is_some(),
         };
         let step = vim::step(&state.vim, key, &context);
         state.vim = step.state;
@@ -733,6 +790,55 @@ impl NoteSession {
         outcome
     }
 
+    /// `@{r}`: run the register's steps `count` times.
+    fn replay_macro(
+        &mut self,
+        doc: &mut Document,
+        state: &mut InputState,
+        action: &VimAction,
+        cx: &InputContext<'_>,
+        outcome: &mut InputOutcome,
+    ) {
+        let count = action.count.max(1);
+        let Some(register) = action.target_char.map(|ch| ch.to_ascii_lowercase()) else {
+            outcome.notice = Some("macro register required".to_string());
+            return;
+        };
+        let steps = state.macros.get(&register).cloned().unwrap_or_default();
+        if steps.is_empty() {
+            outcome.notice = Some(format!("macro @{register} is empty"));
+            return;
+        }
+        if count
+            .checked_mul(steps.len())
+            .is_none_or(|n| n > MACRO_STEP_BUDGET)
+        {
+            outcome.notice = Some(format!(
+                "macro @{register} replay aborted: step budget exceeded (>{MACRO_STEP_BUDGET})"
+            ));
+            return;
+        }
+        state.replaying = true;
+        for _ in 0..count {
+            for step in &steps {
+                match step {
+                    MacroStep::Action(a) => {
+                        let mode = state.vim.mode;
+                        self.run_action(doc, state, a, mode, cx, outcome);
+                    }
+                    MacroStep::InsertKey(key) => {
+                        if state.vim.mode == VimMode::Insert {
+                            let step_outcome = self.handle_insert_key(doc, state, *key, cx);
+                            outcome.merge(step_outcome);
+                        }
+                    }
+                }
+            }
+        }
+        state.replaying = false;
+        outcome.notice = Some(format!("replayed @{register} x{count}"));
+    }
+
     fn run_action(
         &mut self,
         doc: &mut Document,
@@ -745,6 +851,15 @@ impl NoteSession {
         let count = action.count.max(1);
         let intent = action.intent;
         let options = cx.options;
+        if let (Some(register), false) = (state.macro_recording, state.replaying) {
+            if recordable_intent(intent) {
+                state
+                    .macros
+                    .entry(register)
+                    .or_default()
+                    .push(MacroStep::Action(action.clone()));
+            }
+        }
         match intent {
             VimIntent::MoveLeft
             | VimIntent::MoveRight
@@ -855,8 +970,30 @@ impl NoteSession {
             VimIntent::OpenSearch => outcome.requests.push(HostRequest::OpenSearch),
             VimIntent::SearchNext => outcome.requests.push(HostRequest::SearchNext),
             VimIntent::SearchPrev => outcome.requests.push(HostRequest::SearchPrev),
-            VimIntent::StartMacroRecord | VimIntent::StopMacroRecord | VimIntent::PlayMacro => {
-                outcome.requests.push(HostRequest::Unsupported(intent))
+            VimIntent::StartMacroRecord => {
+                outcome.notice = Some(match action.target_char {
+                    Some(ch) => {
+                        let register = ch.to_ascii_lowercase();
+                        state.macro_recording = Some(register);
+                        state.macros.insert(register, Vec::new());
+                        format!("recording @{register}")
+                    }
+                    None => "macro register required".to_string(),
+                });
+            }
+            VimIntent::StopMacroRecord => {
+                outcome.notice = Some(match state.macro_recording.take() {
+                    Some(register) => {
+                        let steps = state.macros.get(&register).map_or(0, Vec::len);
+                        format!("recorded @{register} ({steps} steps)")
+                    }
+                    None => "no active macro recording".to_string(),
+                });
+            }
+            VimIntent::PlayMacro => {
+                if !state.replaying {
+                    self.replay_macro(doc, state, action, cx, outcome);
+                }
             }
             VimIntent::Swallow => {}
             _ if vim_actions::supports_intent(intent) => {
@@ -1137,6 +1274,21 @@ mod tests {
             .replace_line_chars(&mut e.doc, &e.state, 0, 0..3, "salary", 6, &cx);
         assert_eq!(e.text(), "salary + 1");
         assert_eq!(e.cursor(), (0, 6));
+    }
+
+    #[test]
+    fn macros_record_and_replay_commands_and_typing() {
+        let mut e = Editor::new("a\nb\nc\nd");
+        // Record: append "!" to the line and move down.
+        e.keys("qaA!⎋jq");
+        assert_eq!(e.text(), "a!\nb\nc\nd");
+        assert!(e.state.macro_recording().is_none());
+        // Replay twice.
+        e.keys("2@a");
+        assert_eq!(e.text(), "a!\nb!\nc!\nd");
+        // An unknown register does nothing.
+        e.keys("@z");
+        assert_eq!(e.text(), "a!\nb!\nc!\nd");
     }
 
     #[test]
