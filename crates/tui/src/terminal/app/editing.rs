@@ -832,11 +832,16 @@ impl TerminalApp {
                 self.last_edit = Instant::now();
                 self.render_state.fence_checkpoints.truncate(1);
                 self.render_state.fence_checkpoints_valid_through = 0;
+                let restored_cursor = self.editor.cursor();
                 self.apply_calc_effect(outcome.calc_effect);
                 self.apply_fold_effect(outcome.fold_effect);
                 self.adjust_cursor_line_and_col_bounds();
-                self.session
-                    .checkpoint_restored_cursor(&mut self.editor, ctx);
+                // Shared restoration already checkpointed source text/caret. A
+                // collapsed view can move the caret, requiring a second checkpoint.
+                if self.editor.cursor() != restored_cursor {
+                    self.session
+                        .checkpoint_restored_cursor(&mut self.editor, ctx);
+                }
                 self.adjust_scroll();
                 self.status = if redo {
                     format!("redo ({} left)", self.session.history.redo_depth())

@@ -1174,3 +1174,11 @@ notifications no longer adopt an already-finalized snapshot. The external
 bookkeeping bridge exists only with test-support, enabled by TUI fixtures;
 normal builds expose only the session edit pipeline. Workspace checks pass
 without new warnings.
+
+Final performance round, undo checkpoint: paired medians crossed investigation
+thresholds for undo/redo (30k: 5.46/5.36 vs main 4.69/4.63 ms; 100k:
+13.83/12.98 vs 10.80/10.33 ms). Source review found the newly shared checkpoint
+was repeated unconditionally by the terminal. It now repeats only if a collapsed
+view moves the source caret. Focused undo tests pass; fresh alternating A/B
+qualification follows this correction. Initial samples and unchanged limits
+are retained as evidence rather than discarded.
