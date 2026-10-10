@@ -49,6 +49,9 @@ pub struct Theme {
     pub search_current: Hsla,
     /// Selected text background.
     pub selection: Hsla,
+    /// Menu and popup panels and their border.
+    pub menu: Hsla,
+    pub menu_border: Hsla,
 }
 
 fn c(hex: u32) -> Hsla {
@@ -97,6 +100,8 @@ impl Theme {
             search_match: c(0xe3a857),
             search_current: c(0xe3a857),
             selection: c(0x7fa6d9).opacity(0.32),
+            menu: c(0x20242a),
+            menu_border: c(0x363b44),
         }
     }
 
@@ -125,6 +130,8 @@ impl Theme {
             search_match: c(0x94560a),
             search_current: c(0x94560a),
             selection: c(0x2c5c99).opacity(0.32),
+            menu: c(0xffffff),
+            menu_border: c(0xd9d5cc),
         }
     }
 
@@ -205,6 +212,14 @@ impl Theme {
         self.muted = mix(text, bg, 0.38);
         self.faint = mix(text, bg, 0.6);
         self.heading = mix(text, if light { c(0x000000) } else { c(0xffffff) }, 0.2);
+        // Popups sit a step above the panels: brighter than the editor on
+        // dark schemes, near-white on light ones.
+        self.menu = if light {
+            mix(bg, c(0xffffff), 0.7)
+        } else {
+            mix(bg, text, 0.09)
+        };
+        self.menu_border = mix(self.menu, text, 0.18);
         self.on_accent = if self.blue.l > 0.6 {
             c(0x11161d)
         } else {

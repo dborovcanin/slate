@@ -53,6 +53,20 @@ fn word_at(text: &str, col: usize) -> (usize, usize) {
 pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Format", "Calc", "Help"];
 type CellBounds = std::rc::Rc<std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>>>;
 
+/// `edited 5m ago`, `edited 3h ago`, `edited 2d ago`, or `edited now`.
+fn edited_label(updated_at: &str) -> String {
+    let Some(epoch) = app_core::storage::timestamp_epoch(updated_at) else {
+        return String::new();
+    };
+    let secs = (chrono::Utc::now().timestamp() - epoch).max(0);
+    match secs {
+        0..=59 => "edited now".to_string(),
+        60..=3599 => format!("edited {}m ago", secs / 60),
+        3600..=86399 => format!("edited {}h ago", secs / 3600),
+        _ => format!("edited {}d ago", secs / 86400),
+    }
+}
+
 /// Line height relative to the text size.
 const LINE_HEIGHT_RATIO: f32 = 26.0 / 14.0;
 
@@ -1524,10 +1538,14 @@ impl SlateWindow {
         let items = self.host.notes.iter().take(SIDEBAR_NOTES).map(|note| {
             let active = note.id == current;
             let id = note.id.clone();
+            let meta = edited_label(&note.updated_at);
             div()
                 .id(SharedString::from(format!("note-{}", note.id)))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
                 .px(px(10.0))
-                .py(px(6.0))
+                .py(px(7.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
                 .when(active, |d| d.bg(t.active))
@@ -1537,7 +1555,7 @@ impl SlateWindow {
                     div()
                         .text_size(px(13.0))
                         .text_color(if active { t.heading } else { t.text })
-                        .when(active, |d| d.font_weight(FontWeight::SEMIBOLD))
+                        .when(active, |d| d.font_weight(FontWeight::MEDIUM))
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
@@ -1547,6 +1565,7 @@ impl SlateWindow {
                             note.title.clone()
                         }),
                 )
+                .child(div().text_size(px(11.5)).text_color(t.faint).child(meta))
         });
         let searching = self
             .sidebar_search
@@ -1606,9 +1625,12 @@ impl SlateWindow {
         let search_box = div()
             .id("sidebar-search")
             .mx(px(2.0))
-            .mb(px(8.0))
-            .px(px(8.0))
-            .py(px(5.0))
+            .mb(px(10.0))
+            .px(px(10.0))
+            .h(px(32.0))
+            .flex_none()
+            .flex()
+            .items_center()
             .rounded(px(6.0))
             .bg(t.bg)
             .border_1()
@@ -1627,7 +1649,7 @@ impl SlateWindow {
                     .child(if active {
                         "Type to search…"
                     } else {
-                        "Search notes  (Ctrl+Shift+F)"
+                        "Search notes"
                     })
                     .into_any_element()
             } else {
@@ -1641,11 +1663,11 @@ impl SlateWindow {
             .w(px(248.0))
             .flex_none()
             .h_full()
-            .overflow_y_scroll()
             .bg(t.panel)
             .border_r_1()
             .border_color(t.border)
-            .p(px(10.0))
+            .px(px(10.0))
+            .py(px(14.0))
             .flex()
             .flex_col()
             .gap(px(2.0))
@@ -1656,6 +1678,7 @@ impl SlateWindow {
                     .px(px(8.0))
                     .pb(px(8.0))
                     .text_size(px(11.0))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.muted)
                     .child(
                         div()
@@ -1685,7 +1708,8 @@ impl SlateWindow {
                             .child(
                                 div()
                                     .text_color(t.faint)
-                                    .child(format!("{}", self.host.notes.len())),
+                                    .font_weight(FontWeight::NORMAL)
+                                    .child(format!("{} notes", self.host.notes.len())),
                             )
                             .child(
                                 div()
@@ -1700,11 +1724,50 @@ impl SlateWindow {
                     ),
             )
             .child(search_box)
-            .when(searching.is_none(), |d| d.children(items))
-            .children(hit_rows)
-            .when(searching.is_some_and(|s| s.hits.is_empty()), |d| {
-                d.child(div().px(px(10.0)).text_color(t.faint).child("No matches"))
-            })
+            .child(
+                div()
+                    .id("sidebar-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .when(searching.is_none(), |d| d.children(items))
+                    .children(hit_rows)
+                    .when(searching.is_some_and(|s| s.hits.is_empty()), |d| {
+                        d.child(div().px(px(10.0)).text_color(t.faint).child("No matches"))
+                    }),
+            )
+            .child(
+                div()
+                    .id("sidebar-browse")
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(10.0))
+                    .pt(px(8.0))
+                    .border_t_1()
+                    .border_color(t.border)
+                    .text_size(px(11.5))
+                    .text_color(t.faint)
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(t.text))
+                    .on_click(cx.listener(|this, _, _, cx| crate::overlays::open_browser(this, cx)))
+                    .child("Browse collections")
+                    .child(
+                        div()
+                            .font_family(self.fonts.mono.clone())
+                            .text_size(px(11.0))
+                            .px(px(6.0))
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(t.border)
+                            .text_color(t.muted)
+                            .child("Ctrl B"),
+                    ),
+            )
     }
 
     /// A thin scroll bar on the editor's right edge; drag the thumb or click
@@ -1978,7 +2041,15 @@ impl SlateWindow {
                 )
             })
             .when(wide, |d| {
-                d.child(divider().child(if vim { "Vim" } else { "Standard" }))
+                d.child(
+                    divider().child(
+                        self.host
+                            .working
+                            .as_ref()
+                            .map_or("All notes".to_string(), |(_, name)| name.clone()),
+                    ),
+                )
+                .child(divider().child(if vim { "Vim" } else { "Standard" }))
             })
             .child(
                 divider()
