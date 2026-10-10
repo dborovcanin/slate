@@ -27,7 +27,9 @@ use note_session::save::{run_save, SaveCompletion, SaveContext};
 use note_session::{Document, NoteSession};
 use editor_core::command_catalog::CommandId;
 use editor_core::history::policy::{UndoGrouping, UndoSession};
-use editor_core::types::{CommandMode, EditOperation, EditorContextSnapshot, SelectionSnapshot};
+use editor_core::types::{
+    CommandMode, EditOperation, EditorContextSnapshot, SelectionSnapshot, TextRange,
+};
 use note_session::{EditContext, SessionEdit};
 use std::ops::Range;
 use std::sync::{Arc, Condvar, Mutex};
@@ -95,7 +97,7 @@ pub enum CommandRun {
 }
 
 pub struct NoteHost {
-    db: Db,
+    pub(crate) db: Db,
     index: Arc<Mutex<CrossNoteVarIndex>>,
     loaded: Condvar,
     pub doc: Document,
@@ -182,7 +184,16 @@ impl NoteHost {
             .db
             .get_note(id)?
             .ok_or_else(|| format!("note {id} not found"))?;
+        self.open_note(note);
+        Ok(())
+    }
+
+    /// Show `note` (already read, or just unlocked) as the open note.
+    pub fn open_note(&mut self, note: Note) {
         self.session.open(&note, &mut self.doc);
+        if let Ok(reminders) = self.db.list_reminders(&note.id) {
+            self.session.install_reminders(reminder_ghosts(&reminders, self.doc.lines()));
+        }
         self.input = InputState::default();
         self.modules = note.modules;
         self.title = self
@@ -191,8 +202,22 @@ impl NoteHost {
             .find(|n| n.id == note.id)
             .map(|n| n.title.clone())
             .unwrap_or_default();
+        self.last_edit = None;
         self.recompute_calc();
-        Ok(())
+    }
+
+    /// The note is encrypted and its text is not available until unlocked.
+    pub fn locked(&self) -> bool {
+        !self.session.editable()
+    }
+
+    pub fn apply_vim_action(&mut self, action: &VimAction) -> InputOutcome {
+        self.run_input(|session, doc, input, cx| session.apply_vim_action(doc, input, action, cx))
+    }
+
+    /// Re-read the note list, e.g. after creating or deleting notes.
+    pub fn refresh_notes(&mut self) {
+        self.refresh_titles();
     }
 
     /// Evaluate calc the way the terminal does after opening a note. Large
@@ -419,6 +444,162 @@ impl NoteHost {
         }
     }
 
+    /// Insert whole lines before line `at`.
+    pub fn insert_lines(&mut self, at: usize, lines: Vec<String>) -> InputOutcome {
+        self.run_input(|session, doc, input, cx| {
+            let mut outcome = InputOutcome {
+                handled: true,
+                ..Default::default()
+            };
+            let ctx = EditContext {
+                grouping: UndoGrouping {
+                    session: UndoSession::Command,
+                    elapsed: cx.since_last_edit,
+                },
+                folds: None,
+            };
+            let _ = input;
+            let applied = session.apply_with_upkeep(
+                doc,
+                SessionEdit::InsertLines {
+                    at,
+                    lines: lines.into(),
+                },
+                ctx,
+                cx.calc.map(|(inputs, _)| inputs),
+                cx.calc.map(|(_, provider)| provider),
+            );
+            if let Some(applied) = applied {
+                outcome.text_changed = applied.text_changed;
+                outcome.first_changed_line = Some(applied.first_changed_line);
+                outcome.calc_work = applied.calc_effect.work;
+            }
+            outcome
+        })
+    }
+
+    /// Add an empty cell at the right end of every row of the table in
+    /// lines `start..=end`; the delimiter row gets a `---` cell.
+    pub fn append_table_column(&mut self, start: usize, end: usize) -> InputOutcome {
+        let lines = self.doc.lines();
+        let mut changes = Vec::new();
+        for (i, line) in lines.iter().enumerate().take(end + 1).skip(start) {
+            let trimmed = line.trim_end();
+            if !trimmed.ends_with('|') {
+                continue;
+            }
+            let cell = if table_syntax::is_delimiter_line_in(lines, i) {
+                " --- |"
+            } else {
+                "  |"
+            };
+            let at = self.byte_offset(i, 0) + trimmed.len();
+            changes.push(editor_core::types::TextChange {
+                from: at,
+                to: at,
+                insert: cell.to_string(),
+            });
+        }
+        if changes.is_empty() {
+            return InputOutcome::default();
+        }
+        let op = EditOperation {
+            changes,
+            selection: None,
+        };
+        self.apply_operation(&op)
+    }
+
+    /// A script request for the current selection or note, with the ticket
+    /// that guards where its result may land. `None` when the script needs
+    /// a selection and there is none.
+    pub fn script_request(
+        &mut self,
+        script: &app_core::scripts::ScriptDefinition,
+        args: Vec<String>,
+    ) -> Option<(note_session::scripts::ScriptTicket, app_core::scripts::ScriptRequest)> {
+        use app_core::scripts::{ScriptInput, ScriptOutput};
+        let selection = self.selection_bytes();
+        let cursor = self.byte_offset(self.doc.cursor_line, self.doc.cursor_col);
+        self.doc.ensure_joined_text();
+        let full = self.doc.joined_text_cached().unwrap_or_default();
+        let text = match script.input {
+            ScriptInput::None => String::new(),
+            ScriptInput::Selection => {
+                let (a, b) = selection?;
+                full[a..b].to_string()
+            }
+            ScriptInput::Note => full.to_string(),
+        };
+        if text.len() > app_core::scripts::MAX_INPUT_BYTES {
+            return None;
+        }
+        let range = match (script.output, selection) {
+            (ScriptOutput::ReplaceSelection, Some((from, to))) => TextRange { from, to },
+            (ScriptOutput::ReplaceSelection, None) => return None,
+            _ => TextRange {
+                from: cursor,
+                to: cursor,
+            },
+        };
+        let ticket = self.session.script_ticket(&self.doc, range, script.output);
+        let request = app_core::scripts::ScriptRequest {
+            version: 1,
+            args,
+            text,
+            note_id: Some(self.note_id().to_string()),
+        };
+        Some((ticket, request))
+    }
+
+    /// Apply a finished script's result unless the note changed since it
+    /// started.
+    pub fn apply_script(
+        &mut self,
+        ticket: &note_session::scripts::ScriptTicket,
+        response: &app_core::scripts::ScriptResponse,
+    ) -> Result<InputOutcome, String> {
+        let edit = self
+            .session
+            .accept_script_result(&self.doc, ticket, response)
+            .map_err(|r| match r {
+                note_session::scripts::ScriptRejection::Lifetime => "the note was closed".to_string(),
+                note_session::scripts::ScriptRejection::TextChanged => {
+                    "the text changed while it ran; result dropped".to_string()
+                }
+                note_session::scripts::ScriptRejection::NotEditable => "the note is locked".to_string(),
+            })?;
+        let Some(edit) = edit else {
+            return Ok(InputOutcome::default());
+        };
+        let ctx = EditContext {
+            grouping: UndoGrouping {
+                session: UndoSession::Command,
+                elapsed: std::time::Duration::MAX,
+            },
+            folds: None,
+        };
+        let applied = self.session.apply(&mut self.doc, edit, ctx);
+        let mut outcome = InputOutcome {
+            handled: true,
+            ..Default::default()
+        };
+        if let Some(applied) = applied {
+            outcome.text_changed = applied.text_changed;
+            outcome.first_changed_line = Some(applied.first_changed_line);
+        }
+        self.last_edit = Some(Instant::now());
+        self.recompute_calc_after_script();
+        Ok(outcome)
+    }
+
+    fn recompute_calc_after_script(&mut self) {
+        let note_id = self.session.note_id().to_string();
+        let provider = provider(self.modules, &note_id, &self.index, &self.db, &self.loaded);
+        let len = self.doc.lines().len();
+        self.session.evaluate_calc_range(&self.doc, 0, len, &provider);
+    }
+
     /// Unsaved edits older than the autosave delay.
     pub fn autosave_due(&self, delay: std::time::Duration) -> bool {
         self.session.dirty() && self.last_edit.is_some_and(|t| t.elapsed() >= delay)
@@ -597,6 +778,29 @@ impl NoteHost {
         view.kind = LineKind::TableRow { cells, header };
         view
     }
+}
+
+/// Reminder marks for the lines the stored reminders now sit on.
+fn reminder_ghosts(
+    reminders: &[app_core::storage::Reminder],
+    lines: &[String],
+) -> rustc_hash::FxHashMap<usize, note_session::LineReminderGhost> {
+    app_core::reminders::place_reminders(reminders, lines)
+        .into_iter()
+        .zip(reminders)
+        .filter_map(|(line, r)| {
+            let line = line?;
+            Some((
+                line,
+                note_session::LineReminderGhost {
+                    remind_at_ms: r.remind_at_ms,
+                    display_at: r.display_at.clone(),
+                    line_text: lines[line].clone(),
+                    reminded_at_ms: r.reminded_at_ms,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Visible characters from `start`, grouped by style; hidden markers are dropped.
