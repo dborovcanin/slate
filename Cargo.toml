@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tui", "crates/editor-core", "crates/app-core", "crates/table-syntax", "crates/mcp"]
+members = ["crates/session", "crates/tui", "crates/editor-core", "crates/app-core", "crates/table-syntax", "crates/mcp"]
 
 # Thin LTO + single codegen unit pays a small build-time cost for noticeably
 # smaller binaries and faster hot loops in editor-core and

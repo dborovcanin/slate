@@ -1,0 +1,7 @@
+disallowed-methods = [
+    "std::thread::spawn",
+    "std::thread::Builder::spawn",
+    "std::thread::scope",
+    "std::time::Instant::now",
+    "std::time::SystemTime::now",
+]

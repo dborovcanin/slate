@@ -257,7 +257,7 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
     app.editor.cursor_line = app.editor.lines.len().saturating_sub(1);
     app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    let insert_scroll_before = app.editor.scroll_line;
+    let insert_scroll_before = app.view.scroll_line;
 
     run_keys(&mut app, &db, &[Key::Enter]);
 
@@ -269,14 +269,14 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
         app.editor.lines.len()
     );
     assert_eq!(app.folds.range_by_start.len(), app.editor.lines.len());
-    assert!(app.editor.scroll_line > 0);
-    assert!(app.editor.scroll_line >= insert_scroll_before.saturating_sub(1));
+    assert!(app.view.scroll_line > 0);
+    assert!(app.view.scroll_line >= insert_scroll_before.saturating_sub(1));
 
     app.mode = UiMode::Normal;
     app.editor.cursor_line = app.editor.lines.len().saturating_sub(2);
     app.editor.cursor_col = 0;
     app.adjust_scroll();
-    let delete_scroll_before = app.editor.scroll_line;
+    let delete_scroll_before = app.view.scroll_line;
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
 
@@ -288,8 +288,8 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
         app.editor.lines.len()
     );
     assert_eq!(app.folds.range_by_start.len(), app.editor.lines.len());
-    assert!(app.editor.scroll_line > 0);
-    assert!(app.editor.scroll_line >= delete_scroll_before.saturating_sub(2));
+    assert!(app.view.scroll_line > 0);
+    assert!(app.view.scroll_line >= delete_scroll_before.saturating_sub(2));
 
     render_screen(&mut app);
 
@@ -367,9 +367,9 @@ fn large_doc_random_tail_edit_stress_keeps_state_consistent() {
             "step {step_idx}: fold_range_by_start size mismatch after op {op}"
         );
         assert!(
-            app.editor.scroll_line < app.visible_line_count(),
+            app.view.scroll_line < app.visible_line_count(),
             "step {step_idx}: scroll_line {} out of visible range {} after op {op}",
-            app.editor.scroll_line,
+            app.view.scroll_line,
             app.visible_line_count()
         );
 
@@ -591,7 +591,7 @@ fn horizontal_scroll_clamps_to_last_visible_window_at_line_end_in_normal_mode() 
     let expected = crate::terminal::text_utils::line_display_cols(app.current_line())
         .saturating_sub(available);
 
-    assert_eq!(app.editor.scroll_col, expected);
+    assert_eq!(app.view.scroll_col, expected);
 
     drop(app);
     cleanup_db_files(&path);
@@ -612,12 +612,12 @@ fn horizontal_scroll_allows_insert_end_slot_on_overflow_line_end() {
         .saturating_sub(available)
         .saturating_add(1);
 
-    assert_eq!(app.editor.scroll_col, expected);
+    assert_eq!(app.view.scroll_col, expected);
 
     let line_width = crate::terminal::text_utils::line_display_cols(app.current_line());
     let viewport = crate::terminal::text_utils::compute_line_viewport(
         line_width,
-        app.editor.scroll_col,
+        app.view.scroll_col,
         available,
     );
     assert!(!viewport.has_right_overflow);
@@ -644,13 +644,13 @@ fn sample_overflow_line_places_cursor_on_last_screen_cell_in_insert_and_normal()
     app.adjust_scroll();
     let (_row, col_insert) = app.cursor_position(rows, cols);
     assert_eq!(col_insert, cols);
-    assert!(line_width <= app.editor.scroll_col.saturating_add(available));
+    assert!(line_width <= app.view.scroll_col.saturating_add(available));
 
     app.mode = UiMode::Normal;
     app.adjust_scroll();
     let (_row, col_normal) = app.cursor_position(rows, cols);
     assert_eq!(col_normal, cols);
-    assert!(line_width <= app.editor.scroll_col.saturating_add(available));
+    assert!(line_width <= app.view.scroll_col.saturating_add(available));
 
     drop(app);
     cleanup_db_files(&path);
@@ -681,7 +681,7 @@ fn append_line_end_on_overflow_keeps_last_character_visible_and_cursor_at_screen
     app.vim_state = crate::editor_core::vim::VimState::default();
     app.editor.cursor_line = 0;
     app.editor.cursor_col = 0;
-    app.editor.scroll_col = 0;
+    app.view.scroll_col = 0;
 
     run_keys(&mut app, &db, &[Key::Char('A')]);
 
@@ -690,7 +690,7 @@ fn append_line_end_on_overflow_keeps_last_character_visible_and_cursor_at_screen
     let line_width = crate::terminal::text_utils::line_display_cols(app.current_line());
     let viewport = crate::terminal::text_utils::compute_line_viewport(
         line_width,
-        app.editor.scroll_col,
+        app.view.scroll_col,
         available,
     );
     let (_row, cursor_col) = app.cursor_position(rows, cols);
@@ -734,7 +734,7 @@ fn enter_from_overflowing_checklist_repositions_cursor_and_resets_horizontal_scr
     app.editor.cursor_line = 0;
     app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.editor.scroll_col > 0);
+    assert!(app.view.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
@@ -742,7 +742,7 @@ fn enter_from_overflowing_checklist_repositions_cursor_and_resets_horizontal_scr
     assert_eq!(app.editor.cursor_line, 1);
     assert_eq!(app.editor.lines[1], "- [ ] ");
     assert_eq!(app.editor.cursor_col, line_char_len("- [ ] "));
-    assert_eq!(app.editor.scroll_col, 0);
+    assert_eq!(app.view.scroll_col, 0);
 
     drop(app);
     drop(db);
@@ -756,7 +756,7 @@ fn enter_from_overflowing_unordered_list_repositions_cursor_and_resets_horizonta
     app.editor.cursor_line = 0;
     app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.editor.scroll_col > 0);
+    assert!(app.view.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
@@ -764,7 +764,7 @@ fn enter_from_overflowing_unordered_list_repositions_cursor_and_resets_horizonta
     assert_eq!(app.editor.cursor_line, 1);
     assert_eq!(app.editor.lines[1], "- ");
     assert_eq!(app.editor.cursor_col, line_char_len("- "));
-    assert_eq!(app.editor.scroll_col, 0);
+    assert_eq!(app.view.scroll_col, 0);
 
     drop(app);
     drop(db);
@@ -778,7 +778,7 @@ fn enter_from_overflowing_ordered_list_repositions_cursor_and_resets_horizontal_
     app.editor.cursor_line = 0;
     app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.editor.scroll_col > 0);
+    assert!(app.view.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
@@ -786,7 +786,7 @@ fn enter_from_overflowing_ordered_list_repositions_cursor_and_resets_horizontal_
     assert_eq!(app.editor.cursor_line, 1);
     assert_eq!(app.editor.lines[1], "10. ");
     assert_eq!(app.editor.cursor_col, line_char_len("10. "));
-    assert_eq!(app.editor.scroll_col, 0);
+    assert_eq!(app.view.scroll_col, 0);
 
     drop(app);
     drop(db);
@@ -801,7 +801,7 @@ fn enter_from_overflowing_table_row_repositions_cursor_and_resets_horizontal_scr
     app.editor.cursor_line = 2;
     app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.editor.scroll_col > 0);
+    assert!(app.view.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
@@ -810,7 +810,7 @@ fn enter_from_overflowing_table_row_repositions_cursor_and_resets_horizontal_scr
     assert!(app.editor.lines[3].starts_with("| "));
     assert!(app.editor.lines[3].ends_with(" |"));
     assert_eq!(app.editor.cursor_col, 2);
-    assert_eq!(app.editor.scroll_col, 0);
+    assert_eq!(app.view.scroll_col, 0);
 
     drop(app);
     drop(db);

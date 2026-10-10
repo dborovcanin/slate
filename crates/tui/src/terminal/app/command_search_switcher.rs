@@ -3067,8 +3067,8 @@ impl TerminalApp {
         self.last_reminder_check = Instant::now();
         self.editor.cursor_line = 0;
         self.editor.cursor_col = 0;
-        self.editor.scroll_line = 0;
-        self.editor.scroll_col = 0;
+        self.view.scroll_line = 0;
+        self.view.scroll_col = 0;
         self.dirty = false;
         self.last_edit = Instant::now();
         self.search.query.clear();
@@ -3157,7 +3157,7 @@ impl TerminalApp {
         self.search.current = 0;
         self.search.orig_line = self.editor.cursor_line;
         self.search.orig_col = self.editor.cursor_col;
-        self.search.orig_scroll = self.editor.scroll_line;
+        self.search.orig_scroll = self.view.scroll_line;
         self.mode = UiMode::Search;
         self.status = "/".to_string();
     }
@@ -3167,10 +3167,10 @@ impl TerminalApp {
             Key::Esc => {
                 self.editor.cursor_line = self.search.orig_line;
                 self.editor.cursor_col = self.search.orig_col;
-                self.editor.scroll_line = self.search.orig_scroll;
+                self.view.scroll_line = self.search.orig_scroll;
                 self.adjust_cursor();
-                self.editor.scroll_line = self
-                    .editor
+                self.view.scroll_line = self
+                    .view
                     .scroll_line
                     .min(self.visible_line_count().saturating_sub(1));
                 self.mode = UiMode::Normal;

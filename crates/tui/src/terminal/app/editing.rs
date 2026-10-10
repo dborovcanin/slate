@@ -2131,7 +2131,7 @@ impl TerminalApp {
         let cursor_virtual = self.current_virtual_line();
         let row = EDITOR_TOP_ROW
             + cursor_virtual
-                .saturating_sub(self.editor.scroll_line)
+                .saturating_sub(self.view.scroll_line)
                 .min(rows.saturating_sub(2));
         let gutter_width = self.gutter_width();
         let available = cols.saturating_sub(gutter_width);
@@ -2142,12 +2142,8 @@ impl TerminalApp {
         let line_col = anchor_col.min(line_char_len(line_text));
         let display_col = display_cols_for_prefix(line_text, line_col);
         let line_width = line_display_cols(line_text);
-        let visible_col = viewport_col_for_display_col(
-            display_col,
-            line_width,
-            self.editor.scroll_col,
-            available,
-        );
+        let visible_col =
+            viewport_col_for_display_col(display_col, line_width, self.view.scroll_col, available);
         let col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
         Some((row.max(EDITOR_TOP_ROW), col))
     }
@@ -2924,7 +2920,7 @@ impl TerminalApp {
             return false;
         };
 
-        self.editor.markdown_formatting_right_boundary_exit = None;
+        self.view.markdown_formatting_right_boundary_exit = None;
         if target.line_index < 0 {
             if let Some(prev_line) = self.visible_line_before(block_start) {
                 self.editor.cursor_line = prev_line;
@@ -2997,13 +2993,13 @@ impl TerminalApp {
     }
 
     pub(super) fn move_cursor_left(&mut self) {
-        if self.editor.markdown_formatting_right_boundary_exit
+        if self.view.markdown_formatting_right_boundary_exit
             == Some((self.editor.cursor_line, self.editor.cursor_col))
         {
-            self.editor.markdown_formatting_right_boundary_exit = None;
+            self.view.markdown_formatting_right_boundary_exit = None;
             return;
         }
-        self.editor.markdown_formatting_right_boundary_exit = None;
+        self.view.markdown_formatting_right_boundary_exit = None;
 
         if self.try_shared_table_cursor_motion(
             crate::editor_core::table::TableCursorMotionDirection::Left,
@@ -3025,10 +3021,10 @@ impl TerminalApp {
     }
 
     pub(super) fn move_cursor_right(&mut self) {
-        let consumed_boundary_exit = self.editor.markdown_formatting_right_boundary_exit
+        let consumed_boundary_exit = self.view.markdown_formatting_right_boundary_exit
             == Some((self.editor.cursor_line, self.editor.cursor_col));
         if consumed_boundary_exit {
-            self.editor.markdown_formatting_right_boundary_exit = None;
+            self.view.markdown_formatting_right_boundary_exit = None;
         }
 
         let boundary_exit_anchor = if !consumed_boundary_exit
@@ -3055,7 +3051,7 @@ impl TerminalApp {
             true,
             neighbour,
         );
-        self.editor.markdown_formatting_right_boundary_exit =
+        self.view.markdown_formatting_right_boundary_exit =
             if cursor.line == self.editor.cursor_line {
                 boundary_exit_anchor
             } else {
@@ -3144,7 +3140,7 @@ impl TerminalApp {
                 None => self.editor.cursor_col = screen_col,
             }
         }
-        self.editor.markdown_formatting_right_boundary_exit = None;
+        self.view.markdown_formatting_right_boundary_exit = None;
         self.clamp_cursor_to_line_bounds();
     }
 
@@ -3152,7 +3148,7 @@ impl TerminalApp {
         if count == 0 {
             return;
         }
-        self.editor.markdown_formatting_right_boundary_exit = None;
+        self.view.markdown_formatting_right_boundary_exit = None;
         let current_virtual = self.current_virtual_line();
         let target_virtual = current_virtual.saturating_sub(count);
         self.editor.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
@@ -3163,7 +3159,7 @@ impl TerminalApp {
         if count == 0 {
             return;
         }
-        self.editor.markdown_formatting_right_boundary_exit = None;
+        self.view.markdown_formatting_right_boundary_exit = None;
         let current_virtual = self.current_virtual_line();
         let target_virtual = min(
             current_virtual.saturating_add(count),
@@ -3257,20 +3253,20 @@ impl TerminalApp {
     pub(super) fn adjust_scroll(&mut self) {
         let height = self.editor_height();
         let cursor_virtual = self.current_virtual_line();
-        if cursor_virtual < self.editor.scroll_line {
-            self.editor.scroll_line = cursor_virtual;
-        } else if cursor_virtual >= self.editor.scroll_line + height {
-            self.editor.scroll_line = cursor_virtual + 1 - height;
+        if cursor_virtual < self.view.scroll_line {
+            self.view.scroll_line = cursor_virtual;
+        } else if cursor_virtual >= self.view.scroll_line + height {
+            self.view.scroll_line = cursor_virtual + 1 - height;
         }
-        self.editor.scroll_line = self
-            .editor
+        self.view.scroll_line = self
+            .view
             .scroll_line
             .min(self.visible_line_count().saturating_sub(1));
 
         let (_, cols) = input::terminal_size();
         let available = cols.saturating_sub(self.gutter_width());
         if available == 0 || self.cursor_line_wraps() {
-            self.editor.scroll_col = 0;
+            self.view.scroll_col = 0;
             return;
         }
 
@@ -3303,14 +3299,14 @@ impl TerminalApp {
             )
         };
 
-        if cursor_display_col < self.editor.scroll_col {
-            self.editor.scroll_col =
+        if cursor_display_col < self.view.scroll_col {
+            self.view.scroll_col =
                 cursor_display_col.saturating_sub(HORIZONTAL_SCROLL_LEFT_CONTEXT);
-        } else if cursor_display_col >= self.editor.scroll_col + available {
-            self.editor.scroll_col = cursor_display_col + 1 - available;
+        } else if cursor_display_col >= self.view.scroll_col + available {
+            self.view.scroll_col = cursor_display_col + 1 - available;
         }
 
-        self.editor.scroll_col = self.editor.scroll_col.min(max_scroll);
+        self.view.scroll_col = self.view.scroll_col.min(max_scroll);
     }
 
     pub(super) fn calc_eval_range_for_viewport(
@@ -3325,9 +3321,9 @@ impl TerminalApp {
             return None;
         }
         let prefetch = editor_height.saturating_mul(CALC_VIEWPORT_PREFETCH_MULTIPLIER);
-        let start_virtual = self.editor.scroll_line.saturating_sub(prefetch);
+        let start_virtual = self.view.scroll_line.saturating_sub(prefetch);
         let end_virtual = self
-            .editor
+            .view
             .scroll_line
             .saturating_add(editor_height)
             .saturating_add(prefetch)
@@ -3828,7 +3824,7 @@ impl TerminalApp {
         let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
             self.editor
                 .cursor_line
-                .saturating_sub(self.editor.scroll_line)
+                .saturating_sub(self.view.scroll_line)
                 + super::EDITOR_TOP_ROW,
             from_col.saturating_add(1),
         ));
@@ -3879,7 +3875,7 @@ impl TerminalApp {
         let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
             self.editor
                 .cursor_line
-                .saturating_sub(self.editor.scroll_line)
+                .saturating_sub(self.view.scroll_line)
                 + super::EDITOR_TOP_ROW,
             from_col.saturating_add(1),
         ));

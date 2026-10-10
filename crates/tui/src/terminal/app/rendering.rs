@@ -1259,7 +1259,7 @@ impl TerminalApp {
             .unwrap_or_else(|| {
                 self.editor
                     .cursor_line
-                    .saturating_sub(self.editor.scroll_line)
+                    .saturating_sub(self.view.scroll_line)
                     + EDITOR_TOP_ROW
             });
         let y = if cursor_screen_row >= EDITOR_TOP_ROW + box_height {
@@ -1271,11 +1271,7 @@ impl TerminalApp {
         }
         .max(EDITOR_TOP_ROW);
 
-        let cursor_screen_col = self
-            .editor
-            .cursor_col
-            .saturating_sub(self.editor.scroll_col)
-            + 1;
+        let cursor_screen_col = self.editor.cursor_col.saturating_sub(self.view.scroll_col) + 1;
         let x = if cursor_screen_col + box_width <= cols + 1 {
             cursor_screen_col
         } else {
@@ -1472,7 +1468,7 @@ impl TerminalApp {
         };
 
         let first_real_line = self
-            .real_line_for_virtual(self.editor.scroll_line)
+            .real_line_for_virtual(self.view.scroll_line)
             .unwrap_or(self.editor.lines.len());
         let mut ctx = self.render_context_at(first_real_line);
         let mut last_rendered_real = first_real_line.checked_sub(1);
@@ -1483,7 +1479,7 @@ impl TerminalApp {
         let mut wrapped_cursor_cell: Option<(usize, usize)> = None;
 
         let mut row = EDITOR_TOP_ROW;
-        let mut virtual_line = self.editor.scroll_line;
+        let mut virtual_line = self.view.scroll_line;
         while row < editor_bottom {
             draw_row_at_styled(
                 buf,
@@ -1544,8 +1540,8 @@ impl TerminalApp {
                     let track = (is_cursor_line && editor_cursor_mode)
                         .then(|| self.cursor_display_char(&display));
                     let max_rows = editor_bottom - row;
-                    let skip = if virtual_line == self.editor.scroll_line {
-                        self.editor.scroll_row_offset
+                    let skip = if virtual_line == self.view.scroll_line {
+                        self.view.scroll_row_offset
                     } else {
                         0
                     };
@@ -1582,7 +1578,7 @@ impl TerminalApp {
                 } else {
                     let viewport = compute_line_viewport(
                         line_display_cols(&display.text),
-                        self.editor.scroll_col,
+                        self.view.scroll_col,
                         available,
                     );
                     let gutter_style = if is_cursor_line {
@@ -1773,7 +1769,7 @@ impl TerminalApp {
                 let visible_col = viewport_col_for_display_col(
                     display_col,
                     line_width,
-                    self.editor.scroll_col,
+                    self.view.scroll_col,
                     available,
                 );
                 cursor_col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
@@ -1857,9 +1853,9 @@ impl TerminalApp {
     ) -> VecDeque<(usize, DisplayLine)> {
         let mut prepared = VecDeque::new();
         let cursor_virtual = self.current_virtual_line();
-        let top = self.editor.scroll_line;
+        let top = self.view.scroll_line;
         if cursor_virtual < top || cursor_virtual >= top + editor_height {
-            self.editor.scroll_row_offset = 0;
+            self.view.scroll_row_offset = 0;
             return prepared;
         }
         let mut cursor_row_in_line = 0usize;
@@ -1904,22 +1900,22 @@ impl TerminalApp {
             heights.push_back(rows);
             prepared.push_back((virtual_line, display));
         }
-        while total > editor_height && self.editor.scroll_line < cursor_virtual {
+        while total > editor_height && self.view.scroll_line < cursor_virtual {
             total -= heights.pop_front().unwrap_or(0);
             prepared.pop_front();
-            self.editor.scroll_line += 1;
+            self.view.scroll_line += 1;
         }
         // Sub-line scrolling: only the cursor line itself can be taller than
         // the editor area; keep its cursor row visible by skipping rows.
-        if self.editor.scroll_line == cursor_virtual {
-            let offset = &mut self.editor.scroll_row_offset;
+        if self.view.scroll_line == cursor_virtual {
+            let offset = &mut self.view.scroll_row_offset;
             if cursor_row_in_line < *offset {
                 *offset = cursor_row_in_line;
             } else if cursor_row_in_line >= *offset + editor_height {
                 *offset = cursor_row_in_line + 1 - editor_height;
             }
         } else {
-            self.editor.scroll_row_offset = 0;
+            self.view.scroll_row_offset = 0;
         }
         prepared
     }
@@ -2187,7 +2183,7 @@ impl TerminalApp {
         if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
             let source_cursor_col = line_cursor_col.unwrap_or(self.editor.cursor_col);
             let force_formatting_boundary_exit = self
-                .editor
+                .view
                 .markdown_formatting_right_boundary_exit
                 .is_some_and(|(line, _)| line == line_idx);
             let (collapsed_line, mapped_col) =
@@ -2324,7 +2320,7 @@ impl TerminalApp {
                 let cursor_virtual = self.current_virtual_line();
                 let row = EDITOR_TOP_ROW
                     + cursor_virtual
-                        .saturating_sub(self.editor.scroll_line)
+                        .saturating_sub(self.view.scroll_line)
                         .min(rows.saturating_sub(2));
                 let line_text = self.current_line();
                 let display_char_col = cursor_render_char_col(
@@ -2342,7 +2338,7 @@ impl TerminalApp {
                 let visible_col = viewport_col_for_display_col(
                     display_col,
                     line_width,
-                    self.editor.scroll_col,
+                    self.view.scroll_col,
                     available,
                 );
                 let col = (gutter_width + visible_col + 1).min(cols.max(1));

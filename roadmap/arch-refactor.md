@@ -539,7 +539,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 2: fold upkeep from exact edit spans.
 - [x] Step 3: core same-line replacement plans.
 - [x] Step 4: core line insertion/removal plans.
-- [ ] Step 5: document crate and terminal view separation.
+- [x] Step 5: document crate and terminal view separation.
 - [ ] Step 6: undo, dirty and reminder session state.
 - [ ] Step 7: session edit pipeline and undo/redo.
 - [ ] Step 8: private document text.
@@ -584,6 +584,11 @@ before recording history, whereas keyboard edits may defer calc until after
 history. Preserve both through a temporary finalize-after-upkeep continuation
 and remove it with session calc ownership in step 10; the final single-call
 contract is not met while that continuation exists.
+
+Step 5: `note-session::Document` owns text/cache/cursor/selection; viewport
+state stays in terminal `ViewState`. Existing dependencies only. The temporary
+thread-spawn probe failed under Clippy from the workspace root and was removed.
+Document tests and full workspace checks passed with no new warnings.
 
 Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
 could not create a private runtime image; the approved rerun passed. Baseline

@@ -2053,7 +2053,7 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
     };
     for step in 0..120 {
         let visible = app.editor_height().min(app.editor.lines.len());
-        app.editor.cursor_line = app.editor.scroll_line + next(visible.saturating_sub(1));
+        app.editor.cursor_line = app.view.scroll_line + next(visible.saturating_sub(1));
         app.editor.cursor_col = 0;
         let keys: Vec<Key> = match next(6) {
             0 => "dd".chars().map(Key::Char).collect(),
@@ -2089,7 +2089,7 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
             None,
             Vec::new(),
         );
-        let first = app.editor.scroll_line;
+        let first = app.view.scroll_line;
         let last = (first + app.editor_height()).min(app.editor.lines.len());
         for line in first..last {
             assert_eq!(

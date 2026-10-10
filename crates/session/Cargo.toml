@@ -1,0 +1,13 @@
+[package]
+name = "note-session"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+editor-core = { path = "../editor-core" }
+app-core = { path = "../app-core" }
+rustc-hash = "2"
+aho-corasick = "1"
+
+[lints.clippy]
+disallowed_methods = "deny"

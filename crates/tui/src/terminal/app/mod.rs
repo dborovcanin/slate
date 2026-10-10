@@ -524,44 +524,14 @@ struct RenderState {
     dirty: bool,
 }
 
-/// Editable document model: the canonical `Vec<String>` line buffer plus its
-/// derived joined-text cache, the cursor position, viewport scroll offsets, the
-/// selection anchor, and the markdown-formatting boundary-exit marker. These
-/// are the fields edits, motions, and rendering all read/write together, so
-/// they are grouped to keep `lines` and `joined_text_cache` co-owned (the
-/// partial-borrow canary called out in roadmap/review.md item 3).
+/// Terminal viewport and cursor-dependent presentation state.
 #[derive(Default)]
-struct EditorModel {
-    lines: Vec<String>,
-    joined_text_cache: Option<String>,
-    /// Changes whenever `lines` does (bumped with `joined_text_cache`'s
-    /// invalidation), so calc caches can tell an unchanged note without
-    /// rehashing it.
-    text_generation: u64,
-    cursor_line: usize,
-    cursor_col: usize, // char index
+struct ViewState {
     scroll_line: usize,
-    /// Rows of the soft-wrapped top line scrolled past; only nonzero when the
-    /// cursor line is taller than the editor area.
+    /// Rows of the soft-wrapped top line scrolled past.
     scroll_row_offset: usize,
     scroll_col: usize,
-    selection_anchor: Option<(usize, usize)>, // (line, col)
     markdown_formatting_right_boundary_exit: Option<(usize, usize)>,
-}
-
-impl EditorModel {
-    /// The cursor as the core buffer APIs take it (character column).
-    fn cursor(&self) -> crate::editor_core::buffer::primitives::BufferCursor {
-        crate::editor_core::buffer::primitives::BufferCursor {
-            line: self.cursor_line,
-            column: self.cursor_col,
-        }
-    }
-
-    fn set_cursor(&mut self, cursor: crate::editor_core::buffer::primitives::BufferCursor) {
-        self.cursor_line = cursor.line;
-        self.cursor_col = cursor.column;
-    }
 }
 
 /// Note-switcher overlay state: the fuzzy query + result list, the reused
@@ -652,9 +622,9 @@ struct TerminalApp {
     active_note: Note,
     /// Encrypted collection whose password unlocks the open note.
     active_note_key_collection: Option<String>,
-    // Editable document model: line buffer + joined-text cache, cursor, viewport
-    // scroll, selection anchor, and the markdown-formatting boundary-exit marker.
-    editor: EditorModel,
+    // Shared document text, cache, cursor and selection; terminal view is separate.
+    editor: note_session::Document,
+    view: ViewState,
     scripts: scripts::ScriptState,
     currency: currency::CurrencyState,
     mode: UiMode,
@@ -1147,10 +1117,11 @@ impl TerminalApp {
             active_note_key_collection: None,
             scripts: scripts::ScriptState::new(app_core::config::load_script_config()),
             currency: Default::default(),
-            editor: EditorModel {
+            editor: note_session::Document {
                 lines,
                 ..Default::default()
             },
+            view: ViewState::default(),
             mode: initial_mode,
             vim_enabled: vim_mode,
             key_depth: 0,

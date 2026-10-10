@@ -154,14 +154,14 @@ fn editor_right_arrow_exits_inline_formatting_boundary_before_advancing() {
         .expect("right advances while exiting boundary");
     assert_eq!(app.editor.cursor_col, 9);
     assert_eq!(
-        app.editor.markdown_formatting_right_boundary_exit,
+        app.view.markdown_formatting_right_boundary_exit,
         Some((0, 8))
     );
 
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("second right advances normally");
     assert_eq!(app.editor.cursor_col, 10);
-    assert_eq!(app.editor.markdown_formatting_right_boundary_exit, None);
+    assert_eq!(app.view.markdown_formatting_right_boundary_exit, None);
 
     drop(app);
     drop(db);
@@ -177,7 +177,7 @@ fn editor_right_arrow_snaps_at_formatting_boundary_when_no_forward_motion_exists
         .expect("right snaps boundary in no-move edge case");
     assert_eq!(app.editor.cursor_col, 8);
     assert_eq!(
-        app.editor.markdown_formatting_right_boundary_exit,
+        app.view.markdown_formatting_right_boundary_exit,
         Some((0, 8))
     );
 
@@ -237,7 +237,7 @@ fn editor_left_arrow_restores_inline_formatting_boundary_reveal() {
     app.handle_editor_key(&db, Key::ArrowLeft)
         .expect("left restores boundary reveal");
     assert_eq!(app.editor.cursor_col, 8);
-    assert_eq!(app.editor.markdown_formatting_right_boundary_exit, None);
+    assert_eq!(app.view.markdown_formatting_right_boundary_exit, None);
 
     drop(app);
     drop(db);
