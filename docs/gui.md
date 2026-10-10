@@ -10,19 +10,52 @@ that output.
 Status: work in progress on the `ui` branch. The terminal app (`slate`) is
 unaffected.
 
-What works now:
+## What works
 
-- Opens the most recent note (or `--id`), from the same database as `slate`.
-- Notes sidebar; click a note to open it.
-- Styled-in-place markdown: headings, bold/italic/code, checklists, hidden
-  markers revealed on the cursor line.
-- Live calc results, variable highlighting, and tables with formula values.
-- Status bar with mode, dirty mark, module chips, calc result and position.
-- Click a line to move the cursor there. `--light` uses the light theme.
+- **Notes:** opens the most recent note (or `--id`) from the same database as
+  `slate`; sidebar to switch notes; `Ctrl+N` new note; `:today`; autosave
+  after 1.5 s of quiet and on quit or note switch.
+- **Display:** styled-in-place markdown, live calc results, variable
+  highlighting, tables with formula values, checklists, reminder chips, soft
+  wrapping of long lines. `--light` uses the light theme.
+- **Editing modes:** vim (default) or standard, switched in View › Editing
+  mode. Vim uses the shared vim engine (`note_session::input`): motions,
+  operators, text objects, registers, undo/redo, Visual modes, counts.
+  Standard mode has Ctrl+Z/Y, Ctrl+C/X/V, Ctrl+A, Ctrl+B/I, Shift-selection.
+- **Mouse:** click places the cursor at the character, drag selects (Visual
+  mode in vim), double click selects a word, triple click a line, right click
+  opens the context menu.
+- **Menus:** File, Edit, View, Format, Calc and Help menus and the right-click
+  menu show the vim keys (in vim mode) and standard shortcuts.
+- **Command palette:** `:` in vim mode or `Ctrl+Shift+P`, with the core's
+  command catalog, completion and descriptions. Which-key strip after a
+  pending prefix (`g`, `d`, `y`, `c`, text objects).
+- **Commands:** all core commands (sum/avg, formatting, lists, `:format`),
+  plus host commands: write/quit/reload, today, date, modules, collections
+  (create, delete, purge, join, leave), reminders (`:remind`), scripts
+  (`:run`), export to Markdown or text, note encryption and decryption.
+- **Collection browser** (`Ctrl+O`) and **note history** (`Ctrl+Shift+H`)
+  with diff preview and restore.
+- **Encrypted notes:** locked notes show a placeholder and ask for the
+  password; `:encrypt` / `:decrypt` prompt for it.
+- **Tables:** hover shows + bars to add a row or column.
+- **Clipboard:** yanks go to the system clipboard; `p` with an empty register
+  and Ctrl+V paste from it.
 
-Not yet: keyboard input and editing (vim and standard modes), menus, the
-command palette, collection browser, history and saving. Wiki links show their
-raw `[[...]]` text because that display rule still lives in the terminal app.
+## Not in the desktop app yet
+
+These are reported in the status bar when invoked:
+
+- PDF export, `:backup`, `:web-search`, `:currency refresh`, clip-watch,
+  `:paste-image` and inline images, folding, in-note search (`/`), macros.
+- Wiki links show their raw `[[...]]` text and are not followable: that
+  display rule and `gd` navigation still live in the terminal app.
+- Vertical motion follows logical lines, not wrapped rows (`gj`/`gk` too).
+- IME composition and accessibility are untested.
+
+Terminal-only behavior that the shared modules do not own yet (fold-aware
+motion, table-cell motion, autoformat after typing, autocomplete popups) is
+the main gap between the two front ends; see `roadmap/arch-refactor.md`.
 
 ## Why a separate workspace
 
@@ -69,3 +102,7 @@ RUST_LOG=info make ui-run
   `libc` releases. Avoid a blanket `cargo update` in `crates/gui` until GPUI
   moves off it.
 - A GPU with Vulkan support is required on Linux (Mesa's drivers are enough).
+  Under Xvfb, Mesa's software renderer (`mesa-vulkan-drivers`, llvmpipe) works
+  for screenshots and scripted tests.
+- Fonts: IBM Plex Sans/Mono are used when installed, else Inter, DejaVu or
+  Liberation.
