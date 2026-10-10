@@ -53,6 +53,8 @@ pub enum KeyCommand {
     Italic,
     NewNote,
     ToggleSidebar,
+    /// `F11`: distraction-free read-only preview.
+    Preview,
     Quit,
     /// Escape closes overlays first, then clears a selection.
     Escape,
@@ -96,6 +98,9 @@ fn app_shortcut(k: &Keystroke) -> Option<KeyCommand> {
     let m = k.modifiers;
     if k.key == "f1" {
         return Some(KeyCommand::CommandPalette);
+    }
+    if k.key == "f11" {
+        return Some(KeyCommand::Preview);
     }
     if !(m.control || m.platform) || m.shift {
         return None;

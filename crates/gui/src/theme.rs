@@ -20,7 +20,6 @@ pub struct Theme {
     /// Variables, links and the Normal mode pill.
     pub blue: Hsla,
     pub chip: Hsla,
-    pub cursorline: Hsla,
     pub active: Hsla,
     pub on_accent: Hsla,
     pub code_bg: Hsla,
@@ -46,7 +45,6 @@ impl Theme {
             amber: c(0xe3a857),
             blue: c(0x7fa6d9),
             chip: c(0x262a30),
-            cursorline: c(0x1f242b),
             active: c(0x252b33),
             on_accent: c(0x11161d),
             code_bg: c(0x1b1e22),
@@ -68,7 +66,6 @@ impl Theme {
             amber: c(0x94560a),
             blue: c(0x2c5c99),
             chip: c(0xe7e4dd),
-            cursorline: c(0xeef2f7),
             active: c(0xe4e9f0),
             on_accent: c(0xffffff),
             code_bg: c(0xf2f0eb),

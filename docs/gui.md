@@ -57,6 +57,7 @@ The global keys are the terminal app's (see [Keymaps](./keymaps.md)):
 | `Ctrl+G` | Collection picker: sets the working collection              |
 | `Ctrl+B` | Collection browser                                          |
 | `Ctrl+E` | Command line (`:` in vim Normal mode)                       |
+| `F11` | Preview: distraction-free, fullscreen, read-only (`Esc`/`F11`/`q` leave; `j`/`k`/Space scroll) |
 | `Ctrl+]` | Follow the wiki link at the cursor (`gd` also follows variables) |
 | `Ctrl+N` | New note (in the working collection)                        |
 | `Ctrl+S` / `Ctrl+Q` | Save / quit                                      |

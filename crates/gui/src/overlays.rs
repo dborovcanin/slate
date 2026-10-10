@@ -94,6 +94,7 @@ pub fn menu_items(name: &str) -> Vec<Item> {
         ],
         "View" => vec![
             it("Sidebar", "Ctrl+\\", "", Key(KeyCommand::ToggleSidebar)),
+            it("Preview", "F11", "", Key(KeyCommand::Preview)),
             it("Theme", "", "", Sub("theme")),
             it("Editing mode", "", "", Sub("editing")),
             it("Command bar", "", "", Sub("cmdbar")),
@@ -534,6 +535,7 @@ fn menu_row(
         Act::Theme => (item.label == "Light") == win.light,
         Act::CommandBar(style) => style == win.command_bar,
         Act::Key(KeyCommand::ToggleSidebar) => win.sidebar,
+        Act::Key(KeyCommand::Preview) => win.host.preview,
         Act::Cmd(c) if c.starts_with("module toggle ") => {
             let m = win.host.modules;
             match &c["module toggle ".len()..] {

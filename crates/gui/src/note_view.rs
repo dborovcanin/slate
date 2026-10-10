@@ -93,6 +93,8 @@ pub struct LineView {
     pub map: Option<Arc<note_session::display::mapping::SourceDisplayMap>>,
     /// Display columns before the first run (a checklist's marker).
     pub display_skip: usize,
+    /// Source of an image shown under the cursor line that holds its markdown.
+    pub below: Option<String>,
 }
 
 /// `![alt](src)` and nothing else on the line.
@@ -137,6 +139,8 @@ pub struct NoteHost {
     /// The working collection `(id, name)`: the sidebar lists its notes and
     /// new notes join it. `None` shows every note.
     pub working: Option<(String, String)>,
+    /// Preview mode: no cursor, so every line shows as rendered.
+    pub preview: bool,
     /// Titles of all notes by id, for wiki-link display.
     titles: std::collections::HashMap<String, String>,
     last_edit: Option<Instant>,
@@ -199,6 +203,7 @@ impl NoteHost {
             modules: NoteModules::default(),
             notes,
             working: None,
+            preview: false,
             titles: Default::default(),
             last_edit: None,
         };
@@ -771,7 +776,7 @@ impl NoteHost {
         let text = self.doc.lines()[index].as_str();
         let calc = self.session.calc();
         let variables = (!calc.variable_names.is_empty()).then_some(&calc.variable_names);
-        let is_cursor = index == self.doc.cursor_line;
+        let is_cursor = index == self.doc.cursor_line && !self.preview;
         let in_code = fence.in_code_block;
         let len = text.chars().count();
         let selection = self.selection_on(index, len);
@@ -808,9 +813,12 @@ impl NoteHost {
         let info = (!in_code).then(|| markdown_tokens::classify_markdown_line(text));
         let mut kind = LineKind::Text;
         let mut start = 0;
-        if !is_cursor && !in_code {
-            if let Some(image) = image_only(text) {
-                kind = image;
+        let mut below = None;
+        if !in_code {
+            match image_only(text) {
+                Some(LineKind::Image { src, .. }) if is_cursor => below = Some(src),
+                Some(image) if !is_cursor => kind = image,
+                _ => {}
             }
         }
         if let Some(info) = &info {
@@ -852,6 +860,7 @@ impl NoteHost {
             line_selected,
             map: Some(map.clone()),
             display_skip: map.source_to_display(start, Affinity::After).unwrap_or(0),
+            below,
         }
     }
 
@@ -866,13 +875,14 @@ impl NoteHost {
             line_selected: false,
             map: None,
             display_skip: 0,
+            below: None,
         };
         if table_syntax::is_delimiter_line_in(lines, index) {
             return view;
         }
         let header = table_syntax::is_delimiter_line_in(lines, index + 1);
         let results = self.session.calc().cell_results.get(index);
-        let is_cursor = index == self.doc.cursor_line;
+        let is_cursor = index == self.doc.cursor_line && !self.preview;
         let cells = table_syntax::split_table_cells(text)
             .into_iter()
             .enumerate()

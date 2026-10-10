@@ -3,8 +3,8 @@ use crate::images::ImageSlot;
 use crate::note_view::{LineKind, LineView, Run, TableCell};
 use crate::theme::Theme;
 use gpui::{
-    div, img, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString,
-    StyledText, TextLayout, UnderlineStyle,
+    canvas, div, img, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString,
+    StyledText, TextLayout,
 };
 use std::ops::Range;
 
@@ -33,7 +33,7 @@ fn styled(
     selection: Option<&Range<usize>>,
     block: Option<usize>,
     s: &LineStyle,
-) -> StyledText {
+) -> (StyledText, Option<usize>) {
     let t = s.theme;
     let mut text = String::new();
     let mut char_bytes = Vec::new();
@@ -67,24 +67,18 @@ fn styled(
             },
         ));
     }
-    if let Some(c) = block {
+    let mut bar = None;
+    if let (Some(c), true, CursorShape::Bar) = (block, s.focused, s.cursor) {
+        // Insert mode: a thin bar painted over the text, not a highlight.
+        bar = Some(bytes(c..c).start);
+    } else if let Some(c) = block {
         let style = match (s.focused, s.cursor) {
             (true, CursorShape::Block) => HighlightStyle {
                 background_color: Some(t.text),
                 color: Some(t.bg),
                 ..Default::default()
             },
-            // Insert mode: a tinted cell with an underline, so the line stays
-            // one text run and can wrap.
-            (true, CursorShape::Bar) => HighlightStyle {
-                background_color: Some(t.blue.opacity(0.3)),
-                underline: Some(UnderlineStyle {
-                    thickness: px(2.0),
-                    color: Some(t.blue),
-                    wavy: false,
-                }),
-                ..Default::default()
-            },
+            (true, CursorShape::Bar) => unreachable!(),
             (false, _) => HighlightStyle {
                 background_color: Some(t.muted.opacity(0.4)),
                 ..Default::default()
@@ -92,7 +86,10 @@ fn styled(
         };
         overlays.push((bytes(c..c + 1), style));
     }
-    StyledText::new(text).with_highlights(merge(highlights, overlays))
+    (
+        StyledText::new(text).with_highlights(merge(highlights, overlays)),
+        bar,
+    )
 }
 
 /// Base runs with overlays applied on top, as sorted, non-overlapping ranges.
@@ -127,10 +124,32 @@ fn merge(
 
 /// The line's text with its cursor and selection, as one run so it wraps.
 fn text_with_cursor(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> AnyElement {
-    let text = styled(&line.runs, line.selection.as_ref(), line.cursor, s);
+    let (text, bar) = styled(&line.runs, line.selection.as_ref(), line.cursor, s);
     // The window maps mouse positions to characters through this layout.
-    *layout = Some(text.layout().clone());
-    text.into_any_element()
+    let text_layout = text.layout().clone();
+    *layout = Some(text_layout.clone());
+    let Some(at) = bar else {
+        return text.into_any_element();
+    };
+    let color = s.theme.blue;
+    div()
+        .relative()
+        .child(text)
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |_, _, window, _| {
+                    // The text has been laid out by the time this paints.
+                    if let Some(pos) = text_layout.position_for_index(at) {
+                        let size = gpui::size(px(2.0), text_layout.line_height());
+                        window.paint_quad(gpui::fill(gpui::Bounds::new(pos, size), color));
+                    }
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
+        .into_any_element()
 }
 
 fn ghost(text: &str, t: &Theme) -> impl IntoElement {
@@ -186,6 +205,34 @@ fn table_row(cells: &[TableCell], header: bool, t: &Theme) -> AnyElement {
         .into_any_element()
 }
 
+/// An inline image, or what to show while it loads or when it fails.
+fn image_box(slot: Option<&ImageSlot>, alt: &str, t: &Theme) -> AnyElement {
+    let note = |text: String| {
+        div()
+            .py(px(4.0))
+            .text_color(t.faint)
+            .child(text)
+            .into_any_element()
+    };
+    match slot {
+        Some(ImageSlot::Ready {
+            image,
+            width,
+            height,
+        }) => div()
+            .py(px(4.0))
+            .child(
+                img(image.clone())
+                    .w(px(*width))
+                    .h(px(*height))
+                    .rounded(px(4.0)),
+            )
+            .into_any_element(),
+        Some(ImageSlot::Failed(why)) => note(format!("⚠ {alt}: {why}")),
+        _ => note(format!("{alt} …")),
+    }
+}
+
 /// The body of a line (without gutter). `layout` receives the text layout
 /// of lines that have editable text, for mouse hit-testing.
 pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> AnyElement {
@@ -214,6 +261,7 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
             .child(checkbox(*checked, t))
             .child(
                 div()
+                    .min_w_0()
                     .when(*checked, |d| d.text_color(t.faint).line_through())
                     .child(text_with_cursor(line, s, layout)),
             )
@@ -222,37 +270,16 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
         LineKind::TableRow { cells, header } => table_row(cells, *header, t),
         // The header row already draws the rule under it.
         LineKind::TableDelimiter => div().into_any_element(),
-        LineKind::Image { alt, .. } => {
-            let note = |text: String| {
-                div()
-                    .py(px(4.0))
-                    .text_color(t.faint)
-                    .child(text)
-                    .into_any_element()
-            };
-            match s.image {
-                Some(ImageSlot::Ready {
-                    image,
-                    width,
-                    height,
-                }) => div()
-                    .py(px(4.0))
-                    .child(
-                        img(image.clone())
-                            .w(px(*width))
-                            .h(px(*height))
-                            .rounded(px(4.0)),
-                    )
-                    .into_any_element(),
-                Some(ImageSlot::Failed(why)) => note(format!("⚠ {alt}: {why}")),
-                _ => note(format!("{alt} …")),
-            }
-        }
+        LineKind::Image { alt, .. } => image_box(s.image, alt, t),
         LineKind::Text => div()
-            .flex()
-            .items_center()
-            .child(text_with_cursor(line, s, layout))
-            .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
+                    .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t))),
+            )
+            .when(line.below.is_some(), |d| d.child(image_box(s.image, "", t)))
             .into_any_element(),
     }
 }

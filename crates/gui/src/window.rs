@@ -80,6 +80,9 @@ pub struct SlateWindow {
     /// Window size in pixels from the last paint, to reveal far jumps and fit the status bar.
     pub(crate) viewport: std::cell::Cell<(f32, f32)>,
     fences: Vec<FenceState>,
+    /// The OS window is fullscreen because of preview mode.
+    fullscreen: bool,
+    scroll_drag: bool,
     images: std::cell::RefCell<std::collections::HashMap<String, ImageSlot>>,
     cache: Vec<Option<LineView>>,
     list: ListState,
@@ -109,6 +112,8 @@ impl SlateWindow {
             drag_anchor: None,
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
+            fullscreen: false,
+            scroll_drag: false,
             images: Default::default(),
             cache: Vec::new(),
             list: ListState::new(count, ListAlignment::Top, px(600.0)),
@@ -618,7 +623,9 @@ impl SlateWindow {
                 self.persist();
                 cx.notify();
             }
+            KeyCommand::Preview => self.toggle_preview(cx),
             KeyCommand::Quit => self.quit(cx),
+            KeyCommand::Escape if self.host.preview => self.toggle_preview(cx),
             KeyCommand::Escape => {
                 let before = self.snapshot_cursor();
                 self.host.doc.selection_anchor = None;
@@ -633,8 +640,55 @@ impl SlateWindow {
             return;
         }
         self.status = None;
+        if self.host.preview {
+            self.preview_key(ev, cx);
+            return;
+        }
         let command = keys::map(&ev.keystroke, self.mode);
         self.run_key_command(command, cx);
+    }
+
+    /// Preview is read-only: only leaving it, quitting and scrolling work.
+    fn preview_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let page = f32::from(self.list.viewport_bounds().size.height) * 0.9;
+        let by = |px_: f32| gpui::px(px_);
+        match ev.keystroke.key.as_str() {
+            "escape" | "f11" | "q" => self.toggle_preview(cx),
+            "down" | "j" => self.list.scroll_by(by(48.0)),
+            "up" | "k" => self.list.scroll_by(by(-48.0)),
+            "pagedown" | "space" => self.list.scroll_by(by(page)),
+            "pageup" => self.list.scroll_by(by(-page)),
+            "home" | "g" => self.list.scroll_to(gpui::ListOffset {
+                item_ix: 0,
+                offset_in_item: gpui::px(0.0),
+            }),
+            "end" => self.list.scroll_to(gpui::ListOffset {
+                item_ix: self.cache.len().saturating_sub(1),
+                offset_in_item: gpui::px(0.0),
+            }),
+            _ => {
+                if matches!(keys::map(&ev.keystroke, self.mode), KeyCommand::Quit) {
+                    self.quit(cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Enter or leave the distraction-free preview. Heights change (images
+    /// and rendered links replace the cursor line), so measure again but
+    /// keep the scroll position.
+    pub(crate) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        if self.host.locked() {
+            return;
+        }
+        let top = self.list.logical_scroll_top();
+        self.host.preview = !self.host.preview;
+        self.restyle();
+        self.list.reset(self.cache.len());
+        self.list.scroll_to(top);
+        self.drag_anchor = None;
+        cx.notify();
     }
 
     pub(crate) fn open_palette(&mut self, initial: &str, cx: &mut Context<Self>) {
@@ -684,6 +738,9 @@ impl SlateWindow {
         clicks: usize,
         cx: &mut Context<Self>,
     ) {
+        if self.host.preview {
+            return;
+        }
         let before = self.snapshot_cursor();
         let text = self.host.doc.lines()[ix].clone();
         let len = text.chars().count();
@@ -801,6 +858,7 @@ impl SlateWindow {
                     let hit = matches!(
                         &this.cache[ix],
                         Some(l) if matches!(&l.kind, LineKind::Image { src, .. } if *src == key_for_match)
+                            || l.below.as_deref() == Some(key_for_match.as_str())
                     );
                     if hit {
                         this.cache[ix] = None;
@@ -837,10 +895,11 @@ impl SlateWindow {
         } else {
             CursorShape::Block
         };
-        let image = match &line.kind {
-            LineKind::Image { src, .. } => Some(self.image_slot(src, cx)),
+        let image = match (&line.kind, &line.below) {
+            (LineKind::Image { src, .. }, _) | (_, Some(src)) => Some(self.image_slot(src, cx)),
             _ => None,
         };
+        let preview = self.host.preview;
         let style = LineStyle {
             image: image.as_ref(),
             theme: &t,
@@ -864,7 +923,10 @@ impl SlateWindow {
             .flex()
             .justify_end()
             .text_size(px(12.0))
-            .text_color(if is_cursor { t.text } else { t.faint })
+            .when(is_cursor, |d| {
+                d.text_color(t.blue).font_weight(FontWeight::SEMIBOLD)
+            })
+            .when(!is_cursor, |d| d.text_color(t.faint))
             .child(number.to_string());
         let reminder = self
             .host
@@ -907,7 +969,6 @@ impl SlateWindow {
                     d.min_h(px(26.0))
                 }
             })
-            .when(is_cursor, |d| d.bg(t.cursorline))
             .when(line.line_selected, |d| d.bg(t.blue.opacity(0.22)))
             .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
                 if !*hovering {
@@ -944,7 +1005,7 @@ impl SlateWindow {
                     crate::overlays::open_context_menu(this, ev.position, table, cx);
                 }),
             )
-            .child(gutter)
+            .when(!preview, |d| d.child(gutter))
             .child(div().flex_1().min_w_0().child(body))
             .when(table, |d| {
                 // Space for the add-column bar is always reserved, so
@@ -1022,10 +1083,29 @@ impl SlateWindow {
             .border_color(t.border)
             .child(
                 div()
-                    .size(px(14.0))
-                    .rounded(px(3.0))
-                    .border_2()
-                    .border_color(t.blue),
+                    .id("sidebar-toggle")
+                    .size(px(18.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .rounded(px(4.0))
+                    .hover(|s| s.bg(t.active))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.run_key_command(KeyCommand::ToggleSidebar, cx)
+                    }))
+                    .child(
+                        div()
+                            .size(px(14.0))
+                            .rounded(px(3.0))
+                            .border_2()
+                            .border_color(t.blue)
+                            .flex()
+                            .when(self.sidebar, |d| {
+                                d.child(div().w(px(4.0)).h_full().bg(t.blue.opacity(0.6)))
+                            }),
+                    ),
             )
             .child(
                 div()
@@ -1119,14 +1199,115 @@ impl SlateWindow {
                     .pb(px(8.0))
                     .text_size(px(11.0))
                     .text_color(t.muted)
-                    .child("NOTES")
                     .child(
                         div()
-                            .text_color(t.faint)
-                            .child(format!("{}", self.host.notes.len())),
+                            .id("sidebar-title")
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(t.text))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    crate::switcher::open_picker(this, cx)
+                                }),
+                            )
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(
+                                self.host
+                                    .working
+                                    .as_ref()
+                                    .map(|(_, name)| name.to_uppercase())
+                                    .unwrap_or_else(|| "NOTES".to_string()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_color(t.faint)
+                                    .child(format!("{}", self.host.notes.len())),
+                            )
+                            .child(
+                                div()
+                                    .id("sidebar-collapse")
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(t.text))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.run_key_command(KeyCommand::ToggleSidebar, cx)
+                                    }))
+                                    .child("‹"),
+                            ),
                     ),
             )
             .children(items)
+    }
+
+    /// A thin scroll bar on the editor's right edge; drag the thumb or click
+    /// the track.
+    fn scrollbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        let view = self.list.viewport_bounds().size.height;
+        let max = self.list.max_offset_for_scrollbar().height;
+        let offset = -self.list.scroll_px_offset_for_scrollbar().y;
+        let total = f32::from(view + max).max(1.0);
+        let h = f32::from(view);
+        let visible = max > px(1.0);
+        let thumb = (h * h / total).clamp(28.0, h.max(28.0));
+        let top = if f32::from(max) > 0.0 {
+            (f32::from(offset) / f32::from(max)).clamp(0.0, 1.0) * (h - thumb)
+        } else {
+            0.0
+        };
+        let list = self.list.clone();
+        let jump = move |y: f32, h: f32, thumb: f32| {
+            let frac = ((y - thumb / 2.0) / (h - thumb).max(1.0)).clamp(0.0, 1.0);
+            list.set_offset_from_scrollbar(gpui::point(px(0.0), -(max * frac)));
+        };
+        let down = jump.clone();
+        div()
+            .id("scrollbar")
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .w(px(12.0))
+            .when(!visible, |d| d.invisible())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &gpui::MouseDownEvent, _, cx| {
+                    let top = this.list.viewport_bounds().origin.y;
+                    down(f32::from(ev.position.y - top), h, thumb);
+                    this.scroll_drag = true;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(move |this, ev: &gpui::MouseMoveEvent, _, cx| {
+                if this.scroll_drag && ev.dragging() {
+                    let top = this.list.viewport_bounds().origin.y;
+                    jump(f32::from(ev.position.y - top), h, thumb);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.scroll_drag = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.scroll_drag = false),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(top))
+                    .right(px(2.0))
+                    .w(px(6.0))
+                    .h(px(thumb))
+                    .rounded(px(3.0))
+                    .bg(t.muted.opacity(0.45)),
+            )
     }
 
     fn status_bar(&self) -> impl IntoElement {
@@ -1316,6 +1497,11 @@ impl Render for SlateWindow {
         let size = window.viewport_size();
         self.viewport
             .set((f32::from(size.width), f32::from(size.height)));
+        if self.host.preview != self.fullscreen {
+            window.toggle_fullscreen();
+            self.fullscreen = self.host.preview;
+        }
+        let preview = self.host.preview;
         let editor = div()
             .flex_1()
             .min_w_0()
@@ -1330,13 +1516,26 @@ impl Render for SlateWindow {
                     return d.child(self.locked_view(cx));
                 }
                 d.child(
-                    list(
-                        self.list.clone(),
-                        cx.processor(|this, ix, window, cx| this.render_line(ix, window, cx)),
-                    )
-                    .size_full(),
+                    div().size_full().flex().justify_center().child(
+                        div()
+                            .h_full()
+                            .w_full()
+                            .when(preview, |d| d.max_w(px(780.0)).px(px(24.0)))
+                            .child(
+                                list(
+                                    self.list.clone(),
+                                    cx.processor(|this, ix, window, cx| {
+                                        this.render_line(ix, window, cx)
+                                    }),
+                                )
+                                .size_full(),
+                            ),
+                    ),
                 )
-            });
+                .child(self.scrollbar(cx))
+            })
+            .relative()
+            .when(preview, |d| d.pt(px(32.0)));
         div()
             .id("slate")
             .track_focus(&self.focus)
@@ -1357,17 +1556,19 @@ impl Render for SlateWindow {
             .text_color(t.text)
             .font_family(self.fonts.sans.clone())
             .text_size(px(13.0))
-            .child(self.title_bar(cx))
+            .when(!preview, |d| d.child(self.title_bar(cx)))
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .when(self.sidebar, |d| d.child(self.sidebar(cx)))
+                    .when(self.sidebar && !preview, |d| d.child(self.sidebar(cx)))
                     .child(editor),
             )
-            .children(crate::overlays::which_key(self))
-            .child(self.status_bar())
+            .when(!preview, |d| {
+                d.children(crate::overlays::which_key(self))
+                    .child(self.status_bar())
+            })
             .children(crate::overlays::render(self, window, cx))
     }
 }
