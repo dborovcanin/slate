@@ -1,3 +1,4 @@
+mod currency;
 mod scripts;
 use super::adapter::TerminalVimAdapter;
 use super::calc_cache::CalcCache;
@@ -703,6 +704,7 @@ struct TerminalApp {
     // scroll, selection anchor, and the markdown-formatting boundary-exit marker.
     editor: EditorModel,
     scripts: scripts::ScriptState,
+    currency: currency::CurrencyState,
     mode: UiMode,
     vim_enabled: bool,
     /// Keys being handled (nested for macro replay). While above zero, edits
@@ -1193,6 +1195,7 @@ impl TerminalApp {
             active_note,
             active_note_key_collection: None,
             scripts: scripts::ScriptState::new(app_core::config::load_script_config()),
+            currency: Default::default(),
             editor: EditorModel {
                 lines,
                 ..Default::default()
@@ -1389,6 +1392,7 @@ impl TerminalApp {
             }
 
             self.poll_script_result();
+            self.poll_currency_refresh();
             self.poll_script_binding_timeout(db)?;
             match input::read_key()? {
                 Some(key) => {
@@ -1928,6 +1932,9 @@ pub fn run_terminal_session(
     }
 
     clipboard::set_write_mode(crate::config::load_terminal_clipboard_mode());
+    // Before the app evaluates the note, so cached rates apply from the start.
+    let (currency, currency_problem) =
+        currency::CurrencyState::start(config.background_tasks_enabled);
     let (mut app, metrics) = TerminalApp::new_with_startup_metrics(
         db,
         opts,
@@ -1955,6 +1962,10 @@ pub fn run_terminal_session(
     }
 
     app.render_state.wrap_lines = config.wrap;
+    app.currency = currency;
+    if let Some(problem) = currency_problem {
+        app.status = problem;
+    }
     app.daily_config = crate::config::load_daily_notes_config();
     if opts.open_at_end {
         app.editor.cursor_line = app.editor.lines.len().saturating_sub(1);

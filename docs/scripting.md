@@ -1,7 +1,9 @@
 # Scripts and shortcuts
 
 Register local executables in `~/.config/slate/config.toml`. Scripts run only
-when invoked; there are no hooks or plugin runtime. Use trusted executables:
+when invoked; there are no hooks or plugin runtime. The one exception is the
+optional currency rates script (see "Currency rates" below), which Slate runs
+in the background at startup when its cached rates are stale. Use trusted executables:
 they run with your user permissions, including filesystem and network access.
 
 ```toml
@@ -104,6 +106,41 @@ large whole-note scripts are best invoked deliberately. On Unix, cancellation
 and timeout terminate the script process group, including ordinary descendants.
 On other platforms only the direct child is terminated. Detached processes
 are the script author's responsibility.
+
+## Currency rates
+
+Calculations convert currencies (`10 USD to EUR`, `$10 + 5 EUR`,
+`budget := 2000 RSD to EUR`) with rates from a script you configure:
+
+```toml
+[currency]
+argv = ["python3", "/absolute/path/to/slate/scripts/examples/rates.py", "EUR"]
+refresh_hours = 12
+timeout_seconds = 30
+```
+
+The example uses open.er-api.com (about 160 currencies, updated daily; see
+its terms). Any executable works: it gets the same v1 request with empty
+`text` and must print:
+
+```json
+{"base":"EUR","rates":{"USD":1.12,"RSD":117.4},"as_of":"2026-10-10"}
+```
+
+Each rate is how many units of that currency one unit of `base` buys. Codes
+are three letters (case does not matter); rates must be positive. `as_of` is
+optional and shown in the status message. Unknown fields are rejected.
+
+At startup Slate loads the last rates from `exchange_rates.json` in the data
+directory, so conversions work offline and from the first frame. When those
+rates are missing or older than `refresh_hours` (1–8760, default 12), the
+script runs in the background; when it finishes, visible results update. A
+failed refresh keeps the cached rates and reports the error in the status
+line. With `[startup] background_tasks_enabled = false`, the script never
+runs and only cached rates are used. Conversions involving a currency
+without a rate show no result. Restart Slate to change `[currency]`.
+
+This script is not a registered script: `:run` cannot invoke it.
 
 ## Keybindings
 

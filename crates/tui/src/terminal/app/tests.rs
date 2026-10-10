@@ -576,3 +576,6 @@ mod browser;
 
 #[path = "tests/scripts.rs"]
 mod scripts;
+
+#[path = "tests/currency.rs"]
+mod currency;

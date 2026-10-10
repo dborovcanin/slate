@@ -129,7 +129,7 @@ fn parse_keys(sequence: &str) -> Result<Vec<Key>, String> {
     }
     Ok(keys)
 }
-fn mode_name(mode: UiMode) -> Option<&'static str> {
+pub(super) fn mode_name(mode: UiMode) -> Option<&'static str> {
     match mode {
         UiMode::Normal => Some("normal"),
         UiMode::Editor => Some("editor"),

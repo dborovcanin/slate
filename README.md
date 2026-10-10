@@ -81,6 +81,10 @@ selection, insert generated text, or report a result. Execution runs in the
 background, and editor changes are undoable. See [scripting](docs/scripting.md)
 for the JSON protocol, CLI input, examples and shortcut syntax.
 
+A `[currency]` script supplies exchange rates for calculations such as
+`10 USD to EUR`. Rates are cached locally and refreshed in the background at
+startup; see [currency rates](docs/scripting.md#currency-rates).
+
 ### Links and images
 
 | Feature | Keys / commands |
