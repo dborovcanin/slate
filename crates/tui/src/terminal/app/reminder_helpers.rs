@@ -1,6 +1,6 @@
 use super::{LineReminderGhost, ReminderMarks, TerminalApp};
 use crate::storage::{Db, Note};
-use app_core::storage::{NoteAccessMode, ReminderLine};
+use app_core::storage::NoteAccessMode;
 use note_session::reminder_marks_of;
 use rustc_hash::FxHashMap;
 
@@ -74,30 +74,7 @@ impl TerminalApp {
 
     /// Reminders can be stored only with notes in the database.
     pub(super) fn active_note_holds_reminders(&self) -> bool {
-        app_core::note_sources::markdown_file_path_from_note_id(&self.active_note.id).is_none()
-    }
-
-    /// The reminders to store with the current text.
-    pub(super) fn reminder_lines(&self) -> Vec<ReminderLine> {
-        let mut lines: Vec<ReminderLine> = self
-            .session
-            .reminder_ghosts
-            .iter()
-            .map(|(line_idx, ghost)| ReminderLine {
-                line_number: *line_idx as i64 + 1,
-                remind_at_ms: ghost.remind_at_ms,
-                display_at: ghost.display_at.clone(),
-                line_text: self
-                    .editor
-                    .lines()
-                    .get(*line_idx)
-                    .cloned()
-                    .unwrap_or_else(|| ghost.line_text.clone()),
-                reminded_at_ms: ghost.reminded_at_ms,
-            })
-            .collect();
-        lines.sort_by_key(|line| line.line_number);
-        lines
+        self.session.holds_reminders()
     }
 
     /// A reminder change that is not a text edit (set, removed, notified,
@@ -124,20 +101,17 @@ impl TerminalApp {
         if self.session.dirty || !self.reminders_unsaved() {
             return;
         }
-        let generation = self.session.reminders_generation;
-        match db.replace_reminders_if(
-            &self.active_note.id,
-            Some(&self.session.stored_revision),
-            &self.reminder_lines(),
-        ) {
-            Ok(revision) => {
-                // Our own checked write: its revision is the one we hold.
-                self.session.stored_revision = revision.updated_at;
-                self.session.persisted_reminders_generation = generation;
-            }
-            Err(error) => {
-                self.status = format!("reminders not saved yet: {error}");
-            }
+        let Some(job) = self
+            .session
+            .request_save(&mut self.editor, Default::default())
+        else {
+            return;
+        };
+        let result = note_session::jobs::run_save(job, db);
+        if let note_session::save::SaveCompletion::Failed(error) =
+            self.session.complete_save(&mut self.editor, result)
+        {
+            self.status = format!("reminders not saved yet: {error}");
         }
     }
 
@@ -153,13 +127,5 @@ impl TerminalApp {
         if self.session.reminder_ghosts.len() != before {
             self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
         }
-    }
-
-    /// The reminders to store with a save of the text: always while there
-    /// are any (their line text follows edits), and after any change.
-    pub(super) fn reminders_for_save(&self, saving_text: bool) -> Option<Vec<ReminderLine>> {
-        let needed =
-            self.reminders_unsaved() || (saving_text && !self.session.reminder_ghosts.is_empty());
-        (needed && self.active_note_holds_reminders()).then(|| self.reminder_lines())
     }
 }

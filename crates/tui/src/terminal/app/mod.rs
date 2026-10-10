@@ -413,17 +413,8 @@ impl Default for DatePickerState {
 
 /// An autosave running on a background thread.
 struct BackgroundSave {
-    /// The new revision, and whether the text was saved (or only reminders).
-    rx: mpsc::Receiver<Result<(app_core::storage::NoteRevision, bool), String>>,
-    /// The reminder version stored with it, if any.
-    reminders_generation: Option<u64>,
-    note_id: String,
-    /// `last_edit` when the saved text was taken: later edits keep the note
-    /// dirty once the save lands.
-    edit_mark: u64,
-    /// Revision the save was checked against. When the note's revision has
-    /// moved on meanwhile (e.g. a module change), the saved one is stale.
-    expected_revision: String,
+    rx: mpsc::Receiver<note_session::save::SaveResult>,
+    ticket: note_session::save::SaveTicket,
 }
 
 /// Calc recompute scheduling/runtime flags (distinct from `calc: CalcCache`,
@@ -1410,9 +1401,7 @@ impl TerminalApp {
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
         self.poll_background_save(db, false);
-        if !self.autosave_enabled
-            || self.session.autosave_paused_at == Some(self.session.edit_seq())
-        {
+        if !self.autosave_enabled || !self.session.autosave_allowed() {
             return Ok(());
         }
         if (self.session.dirty || self.reminders_unsaved())

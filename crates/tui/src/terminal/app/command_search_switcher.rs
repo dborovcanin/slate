@@ -2378,51 +2378,29 @@ impl TerminalApp {
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
-        let reminders = self.reminders_for_save(self.session.dirty);
-        let reminders_generation = self.session.reminders_generation;
-        if !self.session.dirty {
-            if let Some(reminders) = reminders {
-                // Only reminders changed: store them against the saved text.
-                let revision = db.replace_reminders_if(
-                    &self.active_note.id,
-                    (!force).then_some(self.session.stored_revision.as_str()),
-                    &reminders,
-                )?;
-                self.session.stored_revision = revision.updated_at;
-                self.session.persisted_reminders_generation = reminders_generation;
-            }
+        if !self.session.editable() && (self.session.dirty || self.session.reminders_unsaved()) {
+            return Err("note is locked; unlock first".to_string());
+        }
+        let Some(job) = self.session.request_save(
+            &mut self.editor,
+            note_session::save::SaveContext {
+                force,
+                background: false,
+            },
+        ) else {
             self.record_perf_duration("tui.save", "noop", started.elapsed());
             return Ok(());
+        };
+        let result = note_session::jobs::run_save(job, db);
+        match self.session.complete_save(&mut self.editor, result) {
+            note_session::save::SaveCompletion::Failed(error) => return Err(error),
+            note_session::save::SaveCompletion::Ignored => return Ok(()),
+            note_session::save::SaveCompletion::Saved { text: false, .. } => {
+                self.record_perf_duration("tui.save", "noop", started.elapsed());
+                return Ok(());
+            }
+            note_session::save::SaveCompletion::Saved { text: true, .. } => {}
         }
-        let body = self
-            .editor
-            .joined_text_cache
-            .take()
-            .unwrap_or_else(|| join_lines(self.editor.lines()));
-        let stores_reminders = reminders.is_some();
-        let saved = note_sources(db).save_note_revision_by_id(
-            &self.active_note.id,
-            &body,
-            app_core::note_sources::SaveOptions {
-                expected_revision: Some(self.session.stored_revision.clone()),
-                force,
-                reminders,
-            },
-        )?;
-        if stores_reminders {
-            self.session.persisted_reminders_generation = reminders_generation;
-        }
-        // Only the revision moves on; the document itself stays in
-        // `self.editor.lines()` and is never round-tripped through the store.
-        self.active_note.id = saved.id;
-        self.session.stored_revision = saved.updated_at;
-        self.editor.joined_text_cache = Some(body);
-        self.session.dirty = false;
-        self.session.history.checkpoint(
-            self.editor.lines(),
-            self.editor.cursor_line,
-            self.editor.cursor_col,
-        );
         self.render_state.dirty = true;
         // Only do a full DB scan when the first line (note title) changed.
         // Body-only saves don't affect the prefix index or wiki link caches.
@@ -2448,57 +2426,28 @@ impl TerminalApp {
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
-        let reminders = self.reminders_for_save(self.session.dirty);
-        if !self.session.dirty && reminders.is_none() {
+        if !self.session.editable() {
+            if self.session.dirty || self.session.reminders_unsaved() {
+                self.set_locked_note_status();
+            }
             return Ok(());
         }
-        if !self.active_note_is_editable() {
-            self.set_locked_note_status();
+        let Some(job) = self.session.request_save(
+            &mut self.editor,
+            note_session::save::SaveContext {
+                force: false,
+                background: true,
+            },
+        ) else {
             return Ok(());
-        }
-        // The text and its reminders are taken together, so what is stored
-        // always matches.
-        let body = self.session.dirty.then(|| {
-            self.editor
-                .joined_text_cache
-                .clone()
-                .unwrap_or_else(|| join_lines(self.editor.lines()))
-        });
-        let reminders_generation = reminders
-            .as_ref()
-            .map(|_| self.session.reminders_generation);
-        let note_id = self.active_note.id.clone();
-        let expected_revision = self.session.stored_revision.clone();
-        let options = app_core::note_sources::SaveOptions {
-            expected_revision: Some(expected_revision.clone()),
-            force: false,
-            reminders,
         };
+        let ticket = job.ticket.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let db = db.clone();
-        let thread_note_id = note_id.clone();
         std::thread::spawn(move || {
-            let result = match body {
-                Some(body) => note_sources(&db)
-                    .save_note_revision_by_id(&thread_note_id, &body, options)
-                    .map(|revision| (revision, true)),
-                None => db
-                    .replace_reminders_if(
-                        &thread_note_id,
-                        options.expected_revision.as_deref(),
-                        options.reminders.as_deref().unwrap_or_default(),
-                    )
-                    .map(|revision| (revision, false)),
-            };
-            let _ = tx.send(result);
+            let _ = tx.send(note_session::jobs::run_save(job, &db));
         });
-        self.background_save = Some(super::BackgroundSave {
-            rx,
-            reminders_generation,
-            note_id,
-            edit_mark: self.session.edit_seq(),
-            expected_revision,
-        });
+        self.background_save = Some(super::BackgroundSave { rx, ticket });
         Ok(())
     }
 
@@ -2509,29 +2458,27 @@ impl TerminalApp {
         let Some(job) = self.background_save.as_ref() else {
             return;
         };
+        let failure = || note_session::save::SaveResult {
+            ticket: job.ticket.clone(),
+            result: Err("autosave stopped unexpectedly".to_string()),
+            saved_body: None,
+        };
         let result = if wait {
-            job.rx
-                .recv()
-                .unwrap_or_else(|_| Err("autosave stopped unexpectedly".to_string()))
+            job.rx.recv().unwrap_or_else(|_| failure())
         } else {
             match job.rx.try_recv() {
                 Ok(result) => result,
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    Err("autosave stopped unexpectedly".to_string())
-                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => failure(),
             }
         };
-        let job = self.background_save.take().expect("save in flight");
-        let saved = match result {
-            Ok(saved) => saved,
-            Err(error) if Self::is_locked_note_error(&error) => {
-                self.set_locked_note_status();
-                return;
-            }
-            Err(error) => {
-                if job.note_id == self.active_note.id {
-                    self.session.autosave_paused_at = Some(job.edit_mark);
+        self.background_save = None;
+        match self.session.complete_save(&mut self.editor, result) {
+            note_session::save::SaveCompletion::Ignored => return,
+            note_session::save::SaveCompletion::Failed(error) => {
+                if Self::is_locked_note_error(&error) {
+                    self.set_locked_note_status();
+                    return;
                 }
                 self.status = format!(
                     "autosave failed: {error} (:w! overwrites, :e! reloads; edits are kept)"
@@ -2539,30 +2486,12 @@ impl TerminalApp {
                 self.render_state.dirty = true;
                 return;
             }
-        };
-        if job.note_id != self.active_note.id {
-            return;
-        }
-        if let Some(generation) = job.reminders_generation {
-            self.session.persisted_reminders_generation = generation;
-        }
-        let (saved, saved_text) = saved;
-        if self.session.stored_revision == job.expected_revision {
-            self.active_note.id = saved.id;
-            self.session.stored_revision = saved.updated_at;
-        }
-        if !saved_text {
-            self.status = format!("reminders saved {}", self.active_note.id);
-            self.render_state.dirty = true;
-            return;
-        }
-        if self.session.edit_seq() == job.edit_mark {
-            self.session.dirty = false;
-            self.session.history.checkpoint(
-                self.editor.lines(),
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            );
+            note_session::save::SaveCompletion::Saved { text: false, .. } => {
+                self.status = format!("reminders saved {}", self.active_note.id);
+                self.render_state.dirty = true;
+                return;
+            }
+            note_session::save::SaveCompletion::Saved { text: true, .. } => {}
         }
         self.status = format!("autosaved {}", self.active_note.id);
         self.render_state.dirty = true;

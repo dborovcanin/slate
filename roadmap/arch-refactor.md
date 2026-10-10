@@ -548,7 +548,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 11: calc preparation/index jobs.
 - [x] Step 12: session fold structure.
 - [x] Step 13: open/reload/outside-change/leave policy.
-- [ ] Step 14: save and autosave jobs/policy.
+- [x] Step 14: save and autosave jobs/policy.
 - [ ] Step 15: script tickets and result validation.
 - [ ] Step 16: application-wide rate service.
 - [ ] Step 17: headless host integration.
@@ -1104,3 +1104,12 @@ leave decisions use session policy. The terminal drains pending saves before
 switch/reload/close even when autosave is disabled. Four shared lifecycle tests
 and all workspace checks pass, no new warnings; read-only review found no
 remaining host reads of stale revision/access metadata.
+
+Step 14: shared SaveJob snapshots capture body/reminders, expected revision,
+lifetime and edit identity. The shared runner performs manual, reminder-only
+and background writes; session acknowledgement independently fences revision,
+dirty and reminder generations. Failures pause the current edit identity until
+a new edit. Manual saves transfer/restore the joined allocation; background
+saves clone only their required snapshot. Seven shared race/ownership/Send tests
+and all workspace checks pass, no new warnings. Format commands, workers,
+receiver polling, status and note-list refresh remain terminal-owned.

@@ -210,6 +210,8 @@ impl crate::NoteSession {
     }
 }
 
+pub use crate::save::{run_save, SaveJob, SaveResult};
+
 #[cfg(test)]
 mod tests {
     use super::*;
