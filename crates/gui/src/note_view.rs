@@ -103,6 +103,8 @@ pub struct LineView {
     pub display_skip: usize,
     /// Source of an image shown under the cursor line that holds its markdown.
     pub below: Option<String>,
+    /// A reminder's time, drawn as a pill after the text.
+    pub chip: Option<String>,
 }
 
 /// `![alt](src)` and nothing else on the line.
@@ -929,6 +931,7 @@ impl NoteHost {
             map: Some(map.clone()),
             display_skip: map.source_to_display(start, Affinity::After).unwrap_or(0),
             below,
+            chip: None,
         }
     }
 
@@ -972,6 +975,7 @@ impl NoteHost {
             map: None,
             display_skip: 0,
             below: None,
+            chip: None,
         };
         if table_syntax::is_delimiter_line_in(lines, index) {
             return view;

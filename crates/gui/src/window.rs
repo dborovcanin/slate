@@ -1265,20 +1265,13 @@ impl SlateWindow {
             .reminders()
             .get(&ix)
             .map(|r| r.display_at.clone());
-        // Like a calc result: shown after the text, in the same colour, and
-        // wrapped with the line instead of hanging off its edge. Table rows
-        // have no room after their cells and keep a chip.
-        let line = if let (Some(at), false) =
-            (&reminder, matches!(line.kind, LineKind::TableRow { .. }))
-        {
-            let mut line = line;
-            let ghost = match line.ghost.take() {
-                Some(g) => format!("{g}   ⏰ {at}"),
-                None => format!("⏰ {at}"),
-            };
-            line.ghost = Some(ghost);
+        // A pill right after the text, wrapping with it. Table rows have no
+        // room after their cells and keep a pill at the row's end.
+        let line = if matches!(line.kind, LineKind::TableRow { .. }) {
             line
         } else {
+            let mut line = line;
+            line.chip = reminder.clone();
             line
         };
         let reminder = reminder.filter(|_| matches!(line.kind, LineKind::TableRow { .. }));
@@ -1389,7 +1382,7 @@ impl SlateWindow {
                         .text_size(px(11.0))
                         .text_color(t.muted)
                         .font_family(self.fonts.sans.clone())
-                        .child(format!("⏰ {at}")),
+                        .child(at),
                 )
             });
         div()

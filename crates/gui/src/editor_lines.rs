@@ -165,6 +165,23 @@ fn cursor_text(
         .into_any_element()
 }
 
+/// A reminder's time: a small pill, as in the design.
+fn chip(text: &str, t: &Theme, sans: &SharedString) -> impl IntoElement {
+    div()
+        .font_family(sans.clone())
+        .flex_none()
+        .ml(px(12.0))
+        .px(px(8.0))
+        .py(px(1.0))
+        .rounded(px(9.0))
+        .bg(t.chip)
+        .text_size(px(11.0))
+        .line_height(px(16.0))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(t.muted)
+        .child(text.to_string())
+}
+
 fn ghost(text: &str, t: &Theme) -> impl IntoElement {
     div()
         .pl(px(24.0))
@@ -310,7 +327,8 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                         .flex()
                         .items_center()
                         .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
-                        .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t))),
+                        .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
+                        .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans))),
                 )
                 .into_any_element()
         }
@@ -326,6 +344,7 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                     .child(text_with_cursor(line, s, layout)),
             )
             .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
+            .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans)))
             .into_any_element(),
         LineKind::TableRow {
             cells,
@@ -341,7 +360,8 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                     .flex()
                     .items_center()
                     .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
-                    .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t))),
+                    .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
+                    .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans))),
             )
             .when(line.below.is_some(), |d| d.child(image_box(s.image, "", t)))
             .into_any_element(),
