@@ -8,7 +8,7 @@ use crate::editor_lines::{self, CursorShape, LineStyle};
 use crate::images::{self, ImageSlot};
 use crate::keys::{self, EditingMode, KeyCommand};
 use crate::note_view::{CommandRun, LineKind, LineView, NoteHost};
-use crate::settings::{CommandBarStyle, Settings};
+use crate::settings::{CommandBarStyle, Settings, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::sidebar_search::{self, Hit};
 use crate::theme::{Theme, ThemeMode};
 use editor_core::markdown_tokens::FenceState;
@@ -52,6 +52,9 @@ fn word_at(text: &str, col: usize) -> (usize, usize) {
 
 pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Format", "Calc", "Help"];
 type CellBounds = std::rc::Rc<std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>>>;
+
+/// Line height relative to the text size.
+const LINE_HEIGHT_RATIO: f32 = 26.0 / 14.0;
 
 /// The sidebar's search box while it has the keyboard.
 #[derive(Default)]
@@ -97,6 +100,7 @@ pub struct SlateWindow {
     fences: Vec<FenceState>,
     /// Autocomplete popup, with the cursor it was computed for.
     pub(crate) currency: crate::currency::Currency,
+    pub(crate) font_size: f32,
     sidebar_search: Option<SidebarSearch>,
     completion: Option<Completion>,
     completion_pos: (usize, usize),
@@ -144,6 +148,7 @@ impl SlateWindow {
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
             currency,
+            font_size: settings.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE),
             sidebar_search: None,
             completion: None,
             completion_pos: (0, 0),
@@ -326,6 +331,7 @@ impl SlateWindow {
             command_bar: self.command_bar,
             vim: self.mode == EditingMode::Vim,
             theme: self.theme_mode,
+            font_size: self.font_size,
             sidebar: self.sidebar,
         }
         .save();
@@ -338,6 +344,26 @@ impl SlateWindow {
             CommandBarStyle::Popup => "command line: popup",
             CommandBarStyle::Bottom => "command line: bottom of the window",
         });
+        cx.notify();
+    }
+
+    /// `Ctrl+=` / `Ctrl+-` by one pixel, `Ctrl+0` back to the default.
+    pub(crate) fn zoom(&mut self, step: i8, cx: &mut Context<Self>) {
+        let size = if step == 0 {
+            DEFAULT_FONT_SIZE
+        } else {
+            (self.font_size + f32::from(step)).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)
+        };
+        if size != self.font_size {
+            self.font_size = size;
+            // Every line changes height: measure again, keeping the place.
+            let top = self.list.logical_scroll_top();
+            self.restyle();
+            self.list.reset(self.cache.len());
+            self.list.scroll_to(top);
+            self.persist();
+        }
+        self.set_status(format!("text size {}", self.font_size));
         cx.notify();
     }
 
@@ -846,6 +872,7 @@ impl SlateWindow {
                 cx.notify();
             }
             KeyCommand::Preview => self.toggle_preview(cx),
+            KeyCommand::Zoom(step) => self.zoom(step, cx),
             KeyCommand::Quit => self.quit(cx),
             KeyCommand::Escape if self.host.preview => self.toggle_preview(cx),
             KeyCommand::Escape => {
@@ -1231,6 +1258,7 @@ impl SlateWindow {
         let cells: Option<CellBounds> = matches!(line.kind, LineKind::TableRow { .. })
             .then(|| self.cell_bounds.borrow_mut().entry(ix).or_default().clone());
         let style = LineStyle {
+            scale: self.font_size / DEFAULT_FONT_SIZE,
             cells: cells.as_ref(),
             image: image.as_ref(),
             theme: &t,
@@ -1307,7 +1335,7 @@ impl SlateWindow {
                 if delimiter {
                     d.h(px(0.0)).overflow_hidden()
                 } else {
-                    d.min_h(px(26.0))
+                    d.min_h(px(self.font_size * LINE_HEIGHT_RATIO))
                 }
             })
             .when(line.line_selected, |d| d.bg(t.blue.opacity(0.22)))
@@ -2028,8 +2056,8 @@ impl Render for SlateWindow {
             .h_full()
             .pt(px(20.0))
             .font_family(self.fonts.mono.clone())
-            .text_size(px(14.0))
-            .line_height(px(26.0))
+            .text_size(px(self.font_size))
+            .line_height(px(self.font_size * LINE_HEIGHT_RATIO))
             .text_color(t.text)
             .map(|d| {
                 if self.host.locked() {

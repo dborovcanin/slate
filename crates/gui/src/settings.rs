@@ -14,7 +14,11 @@ pub enum CommandBarStyle {
     Bottom,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+pub const MIN_FONT_SIZE: f32 = 9.0;
+pub const MAX_FONT_SIZE: f32 = 32.0;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub command_bar: CommandBarStyle,
@@ -22,6 +26,8 @@ pub struct Settings {
     pub vim: bool,
     pub theme: crate::theme::ThemeMode,
     pub sidebar: bool,
+    /// Editor text size in pixels (`Ctrl+=`, `Ctrl+-`, `Ctrl+0`).
+    pub font_size: f32,
 }
 
 impl Default for Settings {
@@ -31,6 +37,7 @@ impl Default for Settings {
             vim: true,
             theme: Default::default(),
             sidebar: true,
+            font_size: DEFAULT_FONT_SIZE,
         }
     }
 }
@@ -72,6 +79,7 @@ mod tests {
             vim: false,
             theme: crate::theme::ThemeMode::Light,
             sidebar: false,
+            font_size: 18.0,
         };
         let text = serde_json::to_string(&s).unwrap();
         assert!(text.contains("\"bottom\""));
@@ -80,6 +88,7 @@ mod tests {
         let partial = Settings::parse(r#"{"command_bar":"bottom","extra":1}"#);
         assert_eq!(partial.command_bar, CommandBarStyle::Bottom);
         assert!(partial.vim && partial.sidebar);
+        assert_eq!(partial.font_size, DEFAULT_FONT_SIZE);
         assert_eq!(partial.theme, crate::theme::ThemeMode::Config);
         assert_eq!(Settings::parse("not json"), Settings::default());
     }

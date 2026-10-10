@@ -96,6 +96,9 @@ pub fn menu_items(name: &str) -> Vec<Item> {
         "View" => vec![
             it("Sidebar", "Ctrl+\\", "", Key(KeyCommand::ToggleSidebar)),
             it("Preview", "F11", "", Key(KeyCommand::Preview)),
+            it("Zoom in", "Ctrl+=", "", Key(KeyCommand::Zoom(1))),
+            it("Zoom out", "Ctrl+-", "", Key(KeyCommand::Zoom(-1))),
+            it("Reset zoom", "Ctrl+0", "", Key(KeyCommand::Zoom(0))),
             it("Theme", "", "", Sub("theme")),
             it("Editing mode", "", "", Sub("editing")),
             it("Command bar", "", "", Sub("cmdbar")),

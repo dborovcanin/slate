@@ -23,6 +23,8 @@ pub struct LineStyle<'a> {
     /// Whether the window has keyboard focus; an unfocused cursor is hollow.
     pub focused: bool,
     /// The decoded image of an `LineKind::Image` line.
+    /// Text size relative to the default; headings follow it.
+    pub scale: f32,
     pub image: Option<&'a ImageSlot>,
     /// Receives where each cell of a table row was painted, for mouse
     /// hit-testing.
@@ -182,11 +184,11 @@ fn chip(text: &str, t: &Theme, sans: &SharedString) -> impl IntoElement {
         .child(text.to_string())
 }
 
-fn ghost(text: &str, t: &Theme) -> impl IntoElement {
+fn ghost(text: &str, t: &Theme, scale: f32) -> impl IntoElement {
     div()
         .pl(px(24.0))
-        .text_size(px(13.0))
-        .line_height(px(26.0))
+        .text_size(px(13.0 * scale))
+        .line_height(px(26.0 * scale))
         .font_weight(FontWeight::NORMAL)
         .text_color(t.amber)
         .child(text.trim().to_string())
@@ -310,11 +312,12 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
     let t = s.theme;
     match &line.kind {
         LineKind::Heading(level) => {
-            let size = match level {
-                1 => 26.0,
-                2 => 18.0,
-                _ => 16.0,
-            };
+            let size = s.scale
+                * match level {
+                    1 => 26.0,
+                    2 => 18.0,
+                    _ => 16.0,
+                };
             div()
                 .pt(px(if *level <= 2 { 8.0 } else { 4.0 }))
                 .font_family(s.sans.clone())
@@ -327,7 +330,7 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                         .flex()
                         .items_center()
                         .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
-                        .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
+                        .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t, s.scale)))
                         .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans))),
                 )
                 .into_any_element()
@@ -343,7 +346,7 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                     .when(*checked, |d| d.text_color(t.faint).line_through())
                     .child(text_with_cursor(line, s, layout)),
             )
-            .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
+            .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t, s.scale)))
             .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans)))
             .into_any_element(),
         LineKind::TableRow {
@@ -360,7 +363,7 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                     .flex()
                     .items_center()
                     .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
-                    .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
+                    .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t, s.scale)))
                     .when_some(line.chip.as_deref(), |d, c| d.child(chip(c, t, s.sans))),
             )
             .when(line.below.is_some(), |d| d.child(image_box(s.image, "", t)))

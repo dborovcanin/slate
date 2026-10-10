@@ -62,6 +62,8 @@ pub enum KeyCommand {
     Italic,
     NewNote,
     ToggleSidebar,
+    /// `Ctrl+=` / `Ctrl+-` change the text size by one step, `Ctrl+0` resets it.
+    Zoom(i8),
     /// `F11`: distraction-free read-only preview.
     Preview,
     Quit,
@@ -110,6 +112,14 @@ fn app_shortcut(k: &Keystroke) -> Option<KeyCommand> {
     }
     if k.key == "f11" {
         return Some(KeyCommand::Preview);
+    }
+    if m.control || m.platform {
+        match k.key.as_str() {
+            "=" | "+" => return Some(KeyCommand::Zoom(1)),
+            "-" | "_" => return Some(KeyCommand::Zoom(-1)),
+            "0" => return Some(KeyCommand::Zoom(0)),
+            _ => {}
+        }
     }
     if !(m.control || m.platform) || m.shift {
         return None;
@@ -210,6 +220,16 @@ mod tests {
             k.key_char = Some(ch);
         }
         k
+    }
+
+    #[test]
+    fn ctrl_plus_minus_zero_change_the_text_size() {
+        for mode in [EditingMode::Vim, EditingMode::Standard] {
+            assert_eq!(map(&key("ctrl-="), mode), KeyCommand::Zoom(1));
+            assert_eq!(map(&key("ctrl-shift-="), mode), KeyCommand::Zoom(1));
+            assert_eq!(map(&key("ctrl--"), mode), KeyCommand::Zoom(-1));
+            assert_eq!(map(&key("ctrl-0"), mode), KeyCommand::Zoom(0));
+        }
     }
 
     #[test]
