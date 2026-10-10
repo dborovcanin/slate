@@ -549,7 +549,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 12: session fold structure.
 - [x] Step 13: open/reload/outside-change/leave policy.
 - [x] Step 14: save and autosave jobs/policy.
-- [ ] Step 15: script tickets and result validation.
+- [x] Step 15: script tickets and result validation.
 - [ ] Step 16: application-wide rate service.
 - [ ] Step 17: headless host integration.
 - [ ] Phase 8: shared semantic display and source mappings.
@@ -1113,3 +1113,11 @@ a new edit. Manual saves transfer/restore the joined allocation; background
 saves clone only their required snapshot. Seven shared race/ownership/Send tests
 and all workspace checks pass, no new warnings. Format commands, workers,
 receiver polling, status and note-list refresh remain terminal-owned.
+
+Step 15: ScriptTicket captures note lifetime, text generation, access and
+byte-offset target. Shared acceptance returns a session edit that revalidates
+on consumption and isolates undo. Message-only results validate without edits.
+Seven shared tests cover switch-away/back, Unicode edits, access changes,
+delayed consumption, cursor/undo and Send bounds. Workspace and existing
+terminal script tests pass, no new warnings; Visual/Vim reset and process
+cancellation remain in the host.

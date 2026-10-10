@@ -29,3 +29,5 @@ pub mod folds;
 pub mod lifecycle;
 
 pub mod save;
+
+pub mod scripts;

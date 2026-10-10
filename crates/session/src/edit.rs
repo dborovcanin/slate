@@ -16,6 +16,10 @@ use std::{borrow::Cow, ops::Range};
 pub enum SessionEdit<'a> {
     /// Canonicalize an empty storage buffer without changing its text.
     EnsureBuffer,
+    ScriptReplace {
+        ticket: &'a crate::scripts::ScriptTicket,
+        text: &'a str,
+    },
     Operation(&'a editor_core::types::EditOperation),
     TableCellPaste {
         text: &'a str,
@@ -94,6 +98,7 @@ impl NoteSession {
     ) -> Option<EditOutcome> {
         let finalize_empty_delete = matches!(edit, SessionEdit::Visual { delete: true, .. });
         let cursor_before = doc.cursor();
+        let isolated_script = matches!(edit, SessionEdit::ScriptReplace { .. });
         let mut calc_splices = Vec::new();
         let mut fold_rescan = false;
         let mut register = None;
@@ -104,6 +109,15 @@ impl NoteSession {
                     doc.lines.push(String::new());
                 }
                 return None;
+            }
+            SessionEdit::ScriptReplace { ticket, text } => {
+                self.validate_script(doc, ticket).ok()?;
+                self.history.break_coalescing();
+                let op = editor_core::scripts::plan_result(ticket.range, text.to_owned());
+                let outcome = self.apply_operation_text(doc, &op)?;
+                calc_splices = outcome.calc_splices;
+                fold_rescan = outcome.fold_rescan;
+                outcome.delta
             }
             SessionEdit::Operation(op) => {
                 let outcome = self.apply_operation_text(doc, op)?;
@@ -334,6 +348,9 @@ impl NoteSession {
         };
         if text_changed || finalize_empty_delete {
             self.finish_edit(doc, ctx, text_changed.then_some(outcome.delta));
+            if isolated_script {
+                self.history.break_coalescing();
+            }
         }
         Some(outcome)
     }
