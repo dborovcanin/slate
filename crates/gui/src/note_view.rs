@@ -128,7 +128,7 @@ pub enum CommandRun {
 
 pub struct NoteHost {
     pub(crate) db: Db,
-    index: Arc<Mutex<CrossNoteVarIndex>>,
+    pub(crate) index: Arc<Mutex<CrossNoteVarIndex>>,
     loaded: Condvar,
     pub doc: Document,
     pub session: NoteSession,
@@ -286,6 +286,15 @@ impl NoteHost {
         }
     }
 
+    /// New exchange rates: every result is stale.
+    pub fn refresh_calc_after_rates(&mut self) {
+        self.session.invalidate_calc();
+        if let Ok(mut index) = self.index.lock() {
+            index.invalidate_calculations();
+        }
+        self.recompute_calc();
+    }
+
     /// Large notes calculate only around what is on screen or under the
     /// cursor; call this after the view or cursor moved to `from..to`.
     /// Returns whether new results were computed.
@@ -314,6 +323,17 @@ impl NoteHost {
         self.run_input(|session, doc, input, cx| session.handle_key(doc, input, key, cx))
     }
 
+    /// Move to the previous or next word start.
+    pub fn move_word(&mut self, forward: bool) {
+        self.session
+            .move_word(&mut self.doc, forward, self.modules.table);
+    }
+
+    /// `Ctrl+Backspace`.
+    pub fn delete_word_backward(&mut self) -> InputOutcome {
+        self.run_input(|session, doc, input, cx| session.delete_word_backward(doc, input, cx))
+    }
+
     /// Paste `text` from the system clipboard for an action the session
     /// returned because its register was empty.
     pub fn paste_clipboard(&mut self, text: String, action: &VimAction) -> InputOutcome {
@@ -325,7 +345,7 @@ impl NoteHost {
         self.run_input(|session, doc, input, cx| session.apply_vim_action(doc, input, action, cx))
     }
 
-    fn run_input(
+    pub(crate) fn run_input(
         &mut self,
         f: impl FnOnce(
             &mut NoteSession,
@@ -1126,6 +1146,24 @@ mod tests {
             "x := 40\nx * 2"
         );
         assert_eq!(f.host.save(), Ok(false));
+    }
+
+    #[test]
+    fn exchange_rates_drive_conversions_and_refresh_results() {
+        use app_core::currency::{self, ExchangeRates};
+        let rates = |usd: f64, stamp: u64| ExchangeRates {
+            base: "EUR".into(),
+            rates: [("USD".to_string(), usd)].into_iter().collect(),
+            as_of: None,
+            fetched_at: stamp,
+        };
+        currency::install(rates(2.0, 1));
+        let mut f = fixture("10 EUR to USD");
+        let ghost = |f: &Fixture| f.host.lines(0, 1)[0].ghost.clone().unwrap_or_default();
+        assert!(ghost(&f).contains("20"), "{}", ghost(&f));
+        currency::install(rates(3.0, 2));
+        f.host.refresh_calc_after_rates();
+        assert!(ghost(&f).contains("30"), "{}", ghost(&f));
     }
 
     #[test]

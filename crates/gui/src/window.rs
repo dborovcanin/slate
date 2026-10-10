@@ -3,6 +3,7 @@
 //!
 //! Painting and input routing only. Line content comes from `NoteHost`, key
 //! semantics from `note_session::input`, commands from `editor_core`.
+use crate::completion::{self, Completion, Picked};
 use crate::editor_lines::{self, CursorShape, LineStyle};
 use crate::images::{self, ImageSlot};
 use crate::keys::{self, EditingMode, KeyCommand};
@@ -80,6 +81,11 @@ pub struct SlateWindow {
     /// Window size in pixels from the last paint, to reveal far jumps and fit the status bar.
     pub(crate) viewport: std::cell::Cell<(f32, f32)>,
     fences: Vec<FenceState>,
+    /// Autocomplete popup, with the cursor it was computed for.
+    pub(crate) currency: crate::currency::Currency,
+    completion: Option<Completion>,
+    completion_pos: (usize, usize),
+    completion_min: usize,
     /// The OS window is fullscreen because of preview mode.
     fullscreen: bool,
     scroll_drag: bool,
@@ -89,7 +95,14 @@ pub struct SlateWindow {
 }
 
 impl SlateWindow {
-    pub fn new(host: NoteHost, settings: Settings, fonts: Fonts, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        host: NoteHost,
+        settings: Settings,
+        fonts: Fonts,
+        currency: crate::currency::Currency,
+        currency_problem: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let light = settings.light;
         let count = host.doc.lines().len();
         let mut this = Self {
@@ -105,13 +118,20 @@ impl SlateWindow {
                 EditingMode::Standard
             },
             sidebar: settings.sidebar,
-            status: None,
+            status: currency_problem,
             overlay: Default::default(),
             hover_table: None,
             layouts: Default::default(),
             drag_anchor: None,
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
+            currency,
+            completion: None,
+            completion_pos: (0, 0),
+            completion_min: usize::from(
+                app_core::config::load_theme_config().variables_autocomplete_min_chars,
+            )
+            .clamp(1, 8),
             fullscreen: false,
             scroll_drag: false,
             images: Default::default(),
@@ -122,21 +142,6 @@ impl SlateWindow {
         if this.host.insert_only {
             this.host.input.vim.mode = VimMode::Insert;
         }
-        let weak = cx.entity().downgrade();
-        this.list.set_scroll_handler(move |event, _, cx| {
-            let weak = weak.clone();
-            let visible = event.visible_range.clone();
-            // Painting is under way; calculate once it is done.
-            cx.defer(move |cx| {
-                weak.update(cx, |this, cx| {
-                    if this.host.ensure_calc_range(visible.start, visible.end) {
-                        this.restyle();
-                        cx.notify();
-                    }
-                })
-                .ok();
-            });
-        });
         this.reload_lines();
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -146,6 +151,7 @@ impl SlateWindow {
                 if this.host.autosave_due(AUTOSAVE_DELAY) {
                     this.save(cx);
                 }
+                this.apply_currency(cx);
             });
             if alive.is_err() {
                 break;
@@ -153,6 +159,19 @@ impl SlateWindow {
         })
         .detach();
         this
+    }
+
+    /// Apply a finished rates refresh: new rates change every conversion.
+    pub(crate) fn apply_currency(&mut self, cx: &mut Context<Self>) {
+        let Some((status, changed)) = self.currency.poll() else {
+            return;
+        };
+        if changed {
+            self.host.refresh_calc_after_rates();
+            self.restyle();
+        }
+        self.set_status(status);
+        cx.notify();
     }
 
     pub fn focus_handle(&self) -> &FocusHandle {
@@ -165,6 +184,7 @@ impl SlateWindow {
         let count = self.fences.len();
         self.cache = vec![None; count];
         self.images.borrow_mut().clear();
+        self.completion = None;
         self.list.reset(count);
     }
 
@@ -339,6 +359,7 @@ impl SlateWindow {
                 );
             }
         }
+        self.update_completion(outcome.text_changed);
         for request in outcome.requests {
             self.handle_request(request, cx);
         }
@@ -357,6 +378,105 @@ impl SlateWindow {
         cx.notify();
     }
 
+    fn cursor_pos(&self) -> (usize, usize) {
+        (self.host.doc.cursor_line, self.host.doc.cursor_col)
+    }
+
+    /// Keep the autocomplete popup in step with typing: recompute it after
+    /// an edit, close it when the cursor moved away or insert mode ended.
+    fn update_completion(&mut self, text_changed: bool) {
+        if self.host.input.mode() != VimMode::Insert || self.host.preview {
+            self.completion = None;
+            return;
+        }
+        if !text_changed {
+            if self.cursor_pos() != self.completion_pos {
+                self.completion = None;
+            }
+            return;
+        }
+        self.completion = match self.completion.take() {
+            Some(mut open) if open.is_wiki() => {
+                completion::refresh(&self.host, &mut open).then_some(open)
+            }
+            previous => completion::variable(&self.host, self.completion_min, previous.as_ref()),
+        };
+        self.completion_pos = self.cursor_pos();
+    }
+
+    /// `Esc` on an open popup: close it, undoing a half-made heading link.
+    fn dismiss_completion(&mut self, cx: &mut Context<Self>) {
+        let Some(open) = self.completion.take() else {
+            return;
+        };
+        let before = self.snapshot_cursor();
+        if let Some(outcome) = completion::cancel(&mut self.host, &open) {
+            self.after_input(before, outcome, cx);
+        }
+        cx.notify();
+    }
+
+    fn accept_completion(&mut self, cx: &mut Context<Self>) {
+        let Some(mut open) = self.completion.take() else {
+            return;
+        };
+        let before = self.snapshot_cursor();
+        match completion::accept(&mut self.host, &mut open) {
+            Some(Picked::Closed(outcome)) => self.after_input(before, outcome, cx),
+            Some(Picked::Headings(outcome)) => {
+                self.completion = Some(open);
+                self.after_input(before, outcome, cx);
+            }
+            None => {}
+        }
+        cx.notify();
+    }
+
+    /// Keys the autocomplete popup owns while typing; `true` when handled.
+    fn completion_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let m = ev.keystroke.modifiers;
+        if self.host.preview
+            || self.host.locked()
+            || self.host.input.mode() != VimMode::Insert
+            || m.control
+            || m.alt
+            || m.platform
+        {
+            return false;
+        }
+        let open = self.completion.is_some();
+        match ev.keystroke.key.as_str() {
+            "down" | "up" if open && !m.shift => {
+                let delta = if ev.keystroke.key == "down" { 1 } else { -1 };
+                if let Some(c) = &mut self.completion {
+                    c.step(delta);
+                }
+                cx.notify();
+                true
+            }
+            "escape" if open => {
+                self.dismiss_completion(cx);
+                true
+            }
+            "enter" if open && !m.shift => {
+                self.accept_completion(cx);
+                true
+            }
+            "tab" if !m.shift => {
+                if !open {
+                    self.completion = completion::variable(&self.host, self.completion_min, None);
+                }
+                if self.completion.is_some() {
+                    self.accept_completion(cx);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     fn handle_request(&mut self, request: HostRequest, cx: &mut Context<Self>) {
         match request {
             HostRequest::CopyToClipboard(text) => {
@@ -364,6 +484,10 @@ impl SlateWindow {
                 self.set_status("yanked to clipboard");
             }
             HostRequest::PasteFromClipboard(action) => self.paste_clipboard(&action, cx),
+            HostRequest::OpenWikiCompletion => {
+                self.completion = Some(completion::open_wiki(&self.host));
+                self.completion_pos = self.cursor_pos();
+            }
             HostRequest::OpenCommandBar => crate::overlays::open_command_bar(self, ":", cx),
             HostRequest::OpenSearch => self.set_status("search is not in the desktop app yet"),
             HostRequest::SearchNext | HostRequest::SearchPrev => {}
@@ -581,6 +705,53 @@ impl SlateWindow {
         }
     }
 
+    /// `Ctrl+Left`/`Ctrl+Right`. Vim Normal and Visual use `b` and `w`.
+    fn word_move(&mut self, forward: bool, select: bool, cx: &mut Context<Self>) {
+        if self.host.input.mode() != VimMode::Insert {
+            self.send_key(VimKey::Char(if forward { 'w' } else { 'b' }), cx);
+            return;
+        }
+        let before = self.snapshot_cursor();
+        let doc = &mut self.host.doc;
+        if select && doc.selection_anchor.is_none() {
+            doc.selection_anchor = Some((doc.cursor_line, doc.cursor_col));
+        }
+        if !select {
+            doc.selection_anchor = None;
+        }
+        self.host.move_word(forward);
+        self.after_input(before, InputOutcome::default(), cx);
+    }
+
+    /// `Ctrl+Backspace` and `Ctrl+Delete` in insert and standard editing.
+    fn delete_word(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.host.input.mode() != VimMode::Insert {
+            return;
+        }
+        let before = self.snapshot_cursor();
+        if self.host.doc.selection_anchor.is_some() {
+            if let Some((_, outcome)) = self.host.cut_selection() {
+                self.after_input(before, outcome, cx);
+            }
+            return;
+        }
+        let outcome = if forward {
+            let doc = &mut self.host.doc;
+            doc.selection_anchor = Some((doc.cursor_line, doc.cursor_col));
+            self.host.move_word(true);
+            match self.host.cut_selection() {
+                Some((_, outcome)) => outcome,
+                None => {
+                    self.host.doc.selection_anchor = None;
+                    InputOutcome::default()
+                }
+            }
+        } else {
+            self.host.delete_word_backward()
+        };
+        self.after_input(before, outcome, cx);
+    }
+
     fn select_all(&mut self, cx: &mut Context<Self>) {
         let before = self.snapshot_cursor();
         let doc = &mut self.host.doc;
@@ -624,6 +795,8 @@ impl SlateWindow {
                 }
             }
             KeyCommand::Move { key, select } => self.standard_move(Some(key), None, select, cx),
+            KeyCommand::Word { forward, select } => self.word_move(forward, select, cx),
+            KeyCommand::DeleteWord { forward } => self.delete_word(forward, cx),
             KeyCommand::Home { select } => self.standard_move(None, Some(false), select, cx),
             KeyCommand::End { select } => self.standard_move(None, Some(true), select, cx),
             KeyCommand::Undo => self.run_action(VimIntent::Undo, cx),
@@ -673,8 +846,20 @@ impl SlateWindow {
             self.preview_key(ev, cx);
             return;
         }
+        if self.completion_key(ev, cx) {
+            return;
+        }
         let command = keys::map(&ev.keystroke, self.mode);
         self.run_key_command(command, cx);
+        if command == KeyCommand::Vim(VimKey::Char('#'))
+            && self.host.input.mode() == VimMode::Insert
+        {
+            if let Some(open) = completion::open_wiki_at_cursor(&self.host) {
+                self.completion = Some(open);
+                self.completion_pos = self.cursor_pos();
+                cx.notify();
+            }
+        }
     }
 
     /// Preview is read-only: only leaving it, quitting and scrolling work.
@@ -1339,6 +1524,84 @@ impl SlateWindow {
             )
     }
 
+    /// The autocomplete list, hanging under the text it completes.
+    fn completion_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = self.completion.as_ref()?;
+        if open.items.is_empty() {
+            return None;
+        }
+        let t = self.theme;
+        let layout = self.layouts.borrow().get(&open.line)?.clone();
+        let line = self.host.doc.lines().get(open.line)?;
+        let byte = line
+            .char_indices()
+            .nth(open.anchor_col)
+            .map_or(line.len(), |(b, _)| b);
+        let at = layout.position_for_index(byte)?;
+        let (width, height) = self.viewport.get();
+        let max = if open.is_wiki() {
+            completion::WIKI_VISIBLE
+        } else {
+            3
+        };
+        let (start, shown) = open.window(max);
+        let popup_h = shown.len() as f32 * 26.0 + 8.0;
+        let popup_w = 300.0_f32;
+        let x = f32::from(at.x).min(width - popup_w - 8.0).max(8.0);
+        let below = f32::from(at.y) + f32::from(layout.line_height()) + 4.0;
+        let y = if below + popup_h > height - 40.0 {
+            (f32::from(at.y) - popup_h - 4.0).max(8.0)
+        } else {
+            below
+        };
+        Some(
+            div()
+                .id("completion")
+                .occlude()
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(popup_w))
+                .p(px(4.0))
+                .rounded(px(8.0))
+                .bg(t.panel)
+                .border_1()
+                .border_color(t.border)
+                .shadow_lg()
+                .font_family(self.fonts.sans.clone())
+                .text_size(px(13.0))
+                .children(shown.iter().enumerate().map(|(i, item)| {
+                    let index = start + i;
+                    let active = index == open.selected;
+                    div()
+                        .id(("completion-item", index))
+                        .h(px(26.0))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .rounded(px(5.0))
+                        .cursor_pointer()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_color(if active { t.heading } else { t.text })
+                        .when(active, |d| d.bg(t.active))
+                        .hover(|s| s.bg(t.active))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(c) = &mut this.completion {
+                                c.selected = index;
+                            }
+                            this.accept_completion(cx);
+                        }))
+                        .when(item.heading.is_some(), |d| {
+                            d.child(div().text_color(t.faint).child("#"))
+                        })
+                        .child(item.label.clone())
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn status_bar(&self) -> impl IntoElement {
         let t = &self.theme;
         let m = self.host.modules;
@@ -1526,6 +1789,13 @@ impl Render for SlateWindow {
         let size = window.viewport_size();
         self.viewport
             .set((f32::from(size.width), f32::from(size.height)));
+        // Whatever moved the view (wheel, scroll bar, preview keys), large
+        // notes calculate what is now on screen.
+        let top = self.list.logical_scroll_top().item_ix;
+        let rows = (f32::from(size.height) / 20.0) as usize + 8;
+        if self.host.ensure_calc_range(top, top + rows) {
+            self.restyle();
+        }
         if self.host.preview != self.fullscreen {
             window.toggle_fullscreen();
             self.fullscreen = self.host.preview;
@@ -1598,6 +1868,7 @@ impl Render for SlateWindow {
                 d.children(crate::overlays::which_key(self))
                     .child(self.status_bar())
             })
+            .children(self.completion_popup(cx))
             .children(crate::overlays::render(self, window, cx))
     }
 }

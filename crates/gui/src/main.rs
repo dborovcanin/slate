@@ -1,6 +1,8 @@
 //! `slate-gui`: the desktop front end. See docs/gui.md.
 mod browser;
 mod commands;
+mod completion;
+mod currency;
 mod editor_lines;
 mod history;
 mod images;
@@ -63,6 +65,9 @@ fn pick_font(installed: &[String], wanted: &[&str]) -> SharedString {
 fn main() {
     // GPUI reports platform and renderer failures through `log`; RUST_LOG=info shows them.
     env_logger::init();
+    // Cached rates are installed before the first calc, so conversions work on open.
+    let (currency, currency_problem) =
+        currency::Currency::start(app_core::config::load_theme_config().background_tasks_enabled);
     let result = parse_args().and_then(|args| {
         let db = app_core::storage::Db::open(app_core::data_dir()?.join("notes.db"))?;
         let host = NoteHost::open(db, args.note_id.as_deref())?;
@@ -90,7 +95,9 @@ fn main() {
                     sans: pick_font(&installed, &SANS_FONTS),
                     mono: pick_font(&installed, &MONO_FONTS),
                 };
-                let view = cx.new(|cx| window::SlateWindow::new(host, settings, fonts, cx));
+                let view = cx.new(|cx| {
+                    window::SlateWindow::new(host, settings, fonts, currency, currency_problem, cx)
+                });
                 window.focus(view.read(cx).focus_handle());
                 let closing = view.clone();
                 window.on_window_should_close(cx, move |_, cx| {

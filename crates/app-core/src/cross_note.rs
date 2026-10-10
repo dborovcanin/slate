@@ -10,6 +10,33 @@ use std::sync::Mutex;
 /// chain leaves its far end unresolved.
 const MAX_DEPENDENCY_DEPTH: usize = 16;
 
+/// Variable names exported by `note_id`, for autocomplete. A fast text scan
+/// (no evaluation) on first use; values are not filled in.
+pub fn exports_for_autocomplete(
+    note_id: &str,
+    index: &Mutex<CrossNoteVarIndex>,
+    db: &Db,
+) -> Vec<VariableIndexEntry> {
+    if let Ok(index) = index.lock() {
+        if index.was_name_scan_attempted(note_id) {
+            return index.exports_for_note(note_id).to_vec();
+        }
+    }
+    let Ok(Some(note)) = db.get_note(note_id) else {
+        if let Ok(mut index) = index.lock() {
+            index.mark_name_scan_attempted(note_id);
+        }
+        return Vec::new();
+    };
+    let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
+    let entries = crate::calc::scan_variable_assignments(&lines);
+    if let Ok(mut index) = index.lock() {
+        index.update_entries_only(note_id, &entries);
+        index.mark_name_scan_attempted(note_id);
+    }
+    entries
+}
+
 /// Tracks variable exports and cross-note dependencies across all open notes.
 /// Every key is a full note id, as written in `[[id]].var`.
 ///

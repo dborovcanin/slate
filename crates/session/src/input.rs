@@ -101,6 +101,9 @@ pub enum HostRequest {
     /// stores it in `InputState::register` and replays the action.
     PasteFromClipboard(VimAction),
     OpenCommandBar,
+    /// `[[` was typed: `]]` is already added after the cursor; open the
+    /// note picker for the link.
+    OpenWikiCompletion,
     OpenSearch,
     SearchNext,
     SearchPrev,
@@ -260,6 +263,80 @@ impl NoteSession {
         outcome
     }
 
+    /// Replace characters `range` of `line` with `text` and put the cursor
+    /// at `cursor_col` (autocomplete picks).
+    pub fn replace_line_chars(
+        &mut self,
+        doc: &mut Document,
+        state: &InputState,
+        line: usize,
+        range: std::ops::Range<usize>,
+        text: &str,
+        cursor_col: usize,
+        cx: &InputContext<'_>,
+    ) -> InputOutcome {
+        let mut outcome = InputOutcome {
+            handled: true,
+            ..Default::default()
+        };
+        let cursor_after = BufferCursor {
+            line,
+            column: cursor_col,
+        };
+        self.edit(
+            doc,
+            state,
+            SessionEdit::LineReplace {
+                line,
+                range,
+                text,
+                preserve_cursor: line != doc.cursor_line,
+                cursor_after: Some(cursor_after),
+            },
+            cx,
+            &mut outcome,
+        );
+        doc.cursor_col = cursor_col;
+        outcome
+    }
+
+    /// Move the cursor to the previous or next word start, across lines;
+    /// table rows move by cell content.
+    pub fn move_word(&self, doc: &mut Document, forward: bool, tables: bool) {
+        let cursor = doc.cursor();
+        let lines = doc.lines();
+        let after = if forward {
+            words::move_cursor_right_word(lines, cursor, tables, cursor.line + 1..lines.len())
+        } else {
+            words::move_cursor_left_word(lines, cursor, tables, (0..cursor.line).rev())
+        };
+        doc.set_cursor(after);
+    }
+
+    /// Delete the word before the cursor (`Ctrl+Backspace`); at the start of
+    /// a line this joins it to the previous one.
+    pub fn delete_word_backward(
+        &mut self,
+        doc: &mut Document,
+        state: &mut InputState,
+        cx: &InputContext<'_>,
+    ) -> InputOutcome {
+        self.begin_input(UndoSession::Insert);
+        let mut outcome = InputOutcome {
+            handled: true,
+            ..Default::default()
+        };
+        let edit = if doc.cursor_col == 0 {
+            SessionEdit::Primitive(PrimitiveEdit::Backspace)
+        } else {
+            SessionEdit::BackwardWordDelete {
+                tables: cx.options.tables,
+            }
+        };
+        self.edit(doc, state, edit, cx, &mut outcome);
+        outcome
+    }
+
     /// Run one vim action outside key stepping, e.g. a paste the host
     /// replays after filling the register from the system clipboard.
     pub fn apply_vim_action(
@@ -358,6 +435,21 @@ impl NoteSession {
                     cx,
                     &mut outcome,
                 );
+                // `[[` closes itself and asks for the link target.
+                if ch == '['
+                    && doc.cursor_col >= 2
+                    && doc.lines()[doc.cursor_line].chars().nth(doc.cursor_col - 2) == Some('[')
+                {
+                    self.edit(
+                        doc,
+                        state,
+                        SessionEdit::Primitive(PrimitiveEdit::InsertText("]]")),
+                        cx,
+                        &mut outcome,
+                    );
+                    doc.cursor_col -= 2;
+                    outcome.requests.push(HostRequest::OpenWikiCompletion);
+                }
             }
             VimKey::Enter => {
                 let rules = TextRuleOptions {
@@ -775,6 +867,61 @@ mod tests {
         fn cursor(&self) -> (usize, usize) {
             (self.doc.cursor_line, self.doc.cursor_col)
         }
+    }
+
+    #[test]
+    fn word_motion_and_deletion_cross_lines() {
+        let mut e = Editor::new("one two\nthree");
+        e.doc.cursor_line = 1;
+        e.doc.cursor_col = 5;
+        e.session.move_word(&mut e.doc, false, false);
+        assert_eq!(e.cursor(), (1, 0));
+        e.session.move_word(&mut e.doc, false, false);
+        assert_eq!(e.cursor(), (0, 7));
+        e.session.move_word(&mut e.doc, false, false);
+        assert_eq!(e.cursor(), (0, 4));
+        e.session.move_word(&mut e.doc, true, false);
+        assert_eq!(e.cursor(), (0, 7));
+        e.doc.cursor_line = 0;
+        e.doc.cursor_col = 7;
+        let cx = InputContext {
+            options: InputOptions::default(),
+            since_last_edit: Duration::from_secs(5),
+            calc: None,
+        };
+        e.state.vim.mode = VimMode::Insert;
+        e.session
+            .delete_word_backward(&mut e.doc, &mut e.state, &cx);
+        assert_eq!(e.text(), "one \nthree");
+    }
+
+    #[test]
+    fn double_bracket_closes_and_requests_the_link_picker() {
+        let mut e = Editor::new("see ");
+        e.doc.cursor_col = 4;
+        e.keys("i[[");
+        assert_eq!(e.text(), "see [[]]");
+        assert_eq!(e.cursor(), (0, 6));
+        assert!(e
+            .requests
+            .iter()
+            .any(|r| matches!(r, HostRequest::OpenWikiCompletion)));
+    }
+
+    #[test]
+    fn replace_line_chars_swaps_text_and_moves_the_cursor() {
+        let mut e = Editor::new("sal + 1");
+        e.state.vim.mode = VimMode::Insert;
+        e.doc.cursor_col = 3;
+        let cx = InputContext {
+            options: InputOptions::default(),
+            since_last_edit: Duration::from_secs(5),
+            calc: None,
+        };
+        e.session
+            .replace_line_chars(&mut e.doc, &e.state, 0, 0..3, "salary", 6, &cx);
+        assert_eq!(e.text(), "salary + 1");
+        assert_eq!(e.cursor(), (0, 6));
     }
 
     #[test]

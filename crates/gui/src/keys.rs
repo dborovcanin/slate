@@ -28,6 +28,15 @@ pub enum KeyCommand {
     End {
         select: bool,
     },
+    /// `Ctrl+Left`/`Ctrl+Right`: previous or next word.
+    Word {
+        forward: bool,
+        select: bool,
+    },
+    /// `Ctrl+Backspace`/`Ctrl+Delete`.
+    DeleteWord {
+        forward: bool,
+    },
     Undo,
     Redo,
     Copy,
@@ -124,6 +133,22 @@ pub fn map(k: &Keystroke, mode: EditingMode) -> KeyCommand {
         return cmd;
     }
     let m = k.modifiers;
+    if m.control && !m.alt {
+        match k.key.as_str() {
+            "left" | "right" => {
+                return KeyCommand::Word {
+                    forward: k.key == "right",
+                    select: m.shift,
+                }
+            }
+            "backspace" | "delete" => {
+                return KeyCommand::DeleteWord {
+                    forward: k.key == "delete",
+                }
+            }
+            _ => {}
+        }
+    }
     match mode {
         EditingMode::Vim => {
             if m.control {
@@ -185,6 +210,30 @@ mod tests {
             k.key_char = Some(ch);
         }
         k
+    }
+
+    #[test]
+    fn ctrl_arrows_move_by_word_in_both_modes() {
+        for mode in [EditingMode::Vim, EditingMode::Standard] {
+            assert_eq!(
+                map(&key("ctrl-left"), mode),
+                KeyCommand::Word {
+                    forward: false,
+                    select: false
+                }
+            );
+            assert_eq!(
+                map(&key("ctrl-shift-right"), mode),
+                KeyCommand::Word {
+                    forward: true,
+                    select: true
+                }
+            );
+            assert_eq!(
+                map(&key("ctrl-backspace"), mode),
+                KeyCommand::DeleteWord { forward: false }
+            );
+        }
     }
 
     #[test]

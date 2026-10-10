@@ -131,7 +131,13 @@ pub fn run_host_command(
             let _ = parse_web_search_command(raw);
             not_yet(win, "web search", cx)
         }
-        CurrencyRefresh => not_yet(win, "currency refresh", cx),
+        CurrencyRefresh => {
+            win.apply_currency(cx);
+            match win.currency.request_refresh() {
+                Ok(()) => notify_status(win, "refreshing exchange rates", cx),
+                Err(error) => notify_status(win, error, cx),
+            }
+        }
         ClipWatch | ClipWatchStop => not_yet(win, "clipboard watching", cx),
         PasteImage => {
             if !win.paste_image(cx) {
