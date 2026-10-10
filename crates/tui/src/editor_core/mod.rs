@@ -9,6 +9,7 @@ pub use editor_core::context;
 pub use editor_core::engine;
 pub use editor_core::folding;
 pub use editor_core::format;
+pub use editor_core::history;
 pub use editor_core::markdown_tokens;
 pub use editor_core::math_commands;
 pub use editor_core::operations;

@@ -7,6 +7,7 @@ pub mod context;
 pub mod engine;
 pub mod folding;
 pub mod format;
+pub mod history;
 pub mod markdown_tokens;
 pub mod math_commands;
 pub mod operations;

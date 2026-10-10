@@ -49,7 +49,7 @@ pub struct LineHistory<M = ()> {
     last_delta: Option<LineDelta>,
 }
 
-pub(crate) const COALESCE_ANCHOR_MAX_LINES: usize = 5_000;
+pub const COALESCE_ANCHOR_MAX_LINES: usize = 5_000;
 
 impl<M: Clone + Default> LineHistory<M> {
     pub fn new(

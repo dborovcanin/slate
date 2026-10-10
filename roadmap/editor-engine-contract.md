@@ -11,6 +11,7 @@ This document defines the canonical shared-core contract for editor semantics.
   - vim key stepping (`VimState` + `VimContext` -> `VimStep`)
   - module-command planning (`CommandId` + current module state -> deterministic plan)
 - `crates/editor-core/src/folding.rs` owns fold-range computation plus incremental line-edit mapping/rebuild decisions.
+- `crates/editor-core/src/history.rs` owns the line undo store and its generic attached marks.
 - The terminal app must call this contract for semantic decisions.
 - The terminal app remains responsible for rendering, UI state, persistence side effects, and I/O.
 
@@ -58,6 +59,16 @@ This document defines the canonical shared-core contract for editor semantics.
   - Hosts route exact line/block edits to reminder mapping before mutation
     and retain the existing history/calc transaction after mutation. Prepared
     edits must be applied to the unchanged buffer they were prepared against.
+- History store contract (`editor_core::history`):
+  - `LineHistory<M>` stores text, character-column cursors and opaque attached
+    marks together. Recording, undo and redo retain the existing span storage,
+    coalescing, redo truncation and bounded entry eviction behavior.
+  - `record_edit_span` currently takes separate start/old/new line spans;
+    adaptation to `EditDelta` is a separate step. `take_last_delta` returns
+    the removed and inserted lines for host metadata updates.
+  - `COALESCE_ANCHOR_MAX_LINES` retains the 5,000-line anchor limit. The host
+    still selects the recording path and decides grouping and text/reminder
+    action order; moving the store alone does not complete undo extraction.
 - Command contract:
   - input: `CommandMode`, `raw_input`
   - output: canonical command definition (or none), suggestions, normalized input

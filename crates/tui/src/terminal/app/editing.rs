@@ -220,7 +220,7 @@ impl TerminalApp {
         // document ends. Gate on the coalesce cap rather than the much larger
         // lightweight-fold threshold so mid-size notes (5k–30k lines) stop paying
         // the per-keystroke full-document diff.
-        self.editor.lines.len() > crate::terminal::history::COALESCE_ANCHOR_MAX_LINES
+        self.editor.lines.len() > crate::editor_core::history::COALESCE_ANCHOR_MAX_LINES
     }
 
     fn record_history_after_edit(

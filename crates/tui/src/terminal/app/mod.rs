@@ -7,12 +7,12 @@ use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::DatePickerAction;
 use super::folding::FoldKind;
 use super::folding_state::FoldingState;
-use super::history::LineHistory;
 use super::input::{self, Key};
 use super::render;
 use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
+use crate::editor_core::history::LineHistory;
 
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
