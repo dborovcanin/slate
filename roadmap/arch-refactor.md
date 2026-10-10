@@ -1,6 +1,7 @@
 # Architecture Refactor: Core-Owned Editing
 
-Status: implemented (2026-10-10). Execution reference for moving editing semantics
+Status: phases 1–3, 5 and 6 implemented, phase 4 partial (2026-10-10); see
+"Follow-ups". Execution reference for moving editing semantics
 out of `crates/tui` into the core crates. Ownership rules come from
 `AGENTS.md` and `roadmap/plan.md` ("Ownership Rules"); the existing contract
 is `roadmap/editor-engine-contract.md`.
@@ -186,7 +187,7 @@ Done when the terminal word motions only wrap core functions, and core tests
 cover punctuation and whitespace classes, line edges, folded neighbors and
 table cells.
 
-### Phase 4: vim intent execution (complete)
+### Phase 4: vim intent execution (partial)
 
 Split `apply_vim_actions` by intent group (motions, operators, text objects,
 visual selection, paste/registers). Core returns `EditOperation` plus
@@ -201,8 +202,12 @@ status messages.
 
 Phase 4 keeps line-buffer visual plans separate from byte-offset operator plans:
 selected text, replacement spans, register modes and resulting cursors are core
-owned without joining large notes. Insert-entry placement, horizontal prose
-movement and fallback register preparation also execute in core. Folded-line
+owned without joining large notes. Horizontal prose movement, linewise paste
+line preparation and fallback register preparation also execute in core, and
+the host uses the core register type directly. Not done: linewise and charwise
+paste and open-line insertion still mutate the buffer in the host, and
+`insert_entry_column` / `paste_after_column` only compute cursor columns for
+intents the host still dispatches. Folded-line
 lookup, screen movement and markdown display-boundary exits remain presentation
 adapters; clipboard/image import, macro replay, reminder attachment, undo I/O,
 and status are host effects. The existing operator/text-object plans stay scoped.
@@ -274,9 +279,9 @@ them when a second consumer or a test needs them, not before.
 | 1. Buffer primitives | Complete | Offset helpers, text changes, typing and plain/table paste delegate to core |
 | 2. Undo store and policy | Complete | Core owns span recording, grouping, redo truncation, self-cancelling text markers and text/reminder action order; host supplies time/session boundaries and applies effects |
 | 3. Word motions | Complete | Core owns word motions and backward deletion; host supplies lazy visible neighbors and retains edit bookkeeping |
-| 4. Vim intent execution | Planned | Same as plan.md Commands/Vim action point 1 |
-| 5. Post-edit planning | Planned | |
-| 6. Completion and search | Planned | |
+| 4. Vim intent execution | Partial | Visual selection, operator/text-object plans, registers and cursor placement are core-owned; paste and open-line buffer edits remain in the host |
+| 5. Post-edit planning | Complete | `plan_after_edit`, `plan_result_remap` and fold upkeep decisions are core-owned; fold upkeep still locates edits from the cursor (see "Follow-ups") |
+| 6. Completion and search | Complete | Prefixes, candidates, wiki-link queries and search matching are core-owned; applying a picked completion still edits in the host |
 
 Track progress by which semantic decisions have a canonical core owner,
 which terminal paths delegate to it, and which core regression tests cover
@@ -360,10 +365,45 @@ are recorded with the completion report below.
 - Startup qualification is deferred at the user's request. Performance limits
   were kept unchanged. Review can proceed; this is not a claim that every merge
   qualification gate is green.
-- A PTY smoke attempt timed out before producing a screen and is not counted as
-  successful live-terminal verification. Vim golden replays and integration
-  tests passed; live-terminal verification remains unqualified.
+- Live terminal: a tmux run of a debug build (Vim mode, isolated config and
+  data directories) covering typing, visual delete, `o`, Ctrl-W, yank/paste,
+  undo/redo and calc results produced the same screens as `main`, with the
+  prepared-plan debug assertions active.
 
-Generated build artifacts were moved to a private local disk cache after shared
-cache interference and temporary-filesystem quota failures. Those failed builds
-are not recorded as code failures or successful checks.
+## Follow-ups
+
+Found in the pre-merge review. None blocks the merge; each needs its own
+change with core tests.
+
+- **Fold upkeep from `EditDelta`.** `folding::upkeep::plan_fold_upkeep` infers
+  a one-line insert or delete at the cursor line. Pass the edit's `EditDelta`
+  instead, so edits away from the cursor (undo and redo, a mouse paste or
+  multiple cursors in another front end) map folds without a rescan. It also
+  clones the current line three times per keystroke.
+- **Host-only text edits.** These still mutate `editor.lines` in the terminal
+  crate without a core plan, and most record history through the
+  whole-document diff (`mark_edited`):
+  - applying a variable autocomplete pick (`apply_variable_autocomplete_pick`)
+  - applying a calc result with Tab (`apply_calc_tab`)
+  - calc trailer refresh in `run_calc_recompute`
+  - wiki-link selection and heading-suffix removal
+  - removing an empty table continuation row
+    (`prune_empty_table_continuation_row_at_cursor`)
+  - Vim linewise and charwise paste, and open-line insertion (phase 4)
+- **Vim paste performance.** Linewise paste inserts and clones one line at a
+  time, which is O(pasted lines × note lines); use one splice.
+- **Search allocation.** `search::find_matches` lowercases a copy of every line
+  on each query change; reuse one buffer.
+- **Document state.** The after-edit pipeline (calc plan execution, fold view
+  map, cache invalidation) and the fold structure/text caches still live in
+  `TerminalApp`. A core document-state type (lines, cursor, history, undo
+  policy, fold caches, calc metadata) whose `apply` returns effects would let
+  another front end reuse it.
+- **Pre-existing bug, also on `main`.** Typing `one`/`two`, then `o` with
+  `three`/`four`, `gg V d`, `u`, Ctrl-R, `u` and `x` in Vim mode joins the
+  first two lines (`onetwo`) instead of deleting a character. The restored
+  cursor is probably left past the line end; undo should clamp it as Normal
+  mode does.
+- **Display model.** `terminal/markdown_view.rs` and table display
+  reformatting remain terminal code; a second front end needs them as a
+  shared styled-line model.

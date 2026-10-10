@@ -60,7 +60,8 @@ This document defines the canonical shared-core contract for editor semantics.
     code. Table-disabled notes and existing table rows retain their guards.
   - Hosts route exact line/block edits to reminder mapping before mutation
     and retain the existing history/calc transaction after mutation. Prepared
-    edits must be applied to the unchanged buffer they were prepared against.
+    edits must be applied to the unchanged buffer they were prepared against;
+    debug builds assert this on the affected line or line count.
 - History store contract (`editor_core::history`):
   - `LineHistory<M>` stores text, character-column cursors and opaque attached
     marks together. Recording, undo and redo retain the existing span storage,
@@ -76,7 +77,7 @@ This document defines the canonical shared-core contract for editor semantics.
     position. Reminder payloads remain opaque; the host applies them and
     persists their effects.
   - The host classifies input as an insert session, normal/visual command or
-    other input. `begin_input` breaks coalescing for commands. Explicit edit
+    other input. `LineHistory::begin_input` breaks coalescing for commands. Explicit edit
     boundaries and checkpoints still use the core history methods.
   - `record_text` receives cursor, optional `EditDelta` and `UndoGrouping`
     (session and elapsed time captured before post-edit work). Core coalesces
