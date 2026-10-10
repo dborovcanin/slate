@@ -52,6 +52,8 @@ fn pick_font(installed: &[String], wanted: &[&str]) -> SharedString {
 }
 
 fn main() {
+    // GPUI reports platform and renderer failures through `log`; RUST_LOG=info shows them.
+    env_logger::init();
     let result = parse_args().and_then(|args| {
         let db = app_core::storage::Db::open(app_core::data_dir()?.join("notes.db"))?;
         let host = NoteHost::open(db, args.note_id.as_deref())?;

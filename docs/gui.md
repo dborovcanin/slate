@@ -10,6 +10,20 @@ that output.
 Status: work in progress on the `ui` branch. The terminal app (`slate`) is
 unaffected.
 
+What works now:
+
+- Opens the most recent note (or `--id`), from the same database as `slate`.
+- Notes sidebar; click a note to open it.
+- Styled-in-place markdown: headings, bold/italic/code, checklists, hidden
+  markers revealed on the cursor line.
+- Live calc results, variable highlighting, and tables with formula values.
+- Status bar with mode, dirty mark, module chips, calc result and position.
+- Click a line to move the cursor there. `--light` uses the light theme.
+
+Not yet: keyboard input and editing (vim and standard modes), menus, the
+command palette, collection browser, history and saving. Wiki links show their
+raw `[[...]]` text because that display rule still lives in the terminal app.
+
 ## Why a separate workspace
 
 `crates/gui` has its own `[workspace]` and `Cargo.lock` and is listed under
@@ -39,6 +53,14 @@ The first build compiles GPUI and its dependencies and takes several minutes.
 
 The window opens the same notes database as the terminal app (the Slate data
 directory's `notes.db`), so both see the same notes.
+
+## Logging
+
+GPUI reports renderer and platform problems through `log`:
+
+```sh
+RUST_LOG=info make ui-run
+```
 
 ## Notes
 

@@ -16,6 +16,7 @@ note-session = { path = "../session" }
 app-core = { path = "../app-core" }
 editor-core = { path = "../editor-core" }
 table-syntax = { path = "../table-syntax" }
+env_logger = { version = "0.11", default-features = false }
 
 [profile.release]
 lto = "thin"

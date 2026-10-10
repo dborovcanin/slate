@@ -303,11 +303,8 @@ impl SlateWindow {
                 .when_some(line.ghost.clone(), |d, g| d.child(ghost(g, &t)))
                 .into_any_element(),
             LineKind::TableRow { cells, header } => table_row(cells, *header, &t),
-            LineKind::TableDelimiter => div()
-                .h(px(1.0))
-                .mt(px(-1.0))
-                .bg(t.border)
-                .into_any_element(),
+            // The header row already draws the rule under it.
+            LineKind::TableDelimiter => div().into_any_element(),
             LineKind::Text => div()
                 .flex()
                 .child(styled_text(&line.runs, &t))
@@ -318,8 +315,12 @@ impl SlateWindow {
             .id(("line", ix))
             .flex()
             .items_center()
-            .min_h(px(26.0))
+            .w_full()
             .max_w(px(900.0))
+            .map(|d| match line.kind {
+                LineKind::TableDelimiter => d.h(px(0.0)).overflow_hidden(),
+                _ => d.min_h(px(26.0)),
+            })
             .when(is_cursor, |d| d.bg(t.cursorline))
             .on_mouse_down(
                 MouseButton::Left,
@@ -366,6 +367,7 @@ fn checkbox(checked: bool, t: &Theme) -> impl IntoElement {
 
 fn table_row(cells: &[TableCell], header: bool, t: &Theme) -> AnyElement {
     div()
+        .w_full()
         .flex()
         .border_b_1()
         .border_color(t.border)
