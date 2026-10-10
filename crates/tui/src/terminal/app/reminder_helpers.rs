@@ -1,6 +1,9 @@
-use super::{LineReminderGhost, ReminderMarks, TerminalApp};
+#[cfg(test)]
+use super::ReminderMarks;
+use super::{LineReminderGhost, TerminalApp};
 use crate::storage::{Db, Note};
 use app_core::storage::NoteAccessMode;
+#[cfg(test)]
 use note_session::reminder_marks_of;
 use rustc_hash::FxHashMap;
 
@@ -63,6 +66,7 @@ impl TerminalApp {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn reminder_marks(&self) -> ReminderMarks {
         reminder_marks_of(&self.session.reminder_ghosts)
     }
@@ -80,12 +84,15 @@ impl TerminalApp {
     /// A reminder change that is not a text edit (set, removed, notified,
     /// undone): it is stored right away when the text is saved, else with
     /// the next save of the text.
+    #[cfg(test)]
     pub(super) fn reminders_changed_outside_text(&mut self, db: &Db) {
-        self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
-        // A change worth saving: a paused autosave tries again.
-        self.session.note_changed();
+        if self.session.reminder_changed_outside_text() {
+            self.reminder_session_changed(db);
+        }
+    }
+    /// Paint/persist the accepted shared reminder change; bookkeeping is already complete.
+    pub(super) fn reminder_session_changed(&mut self, db: &Db) {
         self.last_edit = std::time::Instant::now();
-        self.session.history.set_marks(self.reminder_marks());
         self.render_state.dirty = true;
         self.persist_reminders_if_text_saved(db);
     }

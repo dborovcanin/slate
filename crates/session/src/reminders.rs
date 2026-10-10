@@ -125,3 +125,137 @@ pub fn move_lines(
         .filter_map(|(line, target)| Some((target?, ghosts[line].clone())))
         .collect()
 }
+
+impl crate::NoteSession {
+    /// Update one reminder and its semantic history entry as a single session change.
+    /// Notification acknowledgements use `record_undo = false`.
+    pub fn set_reminder(
+        &mut self,
+        doc: &crate::Document,
+        line: usize,
+        state: Option<LineReminderGhost>,
+        record_undo: bool,
+    ) -> bool {
+        if !self.editable() || !self.holds_reminders() || line >= doc.lines().len() {
+            return false;
+        }
+        let before = self.reminder_ghosts.get(&line).cloned();
+        if before == state {
+            return false;
+        }
+        match &state {
+            Some(mark) => {
+                self.reminder_ghosts.insert(line, mark.clone());
+            }
+            None => {
+                self.reminder_ghosts.remove(&line);
+            }
+        }
+        if record_undo {
+            self.history.break_coalescing();
+            self.undo_policy.record_reminder(ReminderUndoEntry {
+                line_idx: line,
+                before,
+                after: state,
+            });
+        }
+        self.reminder_changed_outside_text();
+        true
+    }
+
+    /// Compatibility boundary for reconciliation that already changed the mark map.
+    /// Hosts retain persistence and debounce clocks; the session owns change identity.
+    pub fn reminder_changed_outside_text(&mut self) -> bool {
+        if !self.editable() || !self.holds_reminders() {
+            return false;
+        }
+        self.reminders_generation = self.reminders_generation.wrapping_add(1);
+        self.note_changed();
+        self.history
+            .set_marks(reminder_marks_of(&self.reminder_ghosts));
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture() -> (crate::Document, crate::NoteSession) {
+        let doc = crate::Document::from_text("first\nsecond");
+        let history =
+            crate::lifecycle::build_history_for_note(doc.lines(), 0, 0, Default::default());
+        let mut session = crate::NoteSession::new(history, Default::default(), Default::default());
+        session.start_lifetime("a");
+        (doc, session)
+    }
+    fn mark() -> LineReminderGhost {
+        LineReminderGhost {
+            remind_at_ms: 1,
+            display_at: "soon".into(),
+            line_text: "second".into(),
+            reminded_at_ms: None,
+        }
+    }
+    #[test]
+    fn reminder_mutation_updates_marks_identity_and_semantic_history_atomically() {
+        let (doc, mut session) = fixture();
+        assert!(session.set_reminder(&doc, 1, Some(mark()), true));
+        assert_eq!((session.reminders_generation, session.edit_seq), (1, 1));
+        assert_eq!(session.undo_policy.undo_depth(), 1);
+        assert_eq!(
+            **session.history.current_marks(),
+            *reminder_marks_of(&session.reminder_ghosts)
+        );
+        assert!(!session.dirty);
+        assert_eq!(doc.text_generation, 0);
+        let editor_core::history::policy::UndoAction::Reminder(entry) =
+            session.undo_policy.undo_action().unwrap()
+        else {
+            panic!("reminder marker")
+        };
+        assert_eq!(entry.line_idx, 1);
+        assert_eq!(entry.before, None);
+        assert_eq!(entry.after, Some(mark()));
+        assert!(!session.set_reminder(&doc, 1, Some(mark()), true));
+        assert_eq!(
+            (
+                session.reminders_generation,
+                session.edit_seq,
+                session.undo_policy.undo_depth()
+            ),
+            (1, 1, 1)
+        );
+        let mut notified = mark();
+        notified.reminded_at_ms = Some(20);
+        assert!(session.set_reminder(&doc, 1, Some(notified), false));
+        assert_eq!(session.undo_policy.undo_depth(), 1);
+        assert_eq!((session.reminders_generation, session.edit_seq), (2, 2));
+        assert!(session.set_reminder(&doc, 1, None, true));
+        assert_eq!(session.undo_policy.undo_depth(), 2);
+        assert!(session.reminder_ghosts.is_empty());
+    }
+    #[test]
+    fn invalid_locked_and_file_backed_requests_do_not_change_reminders_or_identity() {
+        let (doc, mut session) = fixture();
+        assert!(!session.set_reminder(&doc, 99, Some(mark()), true));
+        assert!(!session.set_reminder(&doc, 0, None, true));
+        session.access_mode = app_core::storage::NoteAccessMode::Encrypted;
+        session.is_unlocked = false;
+        assert!(!session.set_reminder(&doc, 0, Some(mark()), true));
+        assert!(!session.reminder_changed_outside_text());
+        session.is_unlocked = true;
+        session.note_id =
+            app_core::note_sources::note_id_for_markdown_file(std::path::Path::new("/tmp/note.md"));
+        assert!(!session.set_reminder(&doc, 0, Some(mark()), true));
+        assert!(!session.reminder_changed_outside_text());
+        assert!(session.reminder_ghosts.is_empty());
+        assert_eq!(
+            (
+                session.reminders_generation,
+                session.edit_seq,
+                session.undo_policy.undo_depth()
+            ),
+            (0, 0, 0)
+        );
+    }
+}

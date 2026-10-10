@@ -3,10 +3,9 @@ use super::{
     extract_cross_note_completion_prefix, find_calc_segment_range, find_table_formula_segments,
     gutter_width_for_visible_lines, is_markdown_table_line, line_char_len, line_display_cols,
     preload_cross_note_dep_value, table_cell_edit_start, table_cell_info_at_char,
-    table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind, LineReminderGhost,
-    ReminderUndoEntry, TerminalApp, UiMode, VariableAutocompletePopupState,
-    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
-    CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
+    table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind, TerminalApp, UiMode,
+    VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
+    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
     CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
     VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
@@ -209,22 +208,6 @@ impl TerminalApp {
             UiMode::Normal | UiMode::Visual | UiMode::VisualLine => UndoSession::Command,
             _ => UndoSession::Other,
         }
-    }
-
-    pub(super) fn push_reminder_undo_entry(
-        &mut self,
-        line_idx: usize,
-        before: Option<LineReminderGhost>,
-        after: Option<LineReminderGhost>,
-    ) {
-        if before == after {
-            return;
-        }
-        self.session.undo_policy.record_reminder(ReminderUndoEntry {
-            line_idx,
-            before,
-            after,
-        });
     }
 
     pub(super) fn bootstrap_folding_for_startup(&mut self) {

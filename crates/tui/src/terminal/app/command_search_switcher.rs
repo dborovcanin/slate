@@ -1672,24 +1672,12 @@ impl TerminalApp {
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::RemindToggle => {
-                    match self
-                        .session
-                        .reminder_ghosts
-                        .remove(&self.editor.cursor_line)
-                    {
-                        Some(before_reminder) => {
-                            self.push_reminder_undo_entry(
-                                self.editor.cursor_line,
-                                Some(before_reminder),
-                                None,
-                            );
-                            self.reminders_changed_outside_text(db);
-                            self.status =
-                                format!("remind removed on line {}", self.editor.cursor_line + 1);
-                        }
-                        None => {
-                            self.open_date_picker(DatePickerAction::SetRemind, true);
-                        }
+                    let line = self.editor.cursor_line;
+                    if self.session.set_reminder(&self.editor, line, None, true) {
+                        self.reminder_session_changed(db);
+                        self.status = format!("remind removed on line {}", line + 1);
+                    } else {
+                        self.open_date_picker(DatePickerAction::SetRemind, true);
                     }
                     return;
                 }
@@ -2705,10 +2693,15 @@ impl TerminalApp {
                 continue;
             }
 
-            if let Some(entry) = self.session.reminder_ghosts.get_mut(&line_idx) {
+            if let Some(mut entry) = self.session.reminder_ghosts.get(&line_idx).cloned() {
                 entry.reminded_at_ms = Some(now_ms);
+                if self
+                    .session
+                    .set_reminder(&self.editor, line_idx, Some(entry), false)
+                {
+                    self.reminder_session_changed(db);
+                }
             }
-            self.reminders_changed_outside_text(db);
         }
     }
 

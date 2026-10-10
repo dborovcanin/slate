@@ -1160,3 +1160,9 @@ Final bug round, disabled math: direct shared recomputation now clears derived
 state and reports Disabled before evaluation, external IO or trailer rewriting.
 The focused disabled-module regression passes; terminal result handling is
 exhaustive.
+
+Final bug round, reminders: setting/removing/notification acknowledgements now
+validate access and line ownership, record semantic undo when requested, and
+update mark/history/edit identity together in the session. Reminder entries
+break text coalescing. Host clocks, notification IO and save execution remain
+separate effects. Two shared regressions and workspace checks pass.

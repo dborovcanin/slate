@@ -1,4 +1,4 @@
-use note_session::{reminder_marks_of, LineReminderGhost, ReminderMarks, ReminderUndoEntry};
+use note_session::{reminder_marks_of, LineReminderGhost, ReminderMarks};
 mod currency;
 mod scripts;
 use super::adapter::TerminalVimAdapter;
@@ -1455,7 +1455,6 @@ impl TerminalApp {
             let started = Instant::now();
             match self.load_reminders(db) {
                 Ok(()) => {
-                    self.session.history.set_marks(self.reminder_marks());
                     self.record_perf_duration(
                         "tui.idle.dispatch",
                         "startup_reminder_hydration",
