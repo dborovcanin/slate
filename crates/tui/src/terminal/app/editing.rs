@@ -337,7 +337,7 @@ impl TerminalApp {
         );
     }
 
-    fn splice_calc_line_metadata(
+    pub(super) fn splice_calc_line_metadata(
         &mut self,
         start_line: usize,
         old_line_span: usize,
@@ -1164,6 +1164,7 @@ impl TerminalApp {
         self.mark_edited_from_line_with_span(changed_from_line, None);
     }
 
+    #[cfg(test)]
     pub(super) fn mark_edited(&mut self) {
         self.mark_edited_from_line_with_span(self.editor.cursor_line, None);
     }
@@ -2805,9 +2806,15 @@ impl TerminalApp {
 
         let remove_line = self.editor.cursor_line;
         self.note_deleted_lines(remove_line, remove_line);
-        self.editor.lines.remove(remove_line);
-        if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
+        let plan = crate::editor_core::buffer::lines::prepare_remove_lines(
+            &self.editor.lines,
+            remove_line,
+            remove_line + 1,
+        )
+        .expect("existing continuation row");
+        let delta = plan.delta;
+        crate::editor_core::buffer::lines::apply_remove_lines(&mut self.editor.lines, plan);
+        if delta.new_span == 1 {
             self.editor.cursor_line = 0;
             self.editor.cursor_col = 0;
         } else {
@@ -2830,8 +2837,8 @@ impl TerminalApp {
             }
         }
 
-        self.splice_calc_line_metadata(remove_line, 1, 0);
-        self.mark_edited_from_line(remove_line.saturating_sub(1));
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_from_line_with_span(remove_line.saturating_sub(1), Some(delta));
         true
     }
 

@@ -538,7 +538,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 1: Normal-mode undo/redo cursor regression.
 - [x] Step 2: fold upkeep from exact edit spans.
 - [x] Step 3: core same-line replacement plans.
-- [ ] Step 4: core line insertion/removal plans.
+- [x] Step 4: core line insertion/removal plans.
 - [ ] Step 5: document crate and terminal view separation.
 - [ ] Step 6: undo, dirty and reminder session state.
 - [ ] Step 7: session edit pipeline and undo/redo.
@@ -570,6 +570,20 @@ Step 3: same-line replacements use character ranges and exact byte metadata
 from editor-core. Unicode, deletion, clamping and no-op cases pass. Calc trailer
 rewrites retain their existing enclosing transaction; all workspace checks
 passed with unchanged golden fixtures and no new Clippy warnings.
+
+Step 4: whole-line plans use one splice, preserve owned strings and expose
+reminder fates. Workspace checks, line-plan tests, golden replay and table gates
+passed. Large-note limits passed. Build-load noise disappeared on serial reruns;
+30k paste remains about 5.70 ms versus 5.05 ms initial lower baseline (5.14 ms
+fresh main), while 100k/400k remain near main. This benchmark uses the unchanged
+shared Vim path, not the changed empty-register fallback. Final A/B must recheck
+this investigation; performance qualification remains open.
+
+Ordering clarification for step 7: direct edits currently run synchronous calc
+before recording history, whereas keyboard edits may defer calc until after
+history. Preserve both through a temporary finalize-after-upkeep continuation
+and remove it with session calc ownership in step 10; the final single-call
+contract is not met while that continuation exists.
 
 Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
 could not create a private runtime image; the approved rerun passed. Baseline

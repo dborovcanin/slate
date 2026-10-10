@@ -3,6 +3,7 @@ use super::{
     line_char_len, Db, Key, TerminalApp, TerminalVimAdapter, UiMode, VimMacroStep,
     VimPipelineResult, VimRegister, VimRegisterMode,
 };
+use crate::editor_core::buffer::lines::{apply_insert_lines, prepare_insert_lines};
 use crate::terminal::text_utils::join_lines;
 
 const VIM_MACRO_REPLAY_STEP_BUDGET: usize = 10_000;
@@ -709,10 +710,10 @@ impl TerminalApp {
                         );
                     let current = self.editor.cursor_line;
                     self.note_lines_inserted(current, 1);
-                    crate::editor_core::vim_actions::buffer::insert_empty_line_above(
-                        &mut self.editor.lines,
-                        current,
-                    );
+                    let plan =
+                        prepare_insert_lines(&self.editor.lines, current, vec![String::new()])
+                            .expect("one inserted line");
+                    apply_insert_lines(&mut self.editor.lines, plan);
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
@@ -760,12 +761,22 @@ impl TerminalApp {
                                 if !repeated.is_empty() {
                                     let insert_at = self.editor.cursor_line + 1;
                                     self.note_lines_inserted(insert_at, repeated.len());
-                                    for (offset, line) in repeated.iter().enumerate() {
-                                        self.editor.lines.insert(insert_at + offset, line.clone());
-                                    }
+                                    let plan = prepare_insert_lines(
+                                        &self.editor.lines,
+                                        insert_at,
+                                        repeated,
+                                    )
+                                    .expect("nonempty linewise register");
+                                    let delta = plan.delta;
+                                    apply_insert_lines(&mut self.editor.lines, plan);
                                     self.editor.cursor_line = insert_at;
                                     self.editor.cursor_col = 0;
-                                    self.mark_edited();
+                                    self.splice_calc_line_metadata(
+                                        delta.start_line,
+                                        delta.old_span,
+                                        delta.new_span,
+                                    );
+                                    self.mark_edited_with_delta(delta);
                                 }
                             }
                             VimRegisterMode::Charwise => {

@@ -31,6 +31,12 @@ This document defines the canonical shared-core contract for editor semantics.
     and retains the existing undo/calc transaction boundary.
   - Offset helpers use bytes and count inter-line newlines. They do not build
     a joined copy of the document.
+- Whole-line edit contract (`editor_core::buffer::lines`):
+  - Insertion accepts borrowed or owned lines and applies one splice. Owned
+    strings retain their allocations. Removal uses a clamped half-open range;
+    removing all text retains an empty line without inheriting removed marks.
+  - Plans expose cursor, delta and relative reminder fates. Prepare and apply
+    against the same buffer; the host retains its cursor and transaction policy.
 - Same-line replacement contract (`editor_core::buffer::replace`):
   - Character ranges clamp to the line end; plans carry exact pre-edit byte
     coordinates, a 1-to-1 delta and the resulting character cursor.
