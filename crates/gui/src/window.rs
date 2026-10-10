@@ -38,6 +38,8 @@ pub struct SlateWindow {
     /// Transient message in the status bar.
     pub(crate) status: Option<String>,
     pub(crate) overlay: crate::overlays::Overlay,
+    /// Lines of the table under the mouse, which shows its add row/column bars.
+    hover_table: Option<(usize, usize)>,
     fences: Vec<FenceState>,
     cache: Vec<Option<LineView>>,
     list: ListState,
@@ -56,6 +58,7 @@ impl SlateWindow {
             sidebar: true,
             status: None,
             overlay: Default::default(),
+            hover_table: None,
             fences: Vec::new(),
             cache: Vec::new(),
             list: ListState::new(count, ListAlignment::Top, px(600.0)),
@@ -517,7 +520,18 @@ impl SlateWindow {
             .map(|r| r.display_at.clone());
         let delimiter = line.kind == LineKind::TableDelimiter;
         let table = matches!(line.kind, LineKind::TableRow { .. });
-        div()
+        let in_table = table || delimiter;
+        let hovered = self
+            .hover_table
+            .is_some_and(|(start, end)| (start..=end).contains(&ix));
+        let table_last = in_table
+            && !self
+                .host
+                .doc
+                .lines()
+                .get(ix + 1)
+                .is_some_and(|l| table_syntax::is_table_line(l));
+        let row = div()
             .id(("line", ix))
             .flex()
             .items_center()
@@ -532,6 +546,20 @@ impl SlateWindow {
             })
             .when(is_cursor, |d| d.bg(t.cursorline))
             .when(line.line_selected, |d| d.bg(t.blue.opacity(0.22)))
+            .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
+                if !*hovering {
+                    return;
+                }
+                let bounds = if in_table {
+                    editor_core::table::table_block_bounds(this.host.doc.lines(), ix)
+                } else {
+                    None
+                };
+                if this.hover_table != bounds {
+                    this.hover_table = bounds;
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {
@@ -555,6 +583,28 @@ impl SlateWindow {
                     .min_w_0()
                     .child(editor_lines::body(&line, &style)),
             )
+            .when(table, |d| {
+                // Space for the add-column bar is always reserved, so
+                // hovering never moves the table.
+                d.child(
+                    div()
+                        .id(("add-column", ix))
+                        .w(px(18.0))
+                        .h(px(22.0))
+                        .flex_none()
+                        .ml(px(4.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .when(hovered, |d| d.bg(t.chip).text_color(t.muted).child("+"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.move_cursor_to(ix, cx);
+                            crate::commands::table_insert_column(this, cx);
+                        })),
+                )
+            })
             .when_some(reminder, |d, at| {
                 d.child(
                     div()
@@ -566,6 +616,30 @@ impl SlateWindow {
                         .text_color(t.muted)
                         .font_family(self.fonts.sans.clone())
                         .child(format!("⏰ {at}")),
+                )
+            });
+        div()
+            .w_full()
+            .max_w(px(900.0))
+            .child(row)
+            .when(table_last, |d| {
+                d.child(
+                    div()
+                        .id(("add-row", ix))
+                        .h(px(18.0))
+                        .mt(px(2.0))
+                        .ml(px(38.0))
+                        .mr(px(22.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .when(hovered, |d| d.bg(t.chip).text_color(t.muted).child("+"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.move_cursor_to(ix, cx);
+                            crate::commands::table_insert_row(this, false, cx);
+                        })),
                 )
             })
             .into_any_element()
