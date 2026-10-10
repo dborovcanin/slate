@@ -68,6 +68,12 @@ pub enum LineKind {
     },
     /// The `| --- |` row under a table header; drawn as the header rule.
     TableDelimiter,
+    /// A line that is only `![alt](src)`, drawn as the image unless the
+    /// cursor is on it.
+    Image {
+        alt: String,
+        src: String,
+    },
 }
 
 #[derive(Clone)]
@@ -87,6 +93,23 @@ pub struct LineView {
     pub map: Option<Arc<note_session::display::mapping::SourceDisplayMap>>,
     /// Display columns before the first run (a checklist's marker).
     pub display_skip: usize,
+}
+
+/// `![alt](src)` and nothing else on the line.
+fn image_only(text: &str) -> Option<LineKind> {
+    use note_session::display::media::{find_media_sources, MediaSourceKind};
+    let trimmed = text.trim();
+    if !trimmed.starts_with("![") {
+        return None;
+    }
+    let mut found = find_media_sources(trimmed);
+    let m = found.pop().filter(|_| found.is_empty())?;
+    (m.kind == MediaSourceKind::Image && trimmed.get(m.from..m.to) == Some(trimmed)).then_some(
+        LineKind::Image {
+            alt: m.label,
+            src: m.src,
+        },
+    )
 }
 
 /// What running a command-bar command did.
@@ -785,6 +808,11 @@ impl NoteHost {
         let info = (!in_code).then(|| markdown_tokens::classify_markdown_line(text));
         let mut kind = LineKind::Text;
         let mut start = 0;
+        if !is_cursor && !in_code {
+            if let Some(image) = image_only(text) {
+                kind = image;
+            }
+        }
         if let Some(info) = &info {
             if let Some(level) = info.heading_level {
                 kind = LineKind::Heading(level);
@@ -915,6 +943,17 @@ fn runs(line: &SemanticLine, start: usize) -> Vec<Run> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_only_lines() {
+        assert!(matches!(
+            super::image_only("![Cat](file.png)"),
+            Some(LineKind::Image { .. })
+        ));
+        assert!(super::image_only("see ![Cat](file.png)").is_none());
+        assert!(super::image_only("![Cat](a.png) ![b](b.png)").is_none());
+        assert!(super::image_only("plain").is_none());
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 

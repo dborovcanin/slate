@@ -133,7 +133,11 @@ pub fn run_host_command(
         }
         CurrencyRefresh => not_yet(win, "currency refresh", cx),
         ClipWatch | ClipWatchStop => not_yet(win, "clipboard watching", cx),
-        PasteImage => not_yet(win, "image paste", cx),
+        PasteImage => {
+            if !win.paste_image(cx) {
+                notify_status(win, "no image on the clipboard", cx);
+            }
+        }
         Fold | Unfold | FoldToggle => not_yet(win, "folding", cx),
         // Core commands never reach the host.
         _ => notify_status(win, format!("{raw}: nothing to do"), cx),

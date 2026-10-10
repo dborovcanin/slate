@@ -4,6 +4,7 @@
 //! Painting and input routing only. Line content comes from `NoteHost`, key
 //! semantics from `note_session::input`, commands from `editor_core`.
 use crate::editor_lines::{self, CursorShape, LineStyle};
+use crate::images::{self, ImageSlot};
 use crate::keys::{self, EditingMode, KeyCommand};
 use crate::note_view::{CommandRun, LineKind, LineView, NoteHost};
 use crate::settings::{CommandBarStyle, Settings};
@@ -79,6 +80,7 @@ pub struct SlateWindow {
     /// Window size in pixels from the last paint, to reveal far jumps and fit the status bar.
     pub(crate) viewport: std::cell::Cell<(f32, f32)>,
     fences: Vec<FenceState>,
+    images: std::cell::RefCell<std::collections::HashMap<String, ImageSlot>>,
     cache: Vec<Option<LineView>>,
     list: ListState,
 }
@@ -107,6 +109,7 @@ impl SlateWindow {
             drag_anchor: None,
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
+            images: Default::default(),
             cache: Vec::new(),
             list: ListState::new(count, ListAlignment::Top, px(600.0)),
         };
@@ -140,6 +143,7 @@ impl SlateWindow {
         self.fences = self.host.fence_starts();
         let count = self.fences.len();
         self.cache = vec![None; count];
+        self.images.borrow_mut().clear();
         self.list.reset(count);
     }
 
@@ -347,7 +351,42 @@ impl SlateWindow {
         }
     }
 
+    /// Import a clipboard image into the note and link it on its own line.
+    /// Returns false when the clipboard holds no image.
+    pub(crate) fn paste_image(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(image) = cx.read_from_clipboard().and_then(|item| {
+            item.into_entries().find_map(|e| match e {
+                gpui::ClipboardEntry::Image(i) => Some(i),
+                _ => None,
+            })
+        }) else {
+            return false;
+        };
+        let sources = app_core::note_sources::NoteSourceService::new(self.host.db.clone());
+        let note_id = self.host.session.note_id().to_string();
+        match sources.import_image_bytes_by_id(
+            &note_id,
+            None,
+            Some(image.format.mime_type()),
+            &image.bytes,
+        ) {
+            Ok(imported) => {
+                let before = self.snapshot_cursor();
+                let outcome = self
+                    .host
+                    .insert_text(&format!("\n![Image]({})\n", imported.markdown_path));
+                self.after_input(before, outcome, cx);
+                self.set_status("pasted image");
+            }
+            Err(e) => self.set_status(format!("paste image failed: {e}")),
+        }
+        true
+    }
+
     fn paste_clipboard(&mut self, action: &VimAction, cx: &mut Context<Self>) {
+        if self.paste_image(cx) {
+            return;
+        }
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             self.set_status("clipboard is empty");
             return;
@@ -417,6 +456,9 @@ impl SlateWindow {
     }
 
     pub(crate) fn paste_text(&mut self, cx: &mut Context<Self>) {
+        if self.paste_image(cx) {
+            return;
+        }
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             self.set_status("clipboard is empty");
             return;
@@ -731,6 +773,48 @@ impl SlateWindow {
         self.cache[ix].clone()
     }
 
+    /// The cached image for `src`; the first request decodes it in the
+    /// background and repaints when done.
+    fn image_slot(&self, src: &str, cx: &mut Context<Self>) -> ImageSlot {
+        if let Some(slot) = self.images.borrow().get(src) {
+            return slot.clone();
+        }
+        self.images
+            .borrow_mut()
+            .insert(src.to_string(), ImageSlot::Loading);
+        let db = self.host.db.clone();
+        let note_id = self.host.session.note_id().to_string();
+        let key = src.to_string();
+        cx.spawn(async move |this, cx| {
+            let loaded = {
+                let key = key.clone();
+                cx.background_executor()
+                    .spawn(async move { images::load(db, &note_id, &key) })
+                    .await
+            };
+            let slot = loaded.unwrap_or_else(ImageSlot::Failed);
+            this.update(cx, |this, cx| {
+                let key_for_match = key.clone();
+                this.images.borrow_mut().insert(key, slot);
+                // The row height changes once the image is known.
+                for ix in 0..this.cache.len() {
+                    let hit = matches!(
+                        &this.cache[ix],
+                        Some(l) if matches!(&l.kind, LineKind::Image { src, .. } if *src == key_for_match)
+                    );
+                    if hit {
+                        this.cache[ix] = None;
+                        this.list.splice(ix..ix + 1, 1);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        ImageSlot::Loading
+    }
+
     fn render_line(
         &mut self,
         ix: usize,
@@ -753,7 +837,12 @@ impl SlateWindow {
         } else {
             CursorShape::Block
         };
+        let image = match &line.kind {
+            LineKind::Image { src, .. } => Some(self.image_slot(src, cx)),
+            _ => None,
+        };
         let style = LineStyle {
+            image: image.as_ref(),
             theme: &t,
             sans: &self.fonts.sans,
             cursor: shape,

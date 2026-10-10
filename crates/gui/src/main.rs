@@ -3,6 +3,7 @@ mod browser;
 mod commands;
 mod editor_lines;
 mod history;
+mod images;
 mod keys;
 mod note_view;
 mod overlays;

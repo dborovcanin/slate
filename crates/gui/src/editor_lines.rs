@@ -1,9 +1,10 @@
 //! Painting one editor line from a `LineView`.
+use crate::images::ImageSlot;
 use crate::note_view::{LineKind, LineView, Run, TableCell};
 use crate::theme::Theme;
 use gpui::{
-    div, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString, StyledText,
-    TextLayout, UnderlineStyle,
+    div, img, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString,
+    StyledText, TextLayout, UnderlineStyle,
 };
 use std::ops::Range;
 
@@ -21,6 +22,8 @@ pub struct LineStyle<'a> {
     pub cursor: CursorShape,
     /// Whether the window has keyboard focus; an unfocused cursor is hollow.
     pub focused: bool,
+    /// The decoded image of an `LineKind::Image` line.
+    pub image: Option<&'a ImageSlot>,
 }
 
 /// Styled text for `runs`, with the selection and a block cursor drawn as
@@ -219,6 +222,32 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
         LineKind::TableRow { cells, header } => table_row(cells, *header, t),
         // The header row already draws the rule under it.
         LineKind::TableDelimiter => div().into_any_element(),
+        LineKind::Image { alt, .. } => {
+            let note = |text: String| {
+                div()
+                    .py(px(4.0))
+                    .text_color(t.faint)
+                    .child(text)
+                    .into_any_element()
+            };
+            match s.image {
+                Some(ImageSlot::Ready {
+                    image,
+                    width,
+                    height,
+                }) => div()
+                    .py(px(4.0))
+                    .child(
+                        img(image.clone())
+                            .w(px(*width))
+                            .h(px(*height))
+                            .rounded(px(4.0)),
+                    )
+                    .into_any_element(),
+                Some(ImageSlot::Failed(why)) => note(format!("⚠ {alt}: {why}")),
+                _ => note(format!("{alt} …")),
+            }
+        }
         LineKind::Text => div()
             .flex()
             .items_center()

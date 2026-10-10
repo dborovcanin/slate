@@ -38,6 +38,9 @@ unaffected.
   with diff preview and restore.
 - **Encrypted notes:** locked notes show a placeholder and ask for the
   password; `:encrypt` / `:decrypt` prompt for it.
+- **Images:** a line that is only `![alt](src)` is drawn as the image (scaled to
+  fit, decoded in the background) until the cursor is on it. `Ctrl+V`/`p`
+  and `:paste-image` import a clipboard image into the note.
 - **Wiki links:** `[[id]]` shows the target note's title away from the cursor
   (via `note_session::display::wiki`); `Ctrl+]` and `gd` follow them.
 - **Tables:** hover shows + bars to add a row or column.
@@ -77,7 +80,7 @@ the editing mode, the theme and the sidebar are remembered in
 These are reported in the status bar when invoked:
 
 - PDF export, `:backup`, `:web-search`, `:currency refresh`, clip-watch,
-  `:paste-image` and inline images, folding, in-note search (`/`), macros.
+  folding, in-note search (`/`), macros.
 - Vertical motion follows logical lines, not wrapped rows (`gj`/`gk` too).
 - IME composition and accessibility are untested.
 
