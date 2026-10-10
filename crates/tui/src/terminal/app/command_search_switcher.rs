@@ -2018,11 +2018,6 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn invalidate_joined_text_cache(&mut self) {
-        self.editor.joined_text_cache = None;
-        self.editor.text_generation = self.editor.text_generation.wrapping_add(1);
-    }
-
     pub(super) fn joined_text_cached_ref(&mut self) -> &str {
         if self.editor.joined_text_cache.is_none() {
             self.editor.joined_text_cache = Some(join_lines(self.editor.lines()));

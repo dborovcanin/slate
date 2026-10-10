@@ -544,7 +544,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 7: session edit pipeline and undo/redo.
 - [x] Step 8: private document text.
 - [x] Step 9: shared calc state.
-- [ ] Step 10: session calc upkeep.
+- [x] Step 10: session calc upkeep.
 - [ ] Step 11: calc preparation/index jobs.
 - [ ] Step 12: session fold structure.
 - [ ] Step 13: open/reload/outside-change/leave policy.
@@ -1070,3 +1070,12 @@ coverage and all workspace checks pass, with no new warnings. Release
 large-note gates pass (13.29 s), no 30k/100k investigation thresholds crossed.
 A separate Step 10c coordinates edit upkeep and removes deferred history;
 Step 10 remains unchecked until that boundary is complete.
+
+Step 10c: session apply now coordinates calc upkeep and finalizes history in
+one transaction. CalcEffect returns host scheduling; a borrowed CalcProvider
+supplies only lazy external data and evaluation inputs. Removed deferred-history
+continuations and duplicate host upkeep. Regression coverage includes recursive
+table import, visual-yank scheduling, pruning/replacement redo cursors, unchanged
+completion and disabled math without a provider. All 1,326 workspace tests pass,
+no new clippy warnings. Release large-note gates pass with no 30k/100k
+investigation thresholds crossed; final alternating main comparisons remain.

@@ -1554,7 +1554,7 @@ fn defer_calc_state_after_edit_clears_full_cached_results_vector() {
         .set(vec!["total".to_string()]);
     app.editor.cursor_line = 1;
 
-    app.defer_calc_state_after_edit();
+    app.session.calc.defer_calc_state_after_edit(&app.editor);
 
     assert_eq!(app.session.calc.results, vec![None, None, None]);
     assert!(app.session.calc.variable_names.is_empty());
@@ -2621,5 +2621,18 @@ fn pruning_empty_continuation_preserves_the_previous_table_column() {
     assert_eq!(cell.column_index, 1);
     drop(app);
     drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn unchanged_autocomplete_moves_to_word_end_without_recording_an_edit() {
+    let (_db, mut app, path) = app_with_note("base := 1\nbase");
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 2;
+    let seq = app.session.edit_seq();
+    assert!(app.apply_variable_autocomplete_pick(0, 4, "base".into()));
+    assert_eq!(app.editor.cursor_col, 4);
+    assert_eq!(app.session.edit_seq(), seq);
+    assert!(!app.session.dirty);
     cleanup_db_files(&path);
 }

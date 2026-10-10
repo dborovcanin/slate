@@ -1560,3 +1560,20 @@ fn deleting_the_sole_empty_line_finalizes_reminder_ownership() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn visual_yank_preserves_pending_calc_work() {
+    let (_db, mut app, path) = app_with_note("2 + 2");
+    app.mode = UiMode::Visual;
+    app.editor.selection_anchor = Some((0, 0));
+    app.editor.cursor_col = 1;
+    app.calc_runtime.recompute_pending = true;
+    app.calc_runtime.pending_viewport_pass = true;
+    app.calc_runtime.pending_full_pass = true;
+    assert!(app.apply_visual_selection_action(false));
+    assert!(app.calc_runtime.recompute_pending);
+    assert!(app.calc_runtime.pending_viewport_pass);
+    assert!(app.calc_runtime.pending_full_pass);
+    assert!(!app.session.dirty);
+    cleanup_db_files(&path);
+}

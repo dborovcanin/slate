@@ -58,6 +58,7 @@ impl NoteSession {
             fold_rescan: true,
             register: None,
             text_changed: true,
+            calc_effect: Default::default(),
         })
     }
 }

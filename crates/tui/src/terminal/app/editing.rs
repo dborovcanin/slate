@@ -18,7 +18,6 @@ use crate::editor_core::buffer::primitives::PrimitiveEdit;
 use crate::editor_core::buffer::words;
 use crate::editor_core::buffer::EditDelta;
 use crate::editor_core::history::policy::{UndoGrouping, UndoSession};
-use crate::editor_core::history::HistoryCursor;
 use crate::terminal::text_utils::{
     byte_index, char_col_at_byte, cursor_render_char_col, viewport_col_for_display_col,
 };
@@ -215,20 +214,6 @@ impl TerminalApp {
         });
     }
 
-    fn record_history_after_edit(&mut self, grouping: UndoGrouping, delta: Option<EditDelta>) {
-        self.session.undo_policy.record_text(
-            &mut self.session.history,
-            self.editor.lines(),
-            HistoryCursor {
-                line: self.editor.cursor_line,
-                col: self.editor.cursor_col,
-            },
-            delta,
-            grouping,
-        );
-        self.move_reminders_with_recorded_edit();
-    }
-
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
         // Keep startup cheap for very large notes: build a plain 1:1 visible
         // map and defer expensive fold structure analysis until needed.
@@ -268,28 +253,20 @@ impl TerminalApp {
         self.session.calc.rescan_calc_flags(&self.editor, inputs);
     }
 
-    pub(super) fn update_calc_flags_incremental(&mut self) {
-        let inputs = self.calc_inputs();
-        self.session
-            .calc
-            .update_calc_flags_incremental(&self.editor, inputs);
-    }
-
     fn rebuild_calc_line_metadata(&mut self) {
+        if self.pending_session_edit {
+            return;
+        }
         let inputs = self.calc_inputs();
         self.session
             .calc
             .rebuild_calc_line_metadata(&self.editor, inputs);
     }
 
-    fn ensure_calc_line_metadata(&mut self) {
-        let inputs = self.calc_inputs();
-        self.session
-            .calc
-            .ensure_calc_line_metadata(&self.editor, inputs);
-    }
-
     fn refresh_calc_line_metadata_at(&mut self, line_idx: usize) {
+        if self.pending_session_edit {
+            return;
+        }
         let inputs = self.calc_inputs();
         self.calc_runtime.index_sync_pending |=
             self.session
@@ -303,6 +280,9 @@ impl TerminalApp {
         old_line_span: usize,
         new_line_span: usize,
     ) {
+        if self.pending_session_edit {
+            return;
+        }
         let inputs = self.calc_inputs();
         self.calc_runtime.index_sync_pending |= self.session.calc.splice_calc_line_metadata(
             &self.editor,
@@ -413,22 +393,6 @@ impl TerminalApp {
         self.calc_runtime.recompute_due_at = None;
     }
 
-    fn try_remap_calc_results_after_structural_edit(&mut self) -> bool {
-        let inputs = self.calc_inputs();
-        if !self
-            .session
-            .calc
-            .try_remap_calc_results_after_structural_edit(&self.editor, inputs)
-        {
-            return false;
-        }
-        self.calc_runtime.recompute_pending = false;
-        self.calc_runtime.recompute_due_at = None;
-        self.calc_runtime.pending_viewport_pass = false;
-        self.calc_runtime.pending_full_pass = false;
-        true
-    }
-
     /// Re-evaluates every calc result after something note-wide changed,
     /// such as the calc modules or the exchange rates.
     pub(super) fn recompute_calc_whole_note(&mut self) {
@@ -451,41 +415,12 @@ impl TerminalApp {
     }
 
     pub(super) fn clear_calc_cache(&mut self) {
-        self.session.calc.results = vec![None; self.editor.lines().len()];
-        self.session.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
-        self.session.calc.variable_names.clear();
-        self.session.calc.calc_dependency_index = None;
-        self.session.calc.line_metadata.clear();
-        self.session.calc.prev_line_metadata.clear();
-        self.session.calc.stale = false;
-        self.session.calc.pathological_window_streak = 0;
-        self.session.calc.forced_full_recompute_remaining = 0;
+        self.session.calc.clear(&self.editor);
         self.calc_runtime.last_view_eval_range = None;
         self.calc_runtime.recompute_pending = false;
         self.calc_runtime.recompute_due_at = None;
         self.calc_runtime.pending_viewport_pass = false;
         self.calc_runtime.pending_full_pass = false;
-    }
-
-    pub(super) fn defer_calc_state_after_edit(&mut self) {
-        // Large docs without explicit calc syntax should not recompute calc
-        // state on every keystroke.
-        // Clear the full cache so same-line-count multi-line edits cannot
-        // leave stale calc ghosts on non-cursor lines.
-        if self.session.calc.results.len() != self.editor.lines().len() {
-            self.session.calc.results = vec![None; self.editor.lines().len()];
-        } else {
-            self.session.calc.results.fill(None);
-        }
-        if self.session.calc.cell_results.len() != self.editor.lines().len() {
-            self.session.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
-        } else {
-            for row in &mut self.session.calc.cell_results {
-                row.clear();
-            }
-        }
-        self.session.calc.variable_names.clear();
-        self.session.calc.stale = true;
     }
 
     pub(super) fn recompute_folding_if_needed(&mut self, delta: Option<EditDelta>) {
@@ -866,127 +801,56 @@ impl TerminalApp {
         changed_from_line: usize,
         delta: Option<EditDelta>,
     ) {
-        let grouping = UndoGrouping {
-            session: self.undo_session(),
-            elapsed: self.last_edit.elapsed(),
-        };
         let session_edit = std::mem::take(&mut self.pending_session_edit);
         if !session_edit {
-            self.invalidate_joined_text_cache();
+            let ctx = self.session_edit_context();
+            let base = self.calc_inputs();
+            let inputs = note_session::calc_upkeep::CalcEditInputs {
+                base,
+                key_in_progress: self.key_depth > 0,
+                async_min_lines: CALC_ASYNC_MIN_LINES,
+                defer_min_lines: LARGE_DOC_CALC_DEFER_LINES,
+            };
+            let selection_range = if matches!(
+                self.mode,
+                UiMode::Visual | UiMode::VisualLine | UiMode::CommandBar
+            ) {
+                self.editor.selection_anchor.map(|(line, _)| {
+                    (
+                        line.min(self.editor.cursor_line),
+                        line.max(self.editor.cursor_line),
+                    )
+                })
+            } else {
+                None
+            };
+            let host = CalcHost {
+                base,
+                cross_note_enabled: self.calc_cross_note_enabled(),
+                table_enabled: self.note_table_module_enabled(),
+                note_id: &self.active_note.id,
+                index: &self.cross_note_var_index,
+                db: &self.cross_note_db,
+                condvar: &self.cross_note_eval_condvar,
+                selection_range,
+            };
+            let effect = self.session.record_external_edit(
+                &mut self.editor,
+                ctx,
+                delta,
+                inputs,
+                Some(&host),
+            );
+            self.apply_calc_effect(effect);
         }
         self.render_caches.table_formula_segment_cache.clear();
-        self.session.dirty = true;
         if changed_from_line == 0 {
             self.switcher.needs_title_refresh = true;
         }
-        let clamped_changed_line = if self.editor.lines().is_empty() {
-            0
-        } else {
-            changed_from_line.min(self.editor.lines().len().saturating_sub(1))
-        };
-        self.invalidate_fence_checkpoints_from_line(clamped_changed_line);
-        self.update_calc_flags_incremental();
+        let changed_line = changed_from_line.min(self.editor.lines().len().saturating_sub(1));
+        self.invalidate_fence_checkpoints_from_line(changed_line);
         self.recompute_folding_if_needed(delta);
-        use crate::editor_core::calc_plan::{AfterEditFlags, CalcAfterEdit};
-        let plan = crate::editor_core::calc_plan::plan_after_edit(AfterEditFlags {
-            line_count: self.editor.lines().len(),
-            previous_line_count: self.session.calc.results.len(),
-            signals: self.calc_signal_flags(),
-            stale: self.session.calc.stale,
-            viewport_only: self.calc_runtime.viewport_only,
-            async_min_lines: CALC_ASYNC_MIN_LINES,
-            defer_min_lines: LARGE_DOC_CALC_DEFER_LINES,
-        });
-        match plan {
-            CalcAfterEdit::Skip | CalcAfterEdit::Defer => {
-                if plan == CalcAfterEdit::Defer {
-                    self.defer_calc_state_after_edit();
-                }
-                self.calc_runtime.recompute_pending = false;
-                self.calc_runtime.recompute_due_at = None;
-                self.calc_runtime.pending_viewport_pass = false;
-                self.calc_runtime.pending_full_pass = false;
-            }
-            CalcAfterEdit::ViewportRefresh => self.refresh_viewport_calc_after_edit(),
-            CalcAfterEdit::RemapOrRecompute => {
-                if !self.try_remap_calc_results_after_structural_edit() {
-                    self.recompute_calc_after_edit(delta);
-                }
-            }
-            CalcAfterEdit::RecomputeRange => self.recompute_calc_after_edit(delta),
-            CalcAfterEdit::ScheduleIdle => {
-                // Keep large-note typing non-blocking: schedule calc for
-                // the next idle tick and clear only the edited line's
-                // cached result so we don't show stale ghosts while
-                // pending.
-                if let Some(slot) = self.session.calc.results.get_mut(self.editor.cursor_line) {
-                    *slot = None;
-                }
-                if let Some(slot) = self
-                    .session
-                    .calc
-                    .cell_results
-                    .get_mut(self.editor.cursor_line)
-                {
-                    slot.clear();
-                }
-                // Keep the edited lines' metadata current so a later
-                // structural edit diffs against what is actually there.
-                let (start, span) = match delta {
-                    Some(delta) if delta.old_span == delta.new_span => {
-                        (delta.start_line, delta.new_span)
-                    }
-                    _ => (self.editor.cursor_line, 1),
-                };
-                // Without metadata yet (viewport notes build it at idle),
-                // there is nothing to keep current.
-                if !self.session.calc.line_metadata.is_empty() {
-                    for line_idx in start..start + span {
-                        self.refresh_calc_line_metadata_at(line_idx);
-                    }
-                    if !(start..start + span).contains(&self.editor.cursor_line) {
-                        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                    }
-                }
-                self.schedule_calc_recompute(true, true);
-            }
-        }
-        // Splices are only meaningful for the edit that recorded them.
-        self.session.calc.pending_result_splices.clear();
-        if session_edit {
-            self.session.finish_edit(
-                &self.editor,
-                note_session::EditContext {
-                    grouping,
-                    defer_history: true,
-                },
-                delta.expect("session edit span"),
-            );
-        } else {
-            self.record_history_after_edit(grouping, delta);
-            self.session.note_changed();
-        }
         self.last_edit = Instant::now();
-    }
-
-    /// Recomputes calc now, or once the key being handled is done when it may
-    /// edit again (autoformat after the typed text). The edited lines'
-    /// metadata is kept current so that recompute sees every edit.
-    fn recompute_calc_after_edit(&mut self, delta: Option<EditDelta>) {
-        if self.key_depth == 0 {
-            self.run_calc_recompute();
-            return;
-        }
-        self.ensure_calc_line_metadata();
-        if let Some(delta) = delta {
-            if delta.old_span == delta.new_span {
-                for line_idx in delta.start_line..delta.start_line + delta.new_span {
-                    self.refresh_calc_line_metadata_at(line_idx);
-                }
-            }
-        }
-        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-        self.calc_recompute_after_key = true;
     }
 
     pub(super) fn mark_edited_with_delta(&mut self, delta: EditDelta) {
@@ -1310,10 +1174,9 @@ impl TerminalApp {
     fn session_edit_context(&self) -> note_session::EditContext {
         note_session::EditContext {
             grouping: UndoGrouping {
-                session: UndoSession::Other,
-                elapsed: Duration::ZERO,
+                session: self.undo_session(),
+                elapsed: self.last_edit.elapsed(),
             },
-            defer_history: true,
         }
     }
 
@@ -1321,10 +1184,73 @@ impl TerminalApp {
         &mut self,
         edit: note_session::SessionEdit<'_>,
     ) -> Option<note_session::EditOutcome> {
+        let finalize = matches!(edit, note_session::SessionEdit::Visual { delete: true, .. });
         let ctx = self.session_edit_context();
-        let outcome = self.session.apply(&mut self.editor, edit, ctx)?;
-        self.pending_session_edit = outcome.text_changed;
+        let base = self.calc_inputs();
+        let inputs = note_session::calc_upkeep::CalcEditInputs {
+            base,
+            key_in_progress: self.key_depth > 0,
+            async_min_lines: CALC_ASYNC_MIN_LINES,
+            defer_min_lines: LARGE_DOC_CALC_DEFER_LINES,
+        };
+        let selection_range = if !finalize
+            && matches!(
+                self.mode,
+                UiMode::Visual | UiMode::VisualLine | UiMode::CommandBar
+            ) {
+            self.editor.selection_anchor.map(|(line, _)| {
+                (
+                    line.min(self.editor.cursor_line),
+                    line.max(self.editor.cursor_line),
+                )
+            })
+        } else {
+            None
+        };
+        let host = CalcHost {
+            base,
+            cross_note_enabled: self.calc_cross_note_enabled(),
+            table_enabled: self.note_table_module_enabled(),
+            note_id: &self.active_note.id,
+            index: &self.cross_note_var_index,
+            db: &self.cross_note_db,
+            condvar: &self.cross_note_eval_condvar,
+            selection_range,
+        };
+        let outcome = self.session.apply_with_upkeep(
+            &mut self.editor,
+            edit,
+            ctx,
+            Some(inputs),
+            Some(&host),
+        )?;
+        self.pending_session_edit = outcome.text_changed || finalize;
+        if self.pending_session_edit {
+            self.apply_calc_effect(outcome.calc_effect);
+        }
         Some(outcome)
+    }
+    fn apply_calc_effect(&mut self, effect: note_session::calc_upkeep::CalcEffect) {
+        use note_session::calc_upkeep::CalcWork;
+        self.calc_runtime.index_sync_pending |= effect.index_sync_pending;
+        match effect.work {
+            CalcWork::Done => {
+                self.calc_runtime.recompute_pending = false;
+                self.calc_runtime.recompute_due_at = None;
+                self.calc_runtime.pending_viewport_pass = false;
+                self.calc_runtime.pending_full_pass = false;
+            }
+            CalcWork::RefreshViewport => {
+                let height = self.editor_height();
+                self.ensure_calc_for_viewport(height, true);
+                self.calc_runtime.recompute_pending = false;
+                self.calc_runtime.recompute_due_at = None;
+                self.calc_runtime.pending_viewport_pass = false;
+                self.calc_runtime.pending_full_pass = false;
+            }
+            CalcWork::AfterKey => self.calc_recompute_after_key = true,
+            CalcWork::Idle => self.schedule_calc_recompute(true, true),
+        }
     }
 
     fn apply_buffer_primitive(&mut self, primitive: PrimitiveEdit<'_>) -> Option<EditDelta> {
@@ -1355,23 +1281,18 @@ impl TerminalApp {
     }
 
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
-        let ctx = self.session_edit_context();
         let tables = self.note_table_module_enabled();
-        let Some(outcome) = self.session.apply(
-            &mut self.editor,
-            note_session::SessionEdit::TableCellPaste {
-                text: normalized,
-                tables,
-                cache: &mut self.table_format_cache,
-            },
-            ctx,
-        ) else {
+        let mut cache = std::mem::take(&mut self.table_format_cache);
+        let outcome = self.apply_session_edit(note_session::SessionEdit::TableCellPaste {
+            text: normalized,
+            tables,
+            cache: &mut cache,
+        });
+        self.table_format_cache = cache;
+        let Some(outcome) = outcome else {
             return false;
         };
-        self.pending_session_edit = true;
-        let delta = outcome.delta;
-        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
-        self.mark_edited_with_delta(delta);
+        self.mark_edited_with_delta(outcome.delta);
         true
     }
 
@@ -1652,11 +1573,21 @@ impl TerminalApp {
         range: std::ops::Range<usize>,
         text: &str,
     ) -> Option<EditDelta> {
+        self.replace_line_chars_at(line, range, text, None)
+    }
+    fn replace_line_chars_at(
+        &mut self,
+        line: usize,
+        range: std::ops::Range<usize>,
+        text: &str,
+        cursor_after: Option<crate::editor_core::buffer::primitives::BufferCursor>,
+    ) -> Option<EditDelta> {
         self.apply_session_edit(note_session::SessionEdit::LineReplace {
             line,
             range,
             text,
-            preserve_cursor: true,
+            preserve_cursor: line != self.editor.cursor_line,
+            cursor_after,
         })
         .map(|outcome| outcome.delta)
     }
@@ -1674,6 +1605,7 @@ impl TerminalApp {
         }
 
         let delta = self.replace_line_chars(self.editor.cursor_line, from_col..to_col, &pick);
+        // Completion can move the caret even when its text already matches.
         self.editor.cursor_col = from_col + pick.chars().count();
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         if let Some(delta) = delta {
@@ -1770,10 +1702,7 @@ impl TerminalApp {
                 char_col_at_byte(&text, from_byte)..char_col_at_byte(&text, to_byte),
                 &result,
             );
-            self.editor.cursor_col = self.editor.lines()[self.editor.cursor_line]
-                [..from_byte.saturating_add(result.len())]
-                .chars()
-                .count();
+            self.editor.cursor_col = char_col_at_byte(&text, from_byte) + result.chars().count();
             if should_reflow_table {
                 self.try_autoformat_rules();
             }
@@ -1796,10 +1725,8 @@ impl TerminalApp {
                     char_col_at_byte(&text, seg.from_byte)..char_col_at_byte(&text, seg.to_byte),
                     &result,
                 );
-                self.editor.cursor_col = self.editor.lines()[self.editor.cursor_line]
-                    [..seg.from_byte.saturating_add(result.len())]
-                    .chars()
-                    .count();
+                self.editor.cursor_col =
+                    char_col_at_byte(&text, seg.from_byte) + result.chars().count();
                 self.try_autoformat_rules();
                 self.refresh_calc_line_metadata_at(self.editor.cursor_line);
                 if let Some(delta) = delta {
@@ -2109,34 +2036,10 @@ impl TerminalApp {
         }
 
         let remove_line = self.editor.cursor_line;
-        let previous_col = self.editor.cursor_col;
         let delta = self
-            .apply_session_edit(note_session::SessionEdit::RemoveLines {
-                start: remove_line,
-                end: remove_line + 1,
-            })
+            .apply_session_edit(note_session::SessionEdit::PruneEmptyTableContinuation)
             .expect("existing continuation row")
             .delta;
-        if delta.new_span == 1 {
-            self.editor.cursor_line = 0;
-            self.editor.cursor_col = 0;
-        } else {
-            self.editor.cursor_line = remove_line
-                .saturating_sub(1)
-                .min(self.editor.lines().len() - 1);
-            self.editor.cursor_col = previous_col.min(line_char_len(self.current_line()));
-            if self.note_table_module_enabled() {
-                if let Some(cell) = table_cell_info_at_char(
-                    self.editor.lines(),
-                    self.editor.cursor_line,
-                    self.editor.cursor_col,
-                ) {
-                    self.editor.cursor_col =
-                        table_cell_navigation_anchor(self.current_line(), &cell);
-                }
-            }
-        }
-
         self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
         self.mark_edited_from_line_with_span(remove_line.saturating_sub(1), Some(delta));
         true
@@ -2157,8 +2060,15 @@ impl TerminalApp {
         match plan {
             TableCharDelete::Stay { cursor } => self.editor.cursor_col = cursor,
             TableCharDelete::Remove { at, cursor } => {
-                self.replace_line_chars(self.editor.cursor_line, at..at + 1, "");
-                self.editor.cursor_col = cursor;
+                self.replace_line_chars_at(
+                    self.editor.cursor_line,
+                    at..at + 1,
+                    "",
+                    Some(crate::editor_core::buffer::primitives::BufferCursor {
+                        line: self.editor.cursor_line,
+                        column: cursor,
+                    }),
+                );
                 self.refresh_calc_line_metadata_at(self.editor.cursor_line);
                 self.mark_edited_current_line();
             }
@@ -2655,62 +2565,12 @@ impl TerminalApp {
     }
 
     fn preload_cross_note_deps_for_refs(&self, refs: &[app_core::calc::CrossNoteRef]) {
-        if refs.is_empty() {
-            return;
-        }
-        // Partition deps: truly missing (need sync load) vs. in-flight (bg thread
-        // is already loading them). For in-flight deps we do a short bounded wait
-        // so the recompute following a Tab press can still get correct values when
-        // the autocomplete background thread is nearly done.
-        let (missing, in_flight): (Vec<String>, Vec<String>) = {
-            let dep_ids: rustc_hash::FxHashSet<String> =
-                refs.iter().map(|r| r.note_id.clone()).collect();
-            match self.cross_note_var_index.lock() {
-                Ok(index) => {
-                    let mut missing = Vec::new();
-                    let mut in_flight = Vec::new();
-                    for sid in dep_ids {
-                        if index.was_full_eval_attempted(&sid) {
-                            // already done
-                        } else if index.is_eval_done_or_in_flight(&sid) {
-                            in_flight.push(sid);
-                        } else {
-                            missing.push(sid);
-                        }
-                    }
-                    (missing, in_flight)
-                }
-                Err(_) => (Vec::new(), Vec::new()),
-            }
-        };
-
-        // Park the event-loop thread until all in-flight background evals signal
-        // completion (or until the 200 ms deadline). The background thread calls
-        // cross_note_eval_condvar.notify_all() after mark_full_eval_attempted fires,
-        // so we wake up as soon as the data is ready instead of burning fixed intervals.
-        if !in_flight.is_empty() {
-            if let Ok(lock) = self.cross_note_var_index.lock() {
-                let _ = self.cross_note_eval_condvar.wait_timeout_while(
-                    lock,
-                    Duration::from_millis(200),
-                    |index| {
-                        in_flight
-                            .iter()
-                            .any(|sid| !index.was_full_eval_attempted(sid))
-                    },
-                );
-            }
-        }
-
-        // Sync-load any deps that have no background thread covering them.
-        for dep_id in missing {
-            preload_cross_note_dep_value(
-                &dep_id,
-                &self.cross_note_var_index,
-                &self.session.calc.engine,
-                &self.cross_note_db,
-            );
-        }
+        preload_calc_refs(
+            refs,
+            &self.cross_note_var_index,
+            &self.cross_note_eval_condvar,
+            &self.cross_note_db,
+        );
     }
 
     pub(super) fn recompute_calc_range(&mut self, eval_from: usize, eval_to: usize) {
@@ -3337,14 +3197,21 @@ impl TerminalApp {
             end_col += 1;
         }
 
-        let delta =
-            self.replace_line_chars(self.editor.cursor_line, from_col..end_col, &replacement);
-        if heading.is_some() {
-            self.editor.cursor_col = from_col + replacement.chars().count();
+        let cursor_col = if heading.is_some() {
+            from_col + replacement.chars().count()
         } else {
-            // Keep caret right after the auto-added # to filter heading picks.
-            self.editor.cursor_col = from_col + 2 + note_id.chars().count() + 1;
-        }
+            from_col + 2 + note_id.chars().count() + 1
+        };
+        let delta = self.replace_line_chars_at(
+            self.editor.cursor_line,
+            from_col..end_col,
+            &replacement,
+            Some(crate::editor_core::buffer::primitives::BufferCursor {
+                line: self.editor.cursor_line,
+                column: cursor_col,
+            }),
+        );
+        self.editor.cursor_col = cursor_col;
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         if let Some(delta) = delta {
             self.mark_edited_with_delta(delta);
@@ -3651,4 +3518,107 @@ fn column_on_screen_row(
         }
     }
     best.map(|(idx, _)| idx).or(first).unwrap_or(0)
+}
+
+struct CalcHost<'a> {
+    base: note_session::calc::CalcInputs,
+    cross_note_enabled: bool,
+    table_enabled: bool,
+    note_id: &'a str,
+    index: &'a std::sync::Arc<std::sync::Mutex<app_core::cross_note::CrossNoteVarIndex>>,
+    db: &'a Db,
+    condvar: &'a std::sync::Arc<std::sync::Condvar>,
+    selection_range: Option<(usize, usize)>,
+}
+impl note_session::calc_upkeep::CalcProvider for CalcHost<'_> {
+    fn inputs(
+        &self,
+        calc: &note_session::calc::CalcState,
+    ) -> note_session::calc_recompute::CalcRecomputeInputs<'_> {
+        note_session::calc_recompute::CalcRecomputeInputs {
+            base: self.base,
+            variables_enabled: self.base.math_enabled
+                && self.base.mask.variables_enabled
+                && calc.cached_has_variable_assignment,
+            cross_note_enabled: self.cross_note_enabled,
+            table_enabled: self.table_enabled,
+            note_id: self.note_id,
+            index: self.index,
+            selection_range: self.selection_range,
+            thresholds: note_session::calc_recompute::CalcThresholds {
+                calc_pathological_window_min_lines: CALC_PATHOLOGICAL_WINDOW_MIN_LINES,
+                calc_pathological_window_percent: CALC_PATHOLOGICAL_WINDOW_PERCENT,
+                calc_pathological_window_streak_threshold:
+                    CALC_PATHOLOGICAL_WINDOW_STREAK_THRESHOLD,
+                calc_forced_full_recompute_cycles: CALC_FORCED_FULL_RECOMPUTE_CYCLES,
+            },
+        }
+    }
+    fn preload_refs(&self, refs: &[app_core::calc::CrossNoteRef]) {
+        preload_calc_refs(refs, self.index, self.condvar, self.db);
+    }
+    fn extern_vars(&self, lines: &[String]) -> Vec<ExternVar> {
+        let refs = app_core::calc::scan_cross_note_refs(lines);
+        if let Ok(mut index) = self.index.lock() {
+            index.update_deps(self.note_id, &refs);
+            index.extern_vars_for(self.note_id)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+fn preload_calc_refs(
+    refs: &[app_core::calc::CrossNoteRef],
+    index: &std::sync::Arc<std::sync::Mutex<app_core::cross_note::CrossNoteVarIndex>>,
+    condvar: &std::sync::Arc<std::sync::Condvar>,
+    db: &Db,
+) {
+    if refs.is_empty() {
+        return;
+    }
+    // Partition deps: truly missing (need sync load) vs. in-flight (bg thread
+    // is already loading them). For in-flight deps we do a short bounded wait
+    // so the recompute following a Tab press can still get correct values when
+    // the autocomplete background thread is nearly done.
+    let (missing, in_flight): (Vec<String>, Vec<String>) = {
+        let dep_ids: rustc_hash::FxHashSet<String> =
+            refs.iter().map(|r| r.note_id.clone()).collect();
+        match index.lock() {
+            Ok(index) => {
+                let mut missing = Vec::new();
+                let mut in_flight = Vec::new();
+                for sid in dep_ids {
+                    if index.was_full_eval_attempted(&sid) {
+                        // already done
+                    } else if index.is_eval_done_or_in_flight(&sid) {
+                        in_flight.push(sid);
+                    } else {
+                        missing.push(sid);
+                    }
+                }
+                (missing, in_flight)
+            }
+            Err(_) => (Vec::new(), Vec::new()),
+        }
+    };
+
+    // Park the event-loop thread until all in-flight background evals signal
+    // completion (or until the 200 ms deadline). The background thread calls
+    // cross_note_eval_condvar.notify_all() after mark_full_eval_attempted fires,
+    // so we wake up as soon as the data is ready instead of burning fixed intervals.
+    if !in_flight.is_empty() {
+        if let Ok(lock) = index.lock() {
+            let _ = condvar.wait_timeout_while(lock, Duration::from_millis(200), |index| {
+                in_flight
+                    .iter()
+                    .any(|sid| !index.was_full_eval_attempted(sid))
+            });
+        }
+    }
+
+    // Sync-load any deps that have no background thread covering them.
+    for dep_id in missing {
+        preload_cross_note_dep_value(&dep_id, index, &app_core::calc::CalcEngine::new(), db);
+    }
 }

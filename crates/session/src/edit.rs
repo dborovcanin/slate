@@ -33,6 +33,7 @@ pub enum SessionEdit<'a> {
         range: Range<usize>,
         text: &'a str,
         preserve_cursor: bool,
+        cursor_after: Option<editor_core::buffer::primitives::BufferCursor>,
     },
     /// The caller normalizes CRLF before requesting this paste.
     PlainPaste(&'a str),
@@ -40,6 +41,7 @@ pub enum SessionEdit<'a> {
         at: usize,
         lines: Cow<'a, [String]>,
     },
+    PruneEmptyTableContinuation,
     RemoveLines {
         start: usize,
         end: usize,
@@ -52,8 +54,6 @@ pub enum SessionEdit<'a> {
 #[derive(Clone, Copy)]
 pub struct EditContext {
     pub grouping: UndoGrouping,
-    /// Transitional hosts finish history after synchronous calc upkeep.
-    pub defer_history: bool,
 }
 
 #[derive(Debug)]
@@ -65,6 +65,7 @@ pub struct EditOutcome {
     pub fold_rescan: bool,
     pub register: Option<editor_core::vim_actions::VimRegisterValue>,
     pub text_changed: bool,
+    pub calc_effect: crate::calc_upkeep::CalcEffect,
 }
 
 impl NoteSession {
@@ -76,6 +77,20 @@ impl NoteSession {
         edit: SessionEdit<'_>,
         ctx: EditContext,
     ) -> Option<EditOutcome> {
+        self.apply_with_upkeep(doc, edit, ctx, None, None)
+    }
+
+    /// Apply text, derived calc state and history as one synchronous transaction.
+    /// The borrowed provider supplies lazy IO inputs to the shared evaluator.
+    pub fn apply_with_upkeep(
+        &mut self,
+        doc: &mut Document,
+        edit: SessionEdit<'_>,
+        ctx: EditContext,
+        inputs: Option<crate::calc_upkeep::CalcEditInputs>,
+        provider: Option<&dyn crate::calc_upkeep::CalcProvider>,
+    ) -> Option<EditOutcome> {
+        let finalize_empty_delete = matches!(edit, SessionEdit::Visual { delete: true, .. });
         let cursor_before = doc.cursor();
         let mut calc_splices = Vec::new();
         let mut fold_rescan = false;
@@ -128,7 +143,13 @@ impl NoteSession {
                 let (text, cursor) =
                     editor_core::buffer::paste::prepare_table_import(lines, current, doc.cursor());
                 doc.set_cursor(cursor);
-                return self.apply(doc, SessionEdit::PlainPaste(&text), ctx);
+                return self.apply_with_upkeep(
+                    doc,
+                    SessionEdit::PlainPaste(&text),
+                    ctx,
+                    inputs,
+                    provider,
+                );
             }
             SessionEdit::Visual { linewise, delete } => {
                 if doc.lines.is_empty() {
@@ -183,15 +204,16 @@ impl NoteSession {
                 range,
                 text,
                 preserve_cursor,
+                cursor_after,
             } => {
                 let plan = prepare_line_replace(&doc.lines, line, range, text)?;
                 let delta = plan.delta;
                 let cursor = apply_line_replace(&mut doc.lines, plan);
-                doc.set_cursor(if preserve_cursor {
+                doc.set_cursor(cursor_after.unwrap_or(if preserve_cursor {
                     cursor_before
                 } else {
                     cursor
-                });
+                }));
                 delta
             }
             SessionEdit::PlainPaste(text) => {
@@ -212,6 +234,34 @@ impl NoteSession {
                 doc.set_cursor(cursor);
                 delta
             }
+            SessionEdit::PruneEmptyTableContinuation => {
+                let line = doc.lines.get(doc.cursor_line)?;
+                if !editor_core::table::is_empty_table_continuation_row(line) {
+                    return None;
+                }
+                let at = doc.cursor_line;
+                let old_col = doc.cursor_col;
+                let mut plan = prepare_remove_lines(&doc.lines, at, at + 1)?;
+                let delta = plan.delta;
+                self.record_block(delta, std::mem::take(&mut plan.fates));
+                apply_remove_lines(&mut doc.lines, plan);
+                doc.cursor_line = at.saturating_sub(1).min(doc.lines.len() - 1);
+                let line = &doc.lines[doc.cursor_line];
+                doc.cursor_col = old_col.min(line.chars().count());
+                let byte = line
+                    .char_indices()
+                    .nth(doc.cursor_col)
+                    .map_or(line.len(), |(at, _)| at);
+                if let Some(cell) = editor_core::table::table_cell_info_in_line(line, byte) {
+                    let anchor_byte = if cell.is_empty() {
+                        (cell.left_pipe + 2).min(cell.right_pipe)
+                    } else {
+                        ((cell.left_pipe + 1) + cell.trim_end).min(cell.right_pipe)
+                    };
+                    doc.cursor_col = line[..anchor_byte].chars().count();
+                }
+                delta
+            }
             SessionEdit::RemoveLines { start, end } => {
                 let mut plan = prepare_remove_lines(&doc.lines, start, end)?;
                 let delta = plan.delta;
@@ -223,10 +273,12 @@ impl NoteSession {
             SessionEdit::BackwardWordDelete { tables } => {
                 match prepare_backward_word_delete(&doc.lines, doc.cursor(), tables)? {
                     BackwardWordDelete::JoinPreviousLine => {
-                        return self.apply(
+                        return self.apply_with_upkeep(
                             doc,
                             SessionEdit::Primitive(PrimitiveEdit::Backspace),
                             ctx,
+                            inputs,
+                            provider,
                         );
                     }
                     BackwardWordDelete::WithinLine(plan) => {
@@ -240,12 +292,19 @@ impl NoteSession {
                 }
             }
         };
-        if text_changed {
+        if text_changed || finalize_empty_delete {
             doc.text_generation = doc.text_generation.wrapping_add(1);
             doc.joined_text_cache = None;
             self.dirty = true;
             self.edit_seq = self.edit_seq.wrapping_add(1);
         }
+        let calc_effect = if text_changed || finalize_empty_delete {
+            inputs.map_or_else(Default::default, |inputs| {
+                self.calc_after_edit(doc, Some(delta), !calc_splices.is_empty(), inputs, provider)
+            })
+        } else {
+            Default::default()
+        };
         let outcome = EditOutcome {
             delta,
             first_changed_line: delta.start_line,
@@ -254,9 +313,10 @@ impl NoteSession {
             fold_rescan,
             register,
             text_changed,
+            calc_effect,
         };
-        if !ctx.defer_history && text_changed {
-            self.finish_edit(doc, ctx, outcome.delta);
+        if text_changed || finalize_empty_delete {
+            self.finish_edit(doc, ctx, text_changed.then_some(outcome.delta));
         }
         Some(outcome)
     }
@@ -289,8 +349,12 @@ impl NoteSession {
         });
     }
 
-    /// Transitional continuation: call exactly once after host synchronous upkeep.
-    pub fn finish_edit(&mut self, doc: &Document, ctx: EditContext, delta: EditDelta) {
+    pub(crate) fn finish_edit(
+        &mut self,
+        doc: &Document,
+        ctx: EditContext,
+        delta: Option<EditDelta>,
+    ) {
         self.undo_policy.record_text(
             &mut self.history,
             &doc.lines,
@@ -298,7 +362,7 @@ impl NoteSession {
                 line: doc.cursor_line,
                 col: doc.cursor_col,
             },
-            Some(delta),
+            delta,
             ctx.grouping,
         );
         let edits = std::mem::take(&mut self.pending_line_edits);
@@ -330,6 +394,7 @@ impl NoteSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calc_upkeep::CalcProvider;
     use editor_core::history::{policy::UndoSession, LineHistory};
     use std::time::Duration;
     fn setup() -> (Document, NoteSession, EditContext) {
@@ -347,7 +412,6 @@ mod tests {
                 session: UndoSession::Command,
                 elapsed: Duration::from_secs(1),
             },
-            defer_history: false,
         };
         (doc, session, ctx)
     }
@@ -379,6 +443,7 @@ mod tests {
                     range: 0..1,
                     text: "λ",
                     preserve_cursor: true,
+                    cursor_after: None,
                 },
                 ctx,
             )
@@ -390,24 +455,169 @@ mod tests {
         session.history.undo(&mut doc.lines).unwrap();
         assert_eq!(doc.lines[0], "éx");
     }
+    #[derive(Default)]
+    struct TestCalcProvider {
+        index: std::sync::Arc<std::sync::Mutex<app_core::cross_note::CrossNoteVarIndex>>,
+        calls: std::cell::Cell<usize>,
+    }
+    impl crate::calc_upkeep::CalcProvider for TestCalcProvider {
+        fn inputs(
+            &self,
+            _: &crate::calc::CalcState,
+        ) -> crate::calc_recompute::CalcRecomputeInputs<'_> {
+            self.calls.set(self.calls.get() + 1);
+            crate::calc_recompute::CalcRecomputeInputs {
+                base: crate::calc::CalcInputs {
+                    mask: Default::default(),
+                    math_enabled: true,
+                    viewport_only: false,
+                },
+                variables_enabled: true,
+                cross_note_enabled: false,
+                table_enabled: true,
+                note_id: "test",
+                index: &self.index,
+                selection_range: None,
+                thresholds: crate::calc_recompute::CalcThresholds {
+                    calc_pathological_window_min_lines: 2000,
+                    calc_pathological_window_percent: 85,
+                    calc_pathological_window_streak_threshold: 3,
+                    calc_forced_full_recompute_cycles: 2,
+                },
+            }
+        }
+        fn preload_refs(&self, _: &[app_core::calc::CrossNoteRef]) {
+            panic!("cross-note disabled");
+        }
+        fn extern_vars(&self, _: &[String]) -> Vec<app_core::calc::ExternVar> {
+            panic!("cross-note disabled");
+        }
+    }
     #[test]
-    fn deferred_history_includes_synchronous_upkeep_without_extra_entry() {
-        let (mut doc, mut session, mut ctx) = setup();
-        ctx.defer_history = true;
-        let outcome = session
-            .apply(
+    fn pruning_an_interior_continuation_records_the_final_cursor_for_redo() {
+        let (_, _, ctx) = setup();
+        let mut doc = Document::from_text("| a    | b     |\n| ---- | ----- |\n| base | value |\n|>     |       |\n| next | row   |");
+        doc.cursor_line = 3;
+        doc.cursor_col = 12;
+        let history = LineHistory::new(32, doc.lines(), 3, 12, Default::default());
+        let mut session = NoteSession::new(history, Default::default(), Default::default());
+        session
+            .apply(&mut doc, SessionEdit::PruneEmptyTableContinuation, ctx)
+            .unwrap();
+        let after = doc.cursor();
+        assert_eq!(after.line, 2);
+        assert_eq!(doc.lines().len(), 4);
+        session.undo(&mut doc).unwrap();
+        assert_eq!(doc.lines().len(), 5);
+        session.redo(&mut doc).unwrap();
+        assert_eq!(doc.cursor(), after);
+    }
+    #[test]
+    fn table_import_keeps_calc_upkeep_in_the_transaction() {
+        let (mut doc, mut session, ctx) = setup();
+        session.calc.stale = true;
+        let inputs = crate::calc_upkeep::CalcEditInputs {
+            base: crate::calc::CalcInputs {
+                mask: Default::default(),
+                math_enabled: true,
+                viewport_only: false,
+            },
+            key_in_progress: false,
+            async_min_lines: usize::MAX,
+            defer_min_lines: usize::MAX,
+        };
+        let table = vec!["| a |".into(), "| - |".into(), "| 2 + 2 |".into()];
+        let provider = TestCalcProvider::default();
+        session
+            .apply_with_upkeep(
                 &mut doc,
-                SessionEdit::Primitive(PrimitiveEdit::InsertChar('a')),
+                SessionEdit::TableImport(&table),
                 ctx,
+                Some(inputs),
+                Some(&provider),
             )
             .unwrap();
-        assert_eq!(session.history.undo_depth(), 0);
-        doc.lines[1] = "rewritten trailer".into();
-        session.finish_edit(&doc, ctx, outcome.delta);
+        assert_eq!(provider.calls.get(), 1);
+        assert_eq!(session.calc.line_metadata.len(), doc.lines().len());
+        assert_eq!(session.calc.results.len(), doc.lines().len());
         assert_eq!(session.history.undo_depth(), 1);
-        session.history.undo(&mut doc.lines).unwrap();
-        assert_eq!(doc.lines, vec!["éx", "second"]);
     }
+    #[test]
+    fn synchronous_upkeep_finishes_history_once() {
+        let (_, _, ctx) = setup();
+        let mut doc = Document::from_text("base := 2\nbase * 2 = 4");
+        let history = LineHistory::new(32, doc.lines(), 0, 0, Default::default());
+        let mut session = NoteSession::new(
+            history,
+            Default::default(),
+            crate::calc::CalcState {
+                stale: true,
+                ..Default::default()
+            },
+        );
+        let provider = TestCalcProvider::default();
+        session.recompute_calc(&mut doc, provider.inputs(&session.calc), &mut |_| {
+            panic!("cross-note disabled")
+        });
+        let inputs = crate::calc_upkeep::CalcEditInputs {
+            base: crate::calc::CalcInputs {
+                mask: Default::default(),
+                math_enabled: true,
+                viewport_only: false,
+            },
+            key_in_progress: false,
+            async_min_lines: usize::MAX,
+            defer_min_lines: usize::MAX,
+        };
+        session
+            .apply_with_upkeep(
+                &mut doc,
+                SessionEdit::LineReplace {
+                    line: 0,
+                    range: 8..9,
+                    text: "3",
+                    preserve_cursor: true,
+                    cursor_after: None,
+                },
+                ctx,
+                Some(inputs),
+                Some(&provider),
+            )
+            .unwrap();
+        assert_eq!(doc.lines[1], "base * 2 = 6");
+        assert_eq!(session.history.undo_depth(), 1);
+        session.undo(&mut doc).unwrap();
+        assert_eq!(doc.lines, vec!["base := 2", "base * 2 = 4"]);
+    }
+
+    #[test]
+    fn synchronous_edit_with_math_disabled_clears_results_without_evaluation() {
+        let (mut doc, mut session, ctx) = setup();
+        session.calc.stale = true;
+        let inputs = crate::calc_upkeep::CalcEditInputs {
+            base: crate::calc::CalcInputs {
+                mask: Default::default(),
+                math_enabled: false,
+                viewport_only: false,
+            },
+            key_in_progress: false,
+            async_min_lines: usize::MAX,
+            defer_min_lines: usize::MAX,
+        };
+        session
+            .apply_with_upkeep(
+                &mut doc,
+                SessionEdit::Primitive(PrimitiveEdit::InsertChar('x')),
+                ctx,
+                Some(inputs),
+                None,
+            )
+            .unwrap();
+        assert!(!session.calc.stale);
+        assert!(session.calc.results.iter().all(Option::is_none));
+        assert!(session.calc.line_metadata.is_empty());
+    }
+
     #[test]
     fn split_and_whole_line_removal_map_and_restore_reminders() {
         let (mut doc, mut session, ctx) = setup();

@@ -198,12 +198,19 @@ Outcomes describe source-line deltas, calc invalidation and register effects.
 Typing outcomes use empty vectors and do not allocate. Boundary primitives and
 unchanged replacements do not advance dirty state, generation or edit identity.
 
-The session owns text history, dirty state, edit counters and reminder mapping.
+The session owns text history, dirty state, edit counters, reminder mapping and
+calc upkeep. Front ends use `apply_with_upkeep` for a complete edit transaction;
+`apply` is the same pipeline without calc upkeep. The host supplies a borrowed `CalcProvider` for evaluation inputs and lazy
+external-data reads, invoked only for actual synchronous recomputation. The session chooses
+skip, remap, viewport refresh, idle scheduling or recomputation after the current
+key; `CalcEffect` carries the required host scheduling. `CalcInputs` and the
+provider borrow existing state, with no extern-variable copy or index lock on
+skip/remap paths. Calc-derived trailer rewrites run inside the session before
+synchronous history finalization; keyboard recomputation retains its existing
+end-of-key ordering. `defer_history` and the public `finish_edit` continuation
+were removed. Final cursor positions for replacement and continuation pruning
+are supplied or computed before history records; unchanged completion may move
+the presentation caret without advancing dirty state or edit identity.
+
 The host still orders text/reminder undo actions and presents cursor clamps while
-lifecycle extraction is in progress. Direct synchronous calc can rewrite trailers
-before history records; keyboard calc may defer until afterwards. During this
-transition the terminal requests `defer_history` and calls `finish_edit` once
-after upkeep. Calc-derived replacements stay inside that transaction. The public derived-edit request was removed in Step 10b: full calc and
-trailer rewriting now run inside the session. The deferred-history
-continuation remains pending edit-upkeep coordination in Step 10c; it is
-not the final front-end contract.
+lifecycle extraction is in progress.

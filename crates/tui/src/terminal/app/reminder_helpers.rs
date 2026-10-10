@@ -1,7 +1,7 @@
 use super::{LineReminderGhost, ReminderMarks, TerminalApp};
 use crate::storage::{Db, Note};
 use app_core::storage::{NoteAccessMode, ReminderLine};
-use note_session::{move_lines, reminder_marks_of};
+use note_session::reminder_marks_of;
 use rustc_hash::FxHashMap;
 
 /// Reminder ghosts for `note` shown as `lines`, after placing its stored
@@ -146,33 +146,5 @@ impl TerminalApp {
         let needed =
             self.reminders_unsaved() || (saving_text && !self.session.reminder_ghosts.is_empty());
         (needed && self.active_note_holds_reminders()).then(|| self.reminder_lines())
-    }
-
-    /// Moves reminders through the edit history just recorded, and attaches
-    /// the result to its undo step. The edit's own coordinates decide when
-    /// they account for the whole change; otherwise its changed block is
-    /// matched line by line ([`block_line_fates`]), never guessed.
-    pub(super) fn move_reminders_with_recorded_edit(&mut self) {
-        let edits = std::mem::take(&mut self.session.pending_line_edits);
-        let delta = self.session.history.take_last_delta();
-        if self.session.reminder_ghosts.is_empty() {
-            if !self.session.history.current_marks().is_empty() {
-                self.session.history.record_marks(self.reminder_marks());
-            }
-            return;
-        }
-        let Some(delta) = delta else {
-            return;
-        };
-        let moved = move_lines(&self.session.reminder_ghosts, &edits, &delta);
-        if moved.len() != self.session.reminder_ghosts.len()
-            || moved
-                .keys()
-                .any(|line| !self.session.reminder_ghosts.contains_key(line))
-        {
-            self.session.reminder_ghosts = moved;
-            self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
-        }
-        self.session.history.record_marks(self.reminder_marks());
     }
 }
