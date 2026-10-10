@@ -80,7 +80,9 @@ This document defines the canonical shared-core contract for editor semantics.
     (session and elapsed time captured before post-edit work). Core coalesces
     insert sessions across pauses, otherwise within 300 ms, selects the span
     fast path above the anchor cap, and adds or removes text action markers.
-    Retention and large-note grouping behavior remain unchanged.
+    Large-note grouping behavior remains unchanged. New entries and evictions
+    are tracked explicitly: the action sequence drops the evicted text marker
+    and records the new one even when history depth stays at its limit.
   - Recording a new action truncates the action redo tail. Self-cancelling
     merged text edits remove their trailing marker. The host maps reminders
     and records attached marks after text recording, preserving call order.

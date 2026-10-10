@@ -214,3 +214,83 @@ fn large_note_span_recording_keeps_one_step_per_edit() {
     policy.complete_undo();
     assert_eq!(lines[4000], "plain");
 }
+
+#[test]
+fn retention_keeps_new_text_actions_after_interleaved_reminders() {
+    let mut lines = vec![String::new()];
+    let mut history = LineHistory::new(2, &lines, 0, 0, ());
+    let mut policy = UndoPolicy::<&str>::default();
+    record(&mut policy, &mut history, "a", 1000, UndoSession::Other);
+    policy.record_reminder("reminder");
+    history.set_marks(());
+    record(&mut policy, &mut history, "ab", 0, UndoSession::Insert);
+    history.break_coalescing();
+    record(&mut policy, &mut history, "abc", 0, UndoSession::Insert);
+    lines[0] = "abc".into();
+    for expected in ["ab", "a"] {
+        assert_eq!(policy.undo_action(), Some(&UndoAction::Text));
+        history.undo(&mut lines).expect("retained text step");
+        policy.complete_undo();
+        assert_eq!(lines, [expected]);
+    }
+    assert_eq!(
+        policy.undo_action(),
+        Some(&UndoAction::Reminder("reminder"))
+    );
+    policy.complete_undo();
+    assert!(policy.undo_action().is_none());
+    assert_eq!(history.undo_depth(), 0);
+}
+
+#[test]
+fn retention_aligns_large_note_span_markers_and_redo() {
+    let mut lines = vec!["plain".to_string(); COALESCE_ANCHOR_MAX_LINES + 1];
+    let mut history = LineHistory::new(2, &lines, 0, 0, ());
+    let mut policy = UndoPolicy::<&str>::default();
+    let grouping = UndoGrouping {
+        session: UndoSession::Insert,
+        elapsed: Duration::ZERO,
+    };
+    let delta = EditDelta {
+        start_line: 0,
+        old_span: 1,
+        new_span: 1,
+    };
+    for text in ["a", "ab", "abc"] {
+        lines[0] = text.into();
+        policy.record_text(
+            &mut history,
+            &lines,
+            HistoryCursor {
+                line: 0,
+                col: text.len(),
+            },
+            Some(delta),
+            grouping,
+        );
+        if text == "a" {
+            policy.record_reminder("reminder");
+            history.set_marks(());
+        }
+    }
+    for text in ["ab", "a"] {
+        assert_eq!(policy.undo_action(), Some(&UndoAction::Text));
+        history.undo(&mut lines).unwrap();
+        policy.complete_undo();
+        assert_eq!(lines[0], text);
+    }
+    assert_eq!(
+        policy.undo_action(),
+        Some(&UndoAction::Reminder("reminder"))
+    );
+    policy.complete_undo();
+    assert!(policy.undo_action().is_none());
+    policy.complete_redo(); // Host reapplies the reminder.
+    for text in ["ab", "abc"] {
+        assert_eq!(policy.redo_action(), Some(&UndoAction::Text));
+        history.redo(&mut lines).unwrap();
+        policy.complete_redo();
+        assert_eq!(lines[0], text);
+    }
+    assert!(policy.redo_action().is_none());
+}

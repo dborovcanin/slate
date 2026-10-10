@@ -87,24 +87,30 @@ impl<R> UndoPolicy<R> {
     ) {
         let coalesce = grouping.coalesces();
         let depth_before = history.undo_depth();
-        if let Some(delta) = delta.filter(|_| lines.len() > COALESCE_ANCHOR_MAX_LINES) {
-            // Above the anchor cap, the span path preserves one entry per edit
-            // without the full-document prefix/suffix scan.
-            let changed = history.record_edit_span(lines, cursor.line, cursor.col, delta);
-            if changed && (!coalesce || history.undo_depth() > depth_before) {
-                self.push(UndoAction::Text);
-            }
-            return;
-        }
-        let changed = history.record_edit(lines, cursor.line, cursor.col, coalesce);
-        let depth_after = history.undo_depth();
-        if changed && (!coalesce || depth_after > depth_before) {
+        let changed = if let Some(delta) = delta.filter(|_| lines.len() > COALESCE_ANCHOR_MAX_LINES)
+        {
+            history.record_edit_span(lines, cursor.line, cursor.col, delta)
+        } else {
+            history.record_edit(lines, cursor.line, cursor.col, coalesce)
+        };
+        if changed && history.recorded_new_entry {
             self.push(UndoAction::Text);
-        } else if depth_after < depth_before
+            if history.recorded_eviction {
+                // The text store evicts its oldest entry. Remove that entry's
+                // marker while preserving reminder order and the new marker.
+                if let Some(idx) = self
+                    .actions
+                    .iter()
+                    .position(|action| matches!(action, UndoAction::Text))
+                {
+                    self.actions.remove(idx);
+                    self.pos -= 1;
+                }
+            }
+        } else if history.undo_depth() < depth_before
             && self.pos == self.actions.len()
             && matches!(self.actions.last(), Some(UndoAction::Text))
         {
-            // A coalesced edit cancelled itself; remove its marker as well.
             self.actions.pop();
             self.pos = self.actions.len();
         }
