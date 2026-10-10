@@ -45,6 +45,7 @@ Explicit scripting added: registered external executables with a versioned JSON 
 Also on the list:
 - ~~**Performance:** scrolling into a new region spends about 3.8 ms in `ensure_calc_for_viewport`; move that evaluation off the draw path (show stale ghosts, refresh when ready).~~ Done 2026-09-29 without moving it: viewport evaluation reuses a cached whole-note preparation and costs ~2 ms at 30k lines and ~5 ms at 100k (see "Performance Backlog"). Frame painting itself is about 0.3 ms at 200x60, so render caching is not needed.
 - **Cleanup:** ~~move pure command execution into `editor-core`~~ (done 2026-10-03: `editor_core::commands`); sticky goal column for screen-row motions.
+- **Architecture refactor:** move the remaining editing semantics out of `crates/tui` in phases (buffer primitives, undo store, word motions, vim execution, post-edit planning, completion/search). Plan and inventory: `roadmap/arch-refactor.md`.
 - **Other candidates** (see `roadmap/features.md`): templates beyond the daily note, tags and ghost notes, runnable code blocks with captured output, fuzzy switcher via `nucleo`, restoring part of a note from its history.
 
 ## Product Intent
