@@ -18,6 +18,7 @@ use editor_core::buffer::primitives::{BufferCursor, PrimitiveEdit};
 use editor_core::buffer::words;
 use editor_core::context::ResolvedContext;
 use editor_core::history::policy::{UndoGrouping, UndoSession};
+use editor_core::table::{TableCursorMotionDirection, TableTypingCursor};
 use editor_core::text_rules::{self, TabRuleOptions, TextRuleOptions};
 use editor_core::types::{EditOperation, EditorContextSnapshot, SelectionSnapshot};
 use editor_core::vim::{self, VimAction, VimContext, VimIntent, VimKey, VimMode, VimState};
@@ -185,6 +186,22 @@ fn scoped_snapshot(doc: &Document, start: usize, end: usize) -> (EditorContextSn
     (snapshot, scope_start)
 }
 
+/// Like [`scoped_snapshot`], marking the character before the cursor as
+/// the change the doc-change rules react to.
+fn scoped_snapshot_changed(
+    doc: &Document,
+    start: usize,
+    end: usize,
+) -> (EditorContextSnapshot, usize) {
+    let (mut snapshot, offset) = scoped_snapshot(doc, start, end);
+    let cursor = snapshot.selection.head;
+    snapshot.changed_range = Some(editor_core::types::TextRange {
+        from: cursor.saturating_sub(1),
+        to: cursor,
+    });
+    (snapshot, offset)
+}
+
 fn shift_operation(op: &EditOperation, offset: usize) -> EditOperation {
     let mut mapped = op.clone();
     for change in &mut mapped.changes {
@@ -218,6 +235,93 @@ fn rule_span(doc: &Document, tables: bool) -> (usize, usize) {
         center.saturating_sub(RULE_WINDOW),
         (center + RULE_WINDOW).min(last),
     )
+}
+
+/// Might an edit on `line` change what the autoformat rules would do?
+fn line_may_trigger_rules(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let list = trimmed.starts_with(['-', '*', '+'])
+        || trimmed.starts_with("->")
+        || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let table = trimmed.starts_with('|') && line.trim_end().ends_with('|');
+    list || table
+}
+
+/// Move one step through table cells; `false` when the cursor is not in a
+/// table or the plan does not apply. Rows and columns follow the core's
+/// planner, so the cursor skips cell padding and crosses cells like the
+/// terminal app does.
+fn table_cursor_motion(doc: &mut Document, direction: TableCursorMotionDirection) -> bool {
+    use editor_core::table::{plan_table_cursor_motion, table_block_bounds};
+    let lines = doc.lines();
+    let Some((block_start, block_end)) = table_block_bounds(lines, doc.cursor_line) else {
+        return false;
+    };
+    let Some(target) = plan_table_cursor_motion(
+        &lines[block_start..=block_end],
+        doc.cursor_line - block_start,
+        doc.cursor_col,
+        direction,
+    ) else {
+        return false;
+    };
+    let vertical = matches!(
+        direction,
+        TableCursorMotionDirection::Up | TableCursorMotionDirection::Down
+    );
+    let (line, col) = if target.line_index < 0 {
+        match block_start.checked_sub(1) {
+            Some(prev) => (prev, if vertical { doc.cursor_col } else { target.col }),
+            None => return true,
+        }
+    } else if target.line_index as usize > block_end - block_start {
+        if block_end + 1 >= lines.len() {
+            return true;
+        }
+        (
+            block_end + 1,
+            if vertical { doc.cursor_col } else { target.col },
+        )
+    } else {
+        (block_start + target.line_index as usize, target.col)
+    };
+    let len = lines.get(line).map_or(0, |l| char_len(l));
+    doc.cursor_line = line;
+    doc.cursor_col = col.min(len);
+    true
+}
+
+/// Keep the cursor in the content of a table cell: right padding exists for
+/// alignment only (`clamp_right`), and the left padding is skipped.
+fn clamp_table_cursor(doc: &mut Document, tables: bool, clamp_right: bool) {
+    use crate::display::table::{
+        table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
+        table_cell_navigation_anchor,
+    };
+    if !tables {
+        return;
+    }
+    let line = doc.cursor_line;
+    let Some(cell) = table_cell_info_at_char(doc.lines(), line, doc.cursor_col) else {
+        return;
+    };
+    let text = &doc.lines()[line];
+    let anchor = table_cell_navigation_anchor(text, &cell);
+    let anchor = if table_cell_is_empty(&cell)
+        || doc.cursor_col < char_len_of(text, table_cell_edit_start(&cell))
+        || (clamp_right && doc.cursor_col > anchor)
+    {
+        Some(anchor)
+    } else {
+        None
+    };
+    if let Some(anchor) = anchor {
+        doc.cursor_col = anchor;
+    }
+}
+
+fn char_len_of(text: &str, byte: usize) -> usize {
+    text[..byte.min(text.len())].chars().count()
 }
 
 impl NoteSession {
@@ -298,6 +402,83 @@ impl NoteSession {
         );
         doc.cursor_col = cursor_col;
         outcome
+    }
+
+    /// After typing: reformat tables and lists around the cursor.
+    fn autoformat(
+        &mut self,
+        doc: &mut Document,
+        state: &InputState,
+        cx: &InputContext<'_>,
+        outcome: &mut InputOutcome,
+    ) {
+        let options = cx.options;
+        if !(options.tables || options.markdown_autoformat)
+            || !line_may_trigger_rules(&doc.lines()[doc.cursor_line])
+        {
+            return;
+        }
+        let rules = TextRuleOptions {
+            markdown_autoformat: options.markdown_autoformat,
+            checklist_auto_reorder: options.checklist_auto_reorder,
+            table_enabled: options.tables,
+        };
+        let (start, end) = rule_span(doc, options.tables);
+        let (snapshot, offset) = scoped_snapshot_changed(doc, start, end);
+        if let Some(op) = text_rules::run_doc_change_rules_with_table_cache(
+            &ResolvedContext::new(snapshot),
+            rules,
+            &mut editor_core::table::TableFormatCache::default(),
+        ) {
+            let op = shift_operation(&op, offset);
+            self.edit(doc, state, SessionEdit::Operation(&op), cx, outcome);
+        }
+    }
+
+    /// `Backspace`/`Delete` in a table: the header's column goes with its
+    /// last character, cells merge at their edges, and pipes stay put.
+    /// `false` when no table rule applies and the plain delete should run.
+    fn table_delete(
+        &mut self,
+        doc: &mut Document,
+        state: &InputState,
+        backward: bool,
+        cx: &InputContext<'_>,
+        outcome: &mut InputOutcome,
+    ) -> bool {
+        use editor_core::text_rules::{
+            run_table_boundary_edit_rules, run_table_header_delete_column_rule_with_table_cache,
+            TableBoundaryEditOptions,
+        };
+        if !cx.options.tables || !editor_core::table::is_table_line(&doc.lines()[doc.cursor_line]) {
+            return false;
+        }
+        let (start, end) = rule_span(doc, true);
+        let (snapshot, offset) = scoped_snapshot(doc, start, end);
+        let ctx = ResolvedContext::new(snapshot);
+        let op = run_table_header_delete_column_rule_with_table_cache(
+            &ctx,
+            &mut editor_core::table::TableFormatCache::default(),
+        )
+        .or_else(|| {
+            run_table_boundary_edit_rules(
+                &ctx,
+                TableBoundaryEditOptions {
+                    markdown_autoformat: cx.options.markdown_autoformat,
+                    backward,
+                    structural_merge: true,
+                    table_enabled: true,
+                },
+            )
+        });
+        let Some(op) = op else {
+            return false;
+        };
+        if !op.changes.is_empty() {
+            let op = shift_operation(&op, offset);
+            self.edit(doc, state, SessionEdit::Operation(&op), cx, outcome);
+        }
+        true
     }
 
     /// Move the cursor to the previous or next word start, across lines;
@@ -435,6 +616,18 @@ impl NoteSession {
                     cx,
                     &mut outcome,
                 );
+                if plan.autoformat {
+                    self.autoformat(doc, state, cx, &mut outcome);
+                }
+                match plan.cursor {
+                    TableTypingCursor::InCellContent => {
+                        clamp_table_cursor(doc, options.tables, true)
+                    }
+                    TableTypingCursor::InCellPadding => {
+                        clamp_table_cursor(doc, options.tables, false)
+                    }
+                    TableTypingCursor::PastRowEnd => {}
+                }
                 // `[[` closes itself and asks for the link target.
                 if ch == '['
                     && doc.cursor_col >= 2
@@ -475,6 +668,8 @@ impl NoteSession {
                         );
                     }
                 }
+                self.autoformat(doc, state, cx, &mut outcome);
+                clamp_table_cursor(doc, options.tables, true);
             }
             VimKey::Tab => {
                 let rules = TabRuleOptions {
@@ -499,24 +694,26 @@ impl NoteSession {
                         );
                     }
                 }
+                self.autoformat(doc, state, cx, &mut outcome);
+                clamp_table_cursor(doc, options.tables, true);
             }
-            VimKey::Backspace => {
-                self.edit(
-                    doc,
-                    state,
-                    SessionEdit::Primitive(PrimitiveEdit::Backspace),
-                    cx,
-                    &mut outcome,
-                );
-            }
-            VimKey::Delete => {
-                self.edit(
-                    doc,
-                    state,
-                    SessionEdit::Primitive(PrimitiveEdit::DeleteForward),
-                    cx,
-                    &mut outcome,
-                );
+            VimKey::Backspace | VimKey::Delete => {
+                let backward = key == VimKey::Backspace;
+                if !self.table_delete(doc, state, backward, cx, &mut outcome) {
+                    self.edit(
+                        doc,
+                        state,
+                        SessionEdit::Primitive(if backward {
+                            PrimitiveEdit::Backspace
+                        } else {
+                            PrimitiveEdit::DeleteForward
+                        }),
+                        cx,
+                        &mut outcome,
+                    );
+                }
+                self.autoformat(doc, state, cx, &mut outcome);
+                clamp_table_cursor(doc, options.tables, true);
             }
             VimKey::ArrowLeft | VimKey::ArrowRight | VimKey::ArrowUp | VimKey::ArrowDown => {
                 let intent = match key {
@@ -526,6 +723,7 @@ impl NoteSession {
                     _ => VimIntent::MoveDown,
                 };
                 move_cursor(doc, state, intent, 1, options.tables);
+                clamp_table_cursor(doc, options.tables, true);
             }
             VimKey::Ctrl(_) => outcome.handled = false,
         }
@@ -750,6 +948,23 @@ fn move_cursor(
     count: usize,
     tables: bool,
 ) {
+    if tables {
+        let direction = match intent {
+            VimIntent::MoveLeft => Some(TableCursorMotionDirection::Left),
+            VimIntent::MoveRight => Some(TableCursorMotionDirection::Right),
+            VimIntent::MoveUp => Some(TableCursorMotionDirection::Up),
+            VimIntent::MoveDown => Some(TableCursorMotionDirection::Down),
+            _ => None,
+        };
+        if let Some(direction) = direction {
+            if table_cursor_motion(doc, direction) {
+                for _ in 1..count {
+                    table_cursor_motion(doc, direction);
+                }
+                return;
+            }
+        }
+    }
     let lines = doc.lines();
     let last = lines.len().saturating_sub(1);
     let cursor = doc.cursor();

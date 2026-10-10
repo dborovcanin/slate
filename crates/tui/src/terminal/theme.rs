@@ -28,178 +28,10 @@ impl Default for RenderPalette {
     }
 }
 
-fn normalize_color_scheme(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace(['_', ' '], "-")
-}
-
-const ANSI_COLOR_CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-const ACCENT_AMBER: &str = "#c7772f";
-const ACCENT_SAGE: &str = "#4f8a64";
-const ACCENT_ROSE: &str = "#b55a79";
-const ACCENT_PLUM: &str = "#7a5fa8";
-const ACCENT_COBALT: &str = "#4e7dd6";
-const ACCENT_SLATE: &str = "#3e5266";
-
-fn parse_hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn parse_hex_byte_pair(high: u8, low: u8) -> Option<u8> {
-    Some((parse_hex_nibble(high)? << 4) | parse_hex_nibble(low)?)
-}
-
-fn parse_hex_color(value: &str) -> Option<(u8, u8, u8)> {
-    let trimmed = value.trim();
-    let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
-    let bytes = hex.as_bytes();
-    match bytes.len() {
-        3 => {
-            let r = parse_hex_nibble(bytes[0])?;
-            let g = parse_hex_nibble(bytes[1])?;
-            let b = parse_hex_nibble(bytes[2])?;
-            Some(((r << 4) | r, (g << 4) | g, (b << 4) | b))
-        }
-        6 => Some((
-            parse_hex_byte_pair(bytes[0], bytes[1])?,
-            parse_hex_byte_pair(bytes[2], bytes[3])?,
-            parse_hex_byte_pair(bytes[4], bytes[5])?,
-        )),
-        _ => None,
-    }
-}
-
-fn rgb_distance_sq(a: (u8, u8, u8), b: (u8, u8, u8)) -> i32 {
-    let dr = a.0 as i32 - b.0 as i32;
-    let dg = a.1 as i32 - b.1 as i32;
-    let db = a.2 as i32 - b.2 as i32;
-    dr * dr + dg * dg + db * db
-}
-
-fn nearest_cube_component(channel: u8) -> usize {
-    let mut best_idx = 0usize;
-    let mut best_distance = i32::MAX;
-    for (idx, level) in ANSI_COLOR_CUBE_LEVELS.iter().copied().enumerate() {
-        let distance = (channel as i32 - level as i32).abs();
-        if distance < best_distance {
-            best_distance = distance;
-            best_idx = idx;
-        }
-    }
-    best_idx
-}
-
-fn rgb_to_ansi_256(rgb: (u8, u8, u8)) -> u8 {
-    let (r, g, b) = rgb;
-
-    let r_idx = nearest_cube_component(r);
-    let g_idx = nearest_cube_component(g);
-    let b_idx = nearest_cube_component(b);
-    let cube = (
-        ANSI_COLOR_CUBE_LEVELS[r_idx],
-        ANSI_COLOR_CUBE_LEVELS[g_idx],
-        ANSI_COLOR_CUBE_LEVELS[b_idx],
-    );
-    let cube_idx = 16 + 36 * r_idx + 6 * g_idx + b_idx;
-
-    let gray_avg = ((r as u16 + g as u16 + b as u16) / 3) as i32;
-    let gray_step = ((gray_avg - 8) as f32 / 10.0).round() as i32;
-    let gray_idx = gray_step.clamp(0, 23) as u8;
-    let gray_value = 8 + gray_idx * 10;
-    let gray = (gray_value, gray_value, gray_value);
-    let gray_palette_idx = 232 + gray_idx as usize;
-
-    if rgb_distance_sq(rgb, gray) < rgb_distance_sq(rgb, cube) {
-        gray_palette_idx as u8
-    } else {
-        cube_idx as u8
-    }
-}
-
-fn accent_rgb(accent: &str) -> Option<(u8, u8, u8)> {
-    let normalized = normalize_color_scheme(accent);
-    if normalized.is_empty() || normalized == "auto" {
-        return None;
-    }
-
-    let token_or_hex = match normalized.as_str() {
-        "amber" => ACCENT_AMBER,
-        "sage" => ACCENT_SAGE,
-        "rose" => ACCENT_ROSE,
-        "plum" => ACCENT_PLUM,
-        "cobalt" => ACCENT_COBALT,
-        "slate" => ACCENT_SLATE,
-        _ => normalized.as_str(),
-    };
-    parse_hex_color(token_or_hex)
-}
-
-fn scheme_accent_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
-    let hex = match normalize_color_scheme(color_scheme).as_str() {
-        "slate" | "slate-light" => "#4f7bd9",
-        "slate-dark" => "#3e5266",
-        "catppuccin-mocha" => "#89b4fa",
-        "catppuccin-latte" => "#1e66f5",
-        "gruvbox-dark" => "#fabd2f",
-        "gruvbox-light" => "#d65d0e",
-        "dracula" => "#bd93f9",
-        "dark" => "#4aa8ff",
-        "white" => "#005cc5",
-        "solarized-dark" => "#b58900",
-        "solarized-light" => "#cb4b16",
-        "nord" => "#88c0d0",
-        "tokyo-night" => "#7aa2f7",
-        "one-dark" => "#61afef",
-        _ => return None,
-    };
-    parse_hex_color(hex)
-}
-
-fn scheme_surface_bg_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
-    let hex = match normalize_color_scheme(color_scheme).as_str() {
-        "slate" | "slate-light" => "#f8f1e6",
-        "slate-dark" => "#1d1c20",
-        "catppuccin-mocha" => "#252536",
-        "catppuccin-latte" => "#e6e9ef",
-        "gruvbox-dark" => "#32302f",
-        "gruvbox-light" => "#f2e5bc",
-        "dracula" => "#313442",
-        "dark" => "#1a1d23",
-        "white" => "#f8f9fb",
-        "solarized-dark" => "#073642",
-        "solarized-light" => "#f5efdd",
-        "nord" => "#3b4252",
-        "tokyo-night" => "#212433",
-        "one-dark" => "#2f343f",
-        _ => return None,
-    };
-    parse_hex_color(hex)
-}
-
-fn scheme_text_fg_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
-    let hex = match normalize_color_scheme(color_scheme).as_str() {
-        "slate" | "slate-light" => "#1f1b16",
-        "slate-dark" => "#ece8e0",
-        "catppuccin-mocha" => "#cdd6f4",
-        "catppuccin-latte" => "#4c4f69",
-        "gruvbox-dark" => "#ebdbb2",
-        "gruvbox-light" => "#3c3836",
-        "dracula" => "#f8f8f2",
-        "dark" => "#e6edf3",
-        "white" => "#1f2933",
-        "solarized-dark" => "#93a1a1",
-        "solarized-light" => "#586e75",
-        "nord" => "#e5e9f0",
-        "tokyo-night" => "#c0caf5",
-        "one-dark" => "#abb2bf",
-        _ => return None,
-    };
-    parse_hex_color(hex)
-}
+use app_core::theme::{
+    accent_rgb, normalize_color_scheme, rgb_to_ansi_256, scheme_accent_rgb, scheme_indexes,
+    scheme_is_light, scheme_surface_bg_rgb, scheme_text_fg_rgb,
+};
 
 impl RenderPalette {
     const fn from_values(
@@ -233,21 +65,18 @@ impl RenderPalette {
 
     pub fn for_color_scheme(color_scheme: &str) -> Self {
         let normalized = normalize_color_scheme(color_scheme);
-        let mut palette = match normalized.as_str() {
-            "catppuccin-mocha" => Self::from_values(111, 150, 217, 103, 117, 183, 180, 147, 211),
-            "catppuccin-latte" => Self::from_values(33, 29, 166, 102, 25, 61, 130, 69, 160),
-            "gruvbox-dark" => Self::from_values(214, 142, 208, 245, 109, 175, 172, 179, 167),
-            "gruvbox-light" => Self::from_values(130, 64, 166, 102, 25, 95, 94, 136, 160),
-            "dracula" => Self::from_values(177, 114, 221, 103, 117, 183, 222, 141, 204),
-            "dark" => Self::from_values(75, 114, 215, 244, 74, 153, 152, 111, 203),
-            "white" => Self::from_values(26, 28, 166, 102, 31, 61, 24, 69, 160),
-            "solarized-dark" => Self::from_values(136, 64, 166, 102, 37, 61, 109, 144, 166),
-            "solarized-light" => Self::from_values(166, 64, 130, 102, 31, 60, 65, 137, 160),
-            "nord" => Self::from_values(110, 150, 180, 102, 81, 146, 152, 109, 203),
-            "tokyo-night" => Self::from_values(111, 114, 216, 103, 75, 147, 153, 147, 204),
-            "one-dark" => Self::from_values(75, 114, 180, 245, 74, 176, 152, 111, 203),
-            _ => Self::default(),
-        };
+        let i = scheme_indexes(&normalized);
+        let mut palette = Self::from_values(
+            i.code_keyword,
+            i.code_string,
+            i.code_number,
+            i.code_comment,
+            i.code_function,
+            i.code_type,
+            i.variable,
+            i.search_match,
+            i.search_current,
+        );
         if let Some(accent) = scheme_accent_rgb(&normalized) {
             palette.primary = Color::Indexed(rgb_to_ansi_256(accent));
         }
@@ -257,16 +86,11 @@ impl RenderPalette {
         if let Some(text_fg) = scheme_text_fg_rgb(&normalized) {
             palette.text_fg = Color::Indexed(rgb_to_ansi_256(text_fg));
         }
-        let is_light = matches!(
-            normalized.as_str(),
-            "slate"
-                | "slate-light"
-                | "catppuccin-latte"
-                | "gruvbox-light"
-                | "white"
-                | "solarized-light"
-        );
-        palette.code_block_bg = Color::Indexed(if is_light { 252 } else { 237 });
+        palette.code_block_bg = Color::Indexed(if scheme_is_light(&normalized) {
+            252
+        } else {
+            237
+        });
         palette
     }
 

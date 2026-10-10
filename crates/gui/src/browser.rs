@@ -203,6 +203,13 @@ pub fn on_key(win: &mut SlateWindow, ev: &KeyDownEvent, cx: &mut Context<SlateWi
     let Overlay::Browser(b) = &mut win.overlay else {
         return false;
     };
+    // `Shift+H` or `Ctrl+R` on a note: its history, as in the terminal.
+    if b.column == Column::Notes
+        && ((key == "h" && k.modifiers.shift && !k.modifiers.control)
+            || (key == "r" && k.modifiers.control))
+    {
+        return open_selected_history(win, cx);
+    }
     let host = &win.host;
     match key {
         "escape" | "q" => win.overlay = Overlay::None,
@@ -228,6 +235,24 @@ pub fn on_key(win: &mut SlateWindow, ev: &KeyDownEvent, cx: &mut Context<SlateWi
         _ => {}
     }
     cx.notify();
+    true
+}
+
+/// History of the highlighted note: it becomes the open note first, since
+/// restoring a version replaces the open note's text.
+fn open_selected_history(win: &mut SlateWindow, cx: &mut Context<SlateWindow>) -> bool {
+    let Overlay::Browser(b) = &win.overlay else {
+        return true;
+    };
+    if !b.entries[b.scope].unlocked {
+        return open_and_notify(win, cx);
+    }
+    let Some(id) = b.notes.get(b.note).map(|n| n.id.clone()) else {
+        return true;
+    };
+    win.overlay = Overlay::None;
+    win.open_note(&id, cx);
+    overlays::open_history(win, cx);
     true
 }
 

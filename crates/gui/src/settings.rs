@@ -20,7 +20,7 @@ pub struct Settings {
     pub command_bar: CommandBarStyle,
     /// Vim keys (true) or standard editing (false).
     pub vim: bool,
-    pub light: bool,
+    pub theme: crate::theme::ThemeMode,
     pub sidebar: bool,
 }
 
@@ -29,7 +29,7 @@ impl Default for Settings {
         Self {
             command_bar: CommandBarStyle::default(),
             vim: true,
-            light: false,
+            theme: Default::default(),
             sidebar: true,
         }
     }
@@ -70,7 +70,7 @@ mod tests {
         let s = Settings {
             command_bar: CommandBarStyle::Bottom,
             vim: false,
-            light: true,
+            theme: crate::theme::ThemeMode::Light,
             sidebar: false,
         };
         let text = serde_json::to_string(&s).unwrap();
@@ -79,7 +79,8 @@ mod tests {
         // Older files and hand edits: unknown or missing keys are fine.
         let partial = Settings::parse(r#"{"command_bar":"bottom","extra":1}"#);
         assert_eq!(partial.command_bar, CommandBarStyle::Bottom);
-        assert!(partial.vim && partial.sidebar && !partial.light);
+        assert!(partial.vim && partial.sidebar);
+        assert_eq!(partial.theme, crate::theme::ThemeMode::Config);
         assert_eq!(Settings::parse("not json"), Settings::default());
     }
 }

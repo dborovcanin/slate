@@ -3,6 +3,7 @@
 //! browser and history, plus the which-key strip at the bottom.
 use crate::keys::{EditingMode, KeyCommand};
 use crate::settings::CommandBarStyle;
+use crate::theme::ThemeMode;
 use crate::window::{SlateWindow, MENUS};
 use editor_core::types::CommandMode;
 use editor_core::vim::{VimIntent, VimMode, VimPending};
@@ -18,7 +19,7 @@ pub enum Act {
     Key(KeyCommand),
     Intent(VimIntent),
     Mode(EditingMode),
-    Theme,
+    Theme(ThemeMode),
     Sub(&'static str),
     Prompt(PromptKind),
     Palette,
@@ -148,7 +149,11 @@ pub fn menu_items(name: &str) -> Vec<Item> {
                 CommandBar(CommandBarStyle::Bottom),
             ),
         ],
-        "theme" => vec![it("Dark", "", "", Theme), it("Light", "", "", Theme)],
+        "theme" => vec![
+            it("From config", "", "", Theme(ThemeMode::Config)),
+            it("Dark", "", "", Theme(ThemeMode::Dark)),
+            it("Light", "", "", Theme(ThemeMode::Light)),
+        ],
         "editing" => vec![
             it("Vim", "", "", Mode(EditingMode::Vim)),
             it("Standard", "", "", Mode(EditingMode::Standard)),
@@ -394,7 +399,7 @@ pub fn activate(win: &mut SlateWindow, act: Act, cx: &mut Context<SlateWindow>) 
         Act::Key(k) => win.run_key_command(k, cx),
         Act::Intent(i) => win.run_action(i, cx),
         Act::Mode(m) => win.set_mode(m, cx),
-        Act::Theme => win.toggle_theme(cx),
+        Act::Theme(mode) => win.set_theme(mode, cx),
         Act::Prompt(kind) => open_prompt(win, kind, "", cx),
         Act::Palette => open_palette(win, "", cx),
         Act::CommandBar(style) => win.set_command_bar(style, cx),
@@ -532,7 +537,7 @@ fn menu_row(
     };
     let checked = match item.act {
         Act::Mode(m) => m == win.mode,
-        Act::Theme => (item.label == "Light") == win.light,
+        Act::Theme(mode) => mode == win.theme_mode,
         Act::CommandBar(style) => style == win.command_bar,
         Act::Key(KeyCommand::ToggleSidebar) => win.sidebar,
         Act::Key(KeyCommand::Preview) => win.host.preview,

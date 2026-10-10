@@ -9,7 +9,8 @@ use crate::images::{self, ImageSlot};
 use crate::keys::{self, EditingMode, KeyCommand};
 use crate::note_view::{CommandRun, LineKind, LineView, NoteHost};
 use crate::settings::{CommandBarStyle, Settings};
-use crate::theme::Theme;
+use crate::sidebar_search::{self, Hit};
+use crate::theme::{Theme, ThemeMode};
 use editor_core::markdown_tokens::FenceState;
 use editor_core::vim::{VimAction, VimIntent, VimKey, VimMode, VimPending};
 use gpui::{
@@ -50,6 +51,14 @@ fn word_at(text: &str, col: usize) -> (usize, usize) {
 }
 
 pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Format", "Calc", "Help"];
+/// The sidebar's search box while it has the keyboard.
+#[derive(Default)]
+pub(crate) struct SidebarSearch {
+    query: String,
+    hits: Vec<Hit>,
+    selected: usize,
+}
+
 /// Sidebar entries; the rest of the notes are one search away.
 const SIDEBAR_NOTES: usize = 200;
 /// Unsaved edits are written once typing pauses this long.
@@ -63,7 +72,8 @@ pub struct Fonts {
 pub struct SlateWindow {
     pub(crate) host: NoteHost,
     pub(crate) theme: Theme,
-    pub(crate) light: bool,
+    pub(crate) theme_mode: ThemeMode,
+    theme_config: app_core::config::ThemeConfig,
     pub(crate) command_bar: CommandBarStyle,
     pub(crate) fonts: Fonts,
     pub(crate) focus: FocusHandle,
@@ -83,6 +93,7 @@ pub struct SlateWindow {
     fences: Vec<FenceState>,
     /// Autocomplete popup, with the cursor it was computed for.
     pub(crate) currency: crate::currency::Currency,
+    sidebar_search: Option<SidebarSearch>,
     completion: Option<Completion>,
     completion_pos: (usize, usize),
     completion_min: usize,
@@ -103,12 +114,14 @@ impl SlateWindow {
         currency_problem: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let light = settings.light;
+        let theme_config = app_core::config::load_theme_config();
+        let theme_mode = settings.theme;
         let count = host.doc.lines().len();
         let mut this = Self {
             host,
-            theme: if light { Theme::light() } else { Theme::dark() },
-            light,
+            theme: Theme::for_mode(theme_mode, &theme_config),
+            theme_mode,
+            theme_config,
             command_bar: settings.command_bar,
             fonts,
             focus: cx.focus_handle(),
@@ -126,6 +139,7 @@ impl SlateWindow {
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
             currency,
+            sidebar_search: None,
             completion: None,
             completion_pos: (0, 0),
             completion_min: usize::from(
@@ -306,7 +320,7 @@ impl SlateWindow {
         Settings {
             command_bar: self.command_bar,
             vim: self.mode == EditingMode::Vim,
-            light: self.light,
+            theme: self.theme_mode,
             sidebar: self.sidebar,
         }
         .save();
@@ -322,13 +336,9 @@ impl SlateWindow {
         cx.notify();
     }
 
-    pub(crate) fn toggle_theme(&mut self, cx: &mut Context<Self>) {
-        self.light = !self.light;
-        self.theme = if self.light {
-            Theme::light()
-        } else {
-            Theme::dark()
-        };
+    pub(crate) fn set_theme(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
+        self.theme_mode = mode;
+        self.theme = Theme::for_mode(mode, &self.theme_config);
         self.restyle();
         self.persist();
         cx.notify();
@@ -842,6 +852,16 @@ impl SlateWindow {
             return;
         }
         self.status = None;
+        let k = &ev.keystroke;
+        if k.modifiers.control && k.modifiers.shift && k.key == "f" {
+            self.sidebar = true;
+            self.sidebar_search = Some(SidebarSearch::default());
+            cx.notify();
+            return;
+        }
+        if self.sidebar_search.is_some() && self.sidebar_search_key(ev, cx) {
+            return;
+        }
         if self.host.preview {
             self.preview_key(ev, cx);
             return;
@@ -860,6 +880,53 @@ impl SlateWindow {
                 cx.notify();
             }
         }
+    }
+
+    /// Keys while the sidebar search has focus; `true` when handled.
+    /// Shortcuts with `Ctrl` still reach the app.
+    fn sidebar_search_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let k = &ev.keystroke;
+        if k.modifiers.control || k.modifiers.platform {
+            return false;
+        }
+        let Some(search) = &mut self.sidebar_search else {
+            return false;
+        };
+        match k.key.as_str() {
+            "escape" => self.sidebar_search = None,
+            "enter" => {
+                let id = search.hits.get(search.selected).map(|h| h.id.clone());
+                self.sidebar_search = None;
+                if let Some(id) = id {
+                    self.open_note(&id, cx);
+                }
+            }
+            "down" | "up" => {
+                let n = search.hits.len();
+                if n > 0 {
+                    let step = if k.key == "down" { 1 } else { n - 1 };
+                    search.selected = (search.selected + step) % n;
+                }
+            }
+            "backspace" => {
+                search.query.pop();
+                search.hits = sidebar_search::search(&self.host, &search.query);
+                search.selected = 0;
+            }
+            _ => {
+                if let Some(ch) = k
+                    .key_char
+                    .as_deref()
+                    .filter(|c| !c.chars().any(char::is_control))
+                {
+                    search.query.push_str(ch);
+                    search.hits = sidebar_search::search(&self.host, &search.query);
+                    search.selected = 0;
+                }
+            }
+        }
+        cx.notify();
+        true
     }
 
     /// Preview is read-only: only leaving it, quitting and scrolling work.
@@ -1148,6 +1215,23 @@ impl SlateWindow {
             .reminders()
             .get(&ix)
             .map(|r| r.display_at.clone());
+        // Like a calc result: shown after the text, in the same colour, and
+        // wrapped with the line instead of hanging off its edge. Table rows
+        // have no room after their cells and keep a chip.
+        let line = if let (Some(at), false) =
+            (&reminder, matches!(line.kind, LineKind::TableRow { .. }))
+        {
+            let mut line = line;
+            let ghost = match line.ghost.take() {
+                Some(g) => format!("{g}   ⏰ {at}"),
+                None => format!("⏰ {at}"),
+            };
+            line.ghost = Some(ghost);
+            line
+        } else {
+            line
+        };
+        let reminder = reminder.filter(|_| matches!(line.kind, LineKind::TableRow { .. }));
         let delimiter = line.kind == LineKind::TableDelimiter;
         let table = matches!(line.kind, LineKind::TableRow { .. });
         let in_table = table || delimiter;
@@ -1203,6 +1287,7 @@ impl SlateWindow {
                 cx.listener(move |this, ev: &gpui::MouseDownEvent, window, cx| {
                     window.focus(&this.focus);
                     crate::overlays::close(this);
+                    this.sidebar_search = None;
                     this.mouse_down(ix, ev.position, ev.click_count, cx);
                 }),
             )
@@ -1392,6 +1477,94 @@ impl SlateWindow {
                         }),
                 )
         });
+        let searching = self
+            .sidebar_search
+            .as_ref()
+            .filter(|s| !s.query.trim().is_empty());
+        let hit_rows: Vec<AnyElement> = searching
+            .map(|s| {
+                s.hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, hit)| {
+                        let id = hit.id.clone();
+                        let on = i == s.selected;
+                        div()
+                            .id(("hit", i))
+                            .px(px(10.0))
+                            .py(px(6.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .when(on, |d| d.bg(t.active))
+                            .hover(|s| s.bg(t.active))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.sidebar_search = None;
+                                this.open_note(&id, cx)
+                            }))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .text_color(if on { t.heading } else { t.text })
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(hit.title.clone()),
+                            )
+                            .when_some(hit.snippet.clone(), |d, snippet| {
+                                d.child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(t.faint)
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .child(snippet),
+                                )
+                            })
+                            .into_any_element()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let active = self.sidebar_search.is_some();
+        let query = self
+            .sidebar_search
+            .as_ref()
+            .map(|s| s.query.clone())
+            .unwrap_or_default();
+        let search_box = div()
+            .id("sidebar-search")
+            .mx(px(2.0))
+            .mb(px(8.0))
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded(px(6.0))
+            .bg(t.bg)
+            .border_1()
+            .border_color(if active { t.blue } else { t.border })
+            .text_size(px(12.5))
+            .cursor_text()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.sidebar_search.get_or_insert_with(Default::default);
+                cx.notify();
+            }))
+            .child(if query.is_empty() {
+                div()
+                    .text_color(t.faint)
+                    .child(if active {
+                        "Type to search…"
+                    } else {
+                        "Search notes  (Ctrl+Shift+F)"
+                    })
+                    .into_any_element()
+            } else {
+                div()
+                    .text_color(t.text)
+                    .child(format!("{query}{}", if active { "▏" } else { "" }))
+                    .into_any_element()
+            });
         div()
             .id("sidebar")
             .w(px(248.0))
@@ -1455,7 +1628,12 @@ impl SlateWindow {
                             ),
                     ),
             )
-            .children(items)
+            .child(search_box)
+            .when(searching.is_none(), |d| d.children(items))
+            .children(hit_rows)
+            .when(searching.is_some_and(|s| s.hits.is_empty()), |d| {
+                d.child(div().px(px(10.0)).text_color(t.faint).child("No matches"))
+            })
     }
 
     /// A thin scroll bar on the editor's right edge; drag the thumb or click

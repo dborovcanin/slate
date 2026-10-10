@@ -251,7 +251,13 @@ pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> 
                 .text_size(px(size))
                 .line_height(px(size * 1.4))
                 .text_color(t.heading)
-                .child(text_with_cursor(line, s, layout))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(div().min_w_0().child(text_with_cursor(line, s, layout)))
+                        .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t))),
+                )
                 .into_any_element()
         }
         LineKind::Checklist { checked } => div()

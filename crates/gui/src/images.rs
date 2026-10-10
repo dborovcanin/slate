@@ -113,3 +113,32 @@ mod tests {
         assert!(decode(b"not an image").is_err());
     }
 }
+
+#[cfg(test)]
+mod seed {
+    /// Fills the data dir with a demo note for screenshots:
+    /// `cargo test seed_demo -- --ignored` with `XDG_DATA_HOME` set.
+    #[test]
+    #[ignore]
+    fn seed_demo() {
+        let db =
+            app_core::storage::Db::open(app_core::data_dir().unwrap().join("notes.db")).unwrap();
+        let mut png = Vec::new();
+        image::RgbaImage::from_fn(300, 120, |x, y| {
+            image::Rgba([(x * 255 / 300) as u8, 80, (y * 2) as u8, 255])
+        })
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        db.create_note_with_context("demo", Default::default(), None, None)
+            .unwrap();
+        let sources = app_core::note_sources::NoteSourceService::new(db.clone());
+        let img = sources
+            .import_image_bytes_by_id("demo", None, Some("image/png"), &png)
+            .unwrap();
+        db.save_note(
+            "demo",
+            &format!("# Demo\nsalary := 4200\nrent := 1300\nsal + rent\n\n![Gradient]({})\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n10 EUR to USD\n", img.markdown_path),
+        )
+        .unwrap();
+    }
+}

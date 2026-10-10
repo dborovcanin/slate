@@ -8,6 +8,7 @@ pub mod note_sources;
 pub mod reminders;
 pub mod scripts;
 pub mod storage;
+pub mod theme;
 pub mod web_search;
 
 use calc::CalcEngine;

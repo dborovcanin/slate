@@ -1166,6 +1166,55 @@ mod tests {
         assert!(ghost(&f).contains("30"), "{}", ghost(&f));
     }
 
+    fn table_after(start: (usize, usize), ks: &[VimKey]) -> (Vec<String>, (usize, usize)) {
+        let table = "| Name | Qty |\n| --- | --- |\n| apple | 3 |\n| pear | 4 |";
+        let mut f = fixture(table);
+        f.host.input.vim.mode = VimMode::Insert;
+        f.host.doc.cursor_line = start.0;
+        f.host.doc.cursor_col = start.1;
+        for k in ks {
+            f.host.handle_key(*k);
+        }
+        (
+            f.host.doc.lines().to_vec(),
+            (f.host.doc.cursor_line, f.host.doc.cursor_col),
+        )
+    }
+
+    #[test]
+    fn typing_in_a_table_realigns_the_columns() {
+        let (lines, cursor) = table_after((2, 4), &[VimKey::Char('x')]);
+        assert_eq!(lines[2], "| apxple | 3   |");
+        assert_eq!(lines[0], "| Name   | Qty |");
+        assert_eq!(cursor, (2, 5));
+    }
+
+    #[test]
+    fn table_cursor_moves_by_cell_and_row() {
+        // Left from the first cell's start goes to the previous row's end.
+        let (_, cursor) = table_after((3, 2), &[VimKey::ArrowLeft]);
+        assert_eq!(cursor.0, 2);
+        // Down keeps the column.
+        let (_, cursor) = table_after((2, 4), &[VimKey::ArrowDown]);
+        assert_eq!(cursor.0, 3);
+        // Right at the end of a cell enters the next one.
+        let (_, cursor) = table_after((2, 7), &[VimKey::ArrowRight]);
+        assert_eq!(cursor, (2, 10));
+    }
+
+    #[test]
+    fn table_keys_follow_the_terminal() {
+        let (lines, cursor) = table_after((3, 4), &[VimKey::Enter]);
+        assert_eq!(lines.len(), 5, "Enter on the last row adds a row");
+        assert_eq!(cursor.0, 4);
+        let (_, cursor) = table_after((2, 4), &[VimKey::Tab]);
+        assert_eq!(cursor.0, 2);
+        assert!(cursor.1 > 8, "Tab goes to the next cell: {cursor:?}");
+        // Backspace never eats a pipe.
+        let (lines, _) = table_after((2, 2), &[VimKey::Backspace]);
+        assert!(lines[2].matches('|').count() == 3, "{:?}", lines[2]);
+    }
+
     #[test]
     fn reopening_keeps_standard_mode_in_insert() {
         let mut f = fixture("hello");

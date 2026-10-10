@@ -10,6 +10,7 @@ mod keys;
 mod note_view;
 mod overlays;
 mod settings;
+mod sidebar_search;
 mod switcher;
 mod theme;
 mod window;
@@ -81,7 +82,9 @@ fn main() {
         }
     };
     let mut settings = settings::Settings::load();
-    settings.light |= args.light;
+    if args.light {
+        settings.theme = theme::ThemeMode::Light;
+    }
     Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
         cx.open_window(
