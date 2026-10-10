@@ -193,7 +193,7 @@ mod tests {
             ..Default::default()
         };
         let history = LineHistory::new(500, &doc.lines, 0, column, Arc::new(Vec::new()));
-        let mut session = NoteSession::new(history, Default::default());
+        let mut session = NoteSession::new(history, Default::default(), Default::default());
         session.reminder_ghosts.insert(
             0,
             crate::LineReminderGhost {

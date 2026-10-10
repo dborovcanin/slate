@@ -323,6 +323,7 @@ impl TerminalApp {
             }
             let cursor_col = (idx == self.editor.cursor_line).then_some(self.editor.cursor_col);
             let evals = self
+                .session
                 .calc
                 .cell_results
                 .get(idx)
@@ -1552,7 +1553,7 @@ impl TerminalApp {
                         skip,
                         max_rows,
                         track,
-                        &display.decorations(&self.calc.variable_names),
+                        &display.decorations(&self.session.calc.variable_names),
                         Some((buf, line_x, line_y)),
                     );
                     let used = outcome.rows.saturating_sub(skip).clamp(1, max_rows);
@@ -1618,7 +1619,7 @@ impl TerminalApp {
                         &display.text,
                         viewport.text_width,
                         viewport.text_window_col,
-                        &display.decorations(&self.calc.variable_names),
+                        &display.decorations(&self.session.calc.variable_names),
                         buf,
                         buf_x(buf, col),
                         buf_y(buf, row),
@@ -1885,7 +1886,7 @@ impl TerminalApp {
                     0,
                     usize::MAX,
                     track,
-                    &display.decorations(&self.calc.variable_names),
+                    &display.decorations(&self.session.calc.variable_names),
                     None,
                 );
                 if let Some((row, _)) = outcome.tracked {
@@ -1932,6 +1933,7 @@ impl TerminalApp {
             None
         };
         let mut calc_ghost = self
+            .session
             .calc
             .results
             .get(line_idx)
@@ -1986,6 +1988,7 @@ impl TerminalApp {
                 calc_ghost = None;
 
                 let cell_results = self
+                    .session
                     .calc
                     .cell_results
                     .get(line_idx)

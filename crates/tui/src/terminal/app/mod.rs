@@ -2,7 +2,7 @@ use note_session::{reminder_marks_of, LineReminderGhost, ReminderMarks, Reminder
 mod currency;
 mod scripts;
 use super::adapter::TerminalVimAdapter;
-use super::calc_cache::CalcCache;
+use super::calc_cache::CalcWorkers;
 use super::canvas::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, TextStyle};
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::DatePickerAction;
@@ -682,7 +682,7 @@ struct TerminalApp {
     // DB handle for on-demand cross-note export loading (cheap Arc clone).
     cross_note_db: Db,
     // Calc ghost cache
-    calc: CalcCache,
+    calc_workers: CalcWorkers,
     calc_runtime: CalcRuntime,
     /// Coordinates of edits applied since the last history record, for
     /// moving reminders with them (`note_line_edit`).
@@ -763,11 +763,11 @@ impl TerminalApp {
         // This doesn't guarantee RSS drops immediately (allocator-dependent),
         // but it releases large vector capacities held by app structures.
         self.editor.compact();
-        self.calc.results.shrink_to_fit();
-        self.calc.cell_results.shrink_to_fit();
-        self.calc.variable_names.shrink_to_fit();
-        self.calc.line_metadata.shrink_to_fit();
-        self.calc.prev_line_metadata.shrink_to_fit();
+        self.session.calc.results.shrink_to_fit();
+        self.session.calc.cell_results.shrink_to_fit();
+        self.session.calc.variable_names.shrink_to_fit();
+        self.session.calc.line_metadata.shrink_to_fit();
+        self.session.calc.prev_line_metadata.shrink_to_fit();
         self.folds.line_has_structure.shrink_to_fit();
         self.folds.line_text_snapshot.shrink_to_fit();
         self.folds.range_by_start.shrink_to_fit();
@@ -1091,7 +1091,29 @@ impl TerminalApp {
         };
 
         let mut app = Self {
-            session: note_session::NoteSession::new(history, reminder_ghosts),
+            session: note_session::NoteSession::new(
+                history,
+                reminder_ghosts,
+                note_session::calc::CalcState {
+                    engine: calc_engine,
+                    results: calc_data.line_results,
+                    cell_results: calc_data.cell_results,
+                    variable_names: calc_data.variable_names.into(),
+                    range_context: Default::default(),
+                    pending_result_splices: Vec::new(),
+                    cross_note_refs_scan: None,
+                    cross_note_refs_generation: None,
+                    calc_dependency_index,
+                    line_metadata: line_metadata.clone(),
+                    prev_line_metadata: line_metadata,
+                    stale: defer_initial_full_calc,
+                    cached_has_builtin_formula: initial_has_builtin_formula,
+                    cached_has_variable_assignment: initial_has_variable_assignment,
+                    cached_has_expression: initial_calc_signals.has_expression,
+                    pathological_window_streak: 0,
+                    forced_full_recompute_remaining: 0,
+                },
+            ),
             pending_session_edit: false,
             active_note,
             active_note_key_collection: None,
@@ -1157,27 +1179,7 @@ impl TerminalApp {
             cross_note_var_index,
             cross_note_eval_condvar: Arc::new(Condvar::new()),
             cross_note_db: db.clone(),
-            calc: CalcCache {
-                engine: calc_engine,
-                results: calc_data.line_results,
-                cell_results: calc_data.cell_results,
-                variable_names: calc_data.variable_names.into(),
-                range_context: Default::default(),
-                pending_result_splices: Vec::new(),
-                cross_note_refs_scan: None,
-                cross_note_refs_generation: None,
-                index_build: None,
-                range_context_build: None,
-                calc_dependency_index,
-                line_metadata: line_metadata.clone(),
-                prev_line_metadata: line_metadata,
-                stale: defer_initial_full_calc,
-                cached_has_builtin_formula: initial_has_builtin_formula,
-                cached_has_variable_assignment: initial_has_variable_assignment,
-                cached_has_expression: initial_calc_signals.has_expression,
-                pathological_window_streak: 0,
-                forced_full_recompute_remaining: 0,
-            },
+            calc_workers: CalcWorkers::default(),
             calc_runtime: CalcRuntime {
                 recompute_pending: defer_initial_full_calc,
                 recompute_due_at: None,

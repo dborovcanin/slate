@@ -174,7 +174,7 @@ impl TerminalApp {
                 index.invalidate_calculations();
             }
             // Discard preparation made with the previous rates/exports.
-            self.calc.range_context_build = None;
+            self.calc_workers.range_context_build = None;
             if !self.start_viewport_calc_preparation() {
                 self.recompute_calc_whole_note();
             } else {

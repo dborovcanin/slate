@@ -12,3 +12,6 @@ pub use edit::{EditContext, EditOutcome, SessionEdit};
 mod operations;
 
 mod undo;
+
+pub mod calc;
+pub mod variables;

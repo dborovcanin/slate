@@ -543,7 +543,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 6: undo, dirty and reminder session state.
 - [x] Step 7: session edit pipeline and undo/redo.
 - [x] Step 8: private document text.
-- [ ] Step 9: shared calc state.
+- [x] Step 9: shared calc state.
 - [ ] Step 10: session calc upkeep.
 - [ ] Step 11: calc preparation/index jobs.
 - [ ] Step 12: session fold structure.
@@ -1046,3 +1046,9 @@ capacity trimming uses `compact`. Unicode/trailing-line/cache-generation
 coverage was added. Workspace formatting, clippy (no new warnings), all
 1,318 tests and existing golden cases pass. Read-only diff review found no
 behavior or allocation regression.
+
+Step 9: CalcState and the unchanged lazy VariableNames matcher/tests moved
+to the session crate. CalcWorkers owns both receivers in the terminal;
+CalcRuntime remains host scheduling state. All workspace checks pass with
+no new warnings; read-only extraction review found no initialization or
+receiver-ownership change.

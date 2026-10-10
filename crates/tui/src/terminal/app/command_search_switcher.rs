@@ -3104,36 +3104,36 @@ impl TerminalApp {
         self.rescan_calc_flags();
         self.calc_runtime.viewport_only = self.editor.lines().len() >= CALC_VIEWPORT_ONLY_MIN_LINES
             && self.active_has_variable_assignments()
-            && !self.calc.cached_has_builtin_formula;
+            && !self.session.calc.cached_has_builtin_formula;
         self.calc_runtime.last_view_eval_range = None;
         if self.calc_runtime.viewport_only
-            || (!self.calc.cached_has_builtin_formula
+            || (!self.session.calc.cached_has_builtin_formula
                 && !self.active_has_variable_assignments()
-                && !self.calc.cached_has_expression)
+                && !self.session.calc.cached_has_expression)
         {
-            self.calc.results = vec![None; self.editor.lines().len()];
-            self.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
-            self.calc.variable_names.clear();
-            self.calc.calc_dependency_index = None;
-            self.calc.line_metadata.clear();
-            self.calc.prev_line_metadata.clear();
-            self.calc.stale = false;
-            self.calc.pathological_window_streak = 0;
-            self.calc.forced_full_recompute_remaining = 0;
+            self.session.calc.results = vec![None; self.editor.lines().len()];
+            self.session.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
+            self.session.calc.variable_names.clear();
+            self.session.calc.calc_dependency_index = None;
+            self.session.calc.line_metadata.clear();
+            self.session.calc.prev_line_metadata.clear();
+            self.session.calc.stale = false;
+            self.session.calc.pathological_window_streak = 0;
+            self.session.calc.forced_full_recompute_remaining = 0;
             self.calc_runtime.recompute_pending = false;
             self.calc_runtime.recompute_due_at = None;
             self.calc_runtime.pending_viewport_pass = false;
             self.calc_runtime.pending_full_pass = false;
         } else if self.should_defer_calc_recompute() {
-            self.calc.results = vec![None; self.editor.lines().len()];
-            self.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
-            self.calc.variable_names.clear();
-            self.calc.calc_dependency_index = None;
-            self.calc.line_metadata.clear();
-            self.calc.prev_line_metadata.clear();
-            self.calc.stale = true;
-            self.calc.pathological_window_streak = 0;
-            self.calc.forced_full_recompute_remaining = 0;
+            self.session.calc.results = vec![None; self.editor.lines().len()];
+            self.session.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
+            self.session.calc.variable_names.clear();
+            self.session.calc.calc_dependency_index = None;
+            self.session.calc.line_metadata.clear();
+            self.session.calc.prev_line_metadata.clear();
+            self.session.calc.stale = true;
+            self.session.calc.pathological_window_streak = 0;
+            self.session.calc.forced_full_recompute_remaining = 0;
             self.calc_runtime.recompute_pending = false;
             self.calc_runtime.recompute_due_at = None;
             self.calc_runtime.pending_viewport_pass = false;

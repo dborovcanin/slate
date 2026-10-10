@@ -353,6 +353,7 @@ mod tests {
         let session = NoteSession::new(
             LineHistory::new(32, &doc.lines, 0, 0, Default::default()),
             Default::default(),
+            Default::default(),
         );
         let ctx = EditContext {
             grouping: UndoGrouping {

@@ -391,9 +391,9 @@ fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
     let body = vec!["plain"; 25_000].join("\n");
     let (db, mut app, path) = app_with_note(&body);
 
-    assert!(app.calc.stale);
-    assert!(!app.calc.cached_has_builtin_formula);
-    assert!(!app.calc.cached_has_variable_assignment);
+    assert!(app.session.calc.stale);
+    assert!(!app.session.calc.cached_has_builtin_formula);
+    assert!(!app.session.calc.cached_has_variable_assignment);
 
     app.mode = UiMode::Editor;
     app.editor.cursor_line = app.editor.lines().len().saturating_sub(1);
@@ -415,15 +415,24 @@ fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
         ],
     );
 
-    assert!(app.calc.cached_has_variable_assignment);
-    assert!(!app.calc.stale);
-    assert_eq!(app.calc.prev_line_metadata.len(), app.editor.lines().len());
+    assert!(app.session.calc.cached_has_variable_assignment);
+    assert!(!app.session.calc.stale);
+    assert_eq!(
+        app.session.calc.prev_line_metadata.len(),
+        app.editor.lines().len()
+    );
     assert!(app
+        .session
         .calc
         .prev_line_metadata
         .iter()
         .any(|entry| entry.has_assignment));
-    assert!(app.calc.variable_names.iter().any(|name| name == "total"));
+    assert!(app
+        .session
+        .calc
+        .variable_names
+        .iter()
+        .any(|name| name == "total"));
 
     drop(app);
     drop(db);

@@ -287,7 +287,7 @@ fn app_with_note_and_modules(
 fn wait_for_viewport_calc(app: &mut TerminalApp) {
     for _ in 0..30_000 {
         app.poll_viewport_calc_preparation();
-        if app.calc.range_context_build.is_none() {
+        if app.calc_workers.range_context_build.is_none() {
             return;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -301,7 +301,7 @@ fn settle_idle_calc(app: &mut TerminalApp) {
     app.maybe_recompute_calc_after_idle();
     for _ in 0..5_000 {
         app.maybe_sync_calc_index_after_idle();
-        if app.calc.index_build.is_none() && !app.calc_runtime.index_sync_pending {
+        if app.calc_workers.index_build.is_none() && !app.calc_runtime.index_sync_pending {
             return;
         }
         std::thread::sleep(Duration::from_millis(1));
