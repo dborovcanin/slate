@@ -100,6 +100,12 @@ const DEFAULT_CONFIG: &str = r##"# Slate configuration
 #
 # [keybindings.editor]
 # "<C-r>" = "run meeting 'Project X'"
+#
+# Exchange rates for currency conversion in calculations, fetched in the
+# background at startup when the cached rates are older than refresh_hours.
+# [currency]
+# argv = ["python3", "/absolute/path/to/slate/scripts/examples/rates.py", "EUR"]
+# refresh_hours = 12
 
 [theme]
 # Visual theme palette.
@@ -987,6 +993,15 @@ pub fn load_script_config() -> Result<crate::scripts::ScriptConfig, String> {
     let text =
         fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     crate::scripts::ScriptConfig::parse(&text)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+}
+
+/// Reads `[currency]`; `None` when currency conversion is not configured.
+pub fn load_currency_config() -> Result<Option<crate::currency::CurrencyConfig>, String> {
+    let path = ensure_config_file()?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    crate::currency::parse_currency_config(&text)
         .map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 

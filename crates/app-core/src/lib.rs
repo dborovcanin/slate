@@ -1,6 +1,7 @@
 pub mod calc;
 pub mod config;
 pub mod cross_note;
+pub mod currency;
 pub mod daily;
 pub mod history;
 pub mod note_sources;
