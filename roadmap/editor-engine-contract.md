@@ -31,6 +31,11 @@ This document defines the canonical shared-core contract for editor semantics.
     and retains the existing undo/calc transaction boundary.
   - Offset helpers use bytes and count inter-line newlines. They do not build
     a joined copy of the document.
+- Same-line replacement contract (`editor_core::buffer::replace`):
+  - Character ranges clamp to the line end; plans carry exact pre-edit byte
+    coordinates, a 1-to-1 delta and the resulting character cursor.
+  - Missing lines, reversed ranges, multiline text and unchanged replacements
+    are no-ops. Apply to the unchanged buffer; the host owns transaction order.
 - Primitive buffer contract (`editor_core::buffer::primitives`):
   - Input: lines, `BufferCursor` (line and character column), and
     `PrimitiveEdit` (character/text insertion, newline, Backspace or Delete).

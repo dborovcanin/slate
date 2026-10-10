@@ -537,7 +537,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 0: branch, clean main snapshot and baseline capture.
 - [x] Step 1: Normal-mode undo/redo cursor regression.
 - [x] Step 2: fold upkeep from exact edit spans.
-- [ ] Step 3: core same-line replacement plans.
+- [x] Step 3: core same-line replacement plans.
 - [ ] Step 4: core line insertion/removal plans.
 - [ ] Step 5: document crate and terminal view separation.
 - [ ] Step 6: undo, dirty and reminder session state.
@@ -565,6 +565,11 @@ Step 2: exact deltas locate off-cursor fold edits; unchanged same-line edits
 retain their snapshot allocation. Core regression tests and workspace checks
 passed, with no new Clippy warnings. Release large-note gates passed; no
 30k/100k metric crossed the investigation threshold against the lower baseline.
+
+Step 3: same-line replacements use character ranges and exact byte metadata
+from editor-core. Unicode, deletion, clamping and no-op cases pass. Calc trailer
+rewrites retain their existing enclosing transaction; all workspace checks
+passed with unchanged golden fixtures and no new Clippy warnings.
 
 Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
 could not create a private runtime image; the approved rerun passed. Baseline

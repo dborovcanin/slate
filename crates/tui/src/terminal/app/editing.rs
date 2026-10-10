@@ -22,8 +22,8 @@ use crate::editor_core::buffer::primitives::{
 };
 use crate::editor_core::buffer::words::{self, BackwardWordDelete};
 use crate::editor_core::buffer::{
-    apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
-    map_offset_through_changes, prepare_text_change, EditDelta,
+    apply_line_replace, apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
+    map_offset_through_changes, prepare_line_replace, prepare_text_change, EditDelta,
 };
 use crate::editor_core::history::policy::{UndoGrouping, UndoSession};
 use crate::editor_core::history::HistoryCursor;
@@ -1724,7 +1724,11 @@ impl TerminalApp {
                     cursor_col,
                 );
                 if let Some((eq_idx, new_tail)) = refresh {
-                    self.editor.lines[i].replace_range(eq_idx.., &new_tail);
+                    // Keep this rewrite inside the originating calc/edit transaction.
+                    // Calling mark_edited here would recursively start calc.
+                    let from_col = char_col_at_byte(&self.editor.lines[i], eq_idx);
+                    let to_col = line_char_len(&self.editor.lines[i]);
+                    self.replace_line_chars(i, from_col..to_col, &new_tail);
                     // Line is back in sync with the backend, reflect it in
                     // the cached result so the ghost widget disappears and
                     // the next eligibility round still sees prev-None here.
@@ -2212,6 +2216,18 @@ impl TerminalApp {
         true
     }
 
+    fn replace_line_chars(
+        &mut self,
+        line: usize,
+        range: std::ops::Range<usize>,
+        text: &str,
+    ) -> Option<EditDelta> {
+        let prepared = prepare_line_replace(&self.editor.lines, line, range, text)?;
+        let delta = prepared.delta;
+        apply_line_replace(&mut self.editor.lines, prepared);
+        Some(delta)
+    }
+
     pub(super) fn apply_variable_autocomplete_pick(
         &mut self,
         from_col: usize,
@@ -2224,12 +2240,12 @@ impl TerminalApp {
             return false;
         }
 
-        let from_byte = byte_index(self.current_line(), from_col);
-        let to_byte = byte_index(self.current_line(), to_col);
-        self.editor.lines[self.editor.cursor_line].replace_range(from_byte..to_byte, &pick);
+        let delta = self.replace_line_chars(self.editor.cursor_line, from_col..to_col, &pick);
         self.editor.cursor_col = from_col + pick.chars().count();
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-        self.mark_edited();
+        if let Some(delta) = delta {
+            self.mark_edited_with_delta(delta);
+        }
         self.status = format!("autocomplete: {pick}");
         self.dismiss_variable_autocomplete_popup();
         true
@@ -2315,7 +2331,11 @@ impl TerminalApp {
         let should_reflow_table = self.note_table_module_enabled() && is_markdown_table_line(&text);
 
         if let Some((from_byte, to_byte)) = find_calc_segment_range(&text) {
-            self.editor.lines[self.editor.cursor_line].replace_range(from_byte..to_byte, &result);
+            let delta = self.replace_line_chars(
+                self.editor.cursor_line,
+                char_col_at_byte(&text, from_byte)..char_col_at_byte(&text, to_byte),
+                &result,
+            );
             self.editor.cursor_col = self.editor.lines[self.editor.cursor_line]
                 [..from_byte.saturating_add(result.len())]
                 .chars()
@@ -2324,7 +2344,9 @@ impl TerminalApp {
                 self.try_autoformat_rules();
             }
             self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-            self.mark_edited();
+            if let Some(delta) = delta {
+                self.mark_edited_with_delta(delta);
+            }
             return true;
         }
 
@@ -2335,15 +2357,20 @@ impl TerminalApp {
                 .find(|seg| cursor_col >= seg.cell_from_char && cursor_col <= seg.cell_to_char)
                 .or_else(|| find_table_formula_segments(&text).into_iter().next());
             if let Some(seg) = formula {
-                self.editor.lines[self.editor.cursor_line]
-                    .replace_range(seg.from_byte..seg.to_byte, &result);
+                let delta = self.replace_line_chars(
+                    self.editor.cursor_line,
+                    char_col_at_byte(&text, seg.from_byte)..char_col_at_byte(&text, seg.to_byte),
+                    &result,
+                );
                 self.editor.cursor_col = self.editor.lines[self.editor.cursor_line]
                     [..seg.from_byte.saturating_add(result.len())]
                     .chars()
                     .count();
                 self.try_autoformat_rules();
                 self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                self.mark_edited_current_line();
+                if let Some(delta) = delta {
+                    self.mark_edited_with_delta(delta);
+                }
                 return true;
             }
         }
@@ -3771,12 +3798,14 @@ impl TerminalApp {
         if from_byte == to_byte {
             return;
         }
-        self.editor.lines[line_idx].replace_range(from_byte..to_byte, "");
+        let delta = self.replace_line_chars(line_idx, hash_col..end_col, "");
         if self.editor.cursor_line == line_idx {
             self.editor.cursor_col = hash_col;
         }
         self.refresh_calc_line_metadata_at(line_idx);
-        self.mark_edited();
+        if let Some(delta) = delta {
+            self.mark_edited_with_delta(delta);
+        }
     }
 
     pub(super) fn cancel_wiki_link_autocomplete(&mut self) {
@@ -4032,9 +4061,8 @@ impl TerminalApp {
             end_col += 1;
         }
 
-        let from_byte = byte_index(&line, from_col);
-        let to_byte = byte_index(&line, end_col);
-        self.editor.lines[self.editor.cursor_line].replace_range(from_byte..to_byte, &replacement);
+        let delta =
+            self.replace_line_chars(self.editor.cursor_line, from_col..end_col, &replacement);
         if heading.is_some() {
             self.editor.cursor_col = from_col + replacement.chars().count();
         } else {
@@ -4042,7 +4070,9 @@ impl TerminalApp {
             self.editor.cursor_col = from_col + 2 + note_id.chars().count() + 1;
         }
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-        self.mark_edited();
+        if let Some(delta) = delta {
+            self.mark_edited_with_delta(delta);
+        }
         if heading.is_some() {
             self.wiki_link_autocomplete_popup.pending_heading_note_id = None;
             self.dismiss_wiki_link_autocomplete();
