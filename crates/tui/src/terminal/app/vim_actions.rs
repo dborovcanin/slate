@@ -3,7 +3,6 @@ use super::{
     line_char_len, Db, Key, TerminalApp, TerminalVimAdapter, UiMode, VimMacroStep,
     VimPipelineResult, VimRegister, VimRegisterMode,
 };
-use crate::terminal::text_utils::join_lines;
 
 const VIM_MACRO_REPLAY_STEP_BUDGET: usize = 10_000;
 
@@ -179,9 +178,7 @@ impl TerminalApp {
             )?;
             return Some((result, scope_start_offset));
         }
-        if self.editor.joined_text_cache.is_none() {
-            self.editor.joined_text_cache = Some(join_lines(self.editor.lines()));
-        }
+        self.editor.ensure_joined_text();
         let fallback_cursor =
             self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
         let selection =
@@ -191,7 +188,7 @@ impl TerminalApp {
                     head: fallback_cursor,
                 });
         let register = self.shared_vim_register();
-        let text: &str = self.editor.joined_text_cache.as_deref().unwrap();
+        let text: &str = self.editor.joined_text_cached().unwrap_or_default();
         let result = crate::editor_core::vim_actions::execute_vim_action_with_target(
             text,
             selection,

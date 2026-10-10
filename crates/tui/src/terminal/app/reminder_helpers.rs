@@ -58,7 +58,7 @@ impl TerminalApp {
     pub(super) fn load_reminders(&mut self, db: &Db) -> Result<(), String> {
         let ghosts = load_reminder_ghosts(
             db,
-            &self.session.note_id,
+            self.session.note_id(),
             self.editor.lines(),
             self.session.editable(),
         )?;
@@ -68,7 +68,7 @@ impl TerminalApp {
 
     #[cfg(test)]
     pub(super) fn reminder_marks(&self) -> ReminderMarks {
-        reminder_marks_of(&self.session.reminder_ghosts)
+        reminder_marks_of(self.session.reminders())
     }
 
     /// Whether reminders changed since they were last stored.
@@ -86,7 +86,7 @@ impl TerminalApp {
     /// the next save of the text.
     #[cfg(test)]
     pub(super) fn reminders_changed_outside_text(&mut self, db: &Db) {
-        if self.session.reminder_changed_outside_text() {
+        if self.session.reminder_changed_outside_text_for_tests() {
             self.reminder_session_changed(db);
         }
     }
@@ -100,12 +100,13 @@ impl TerminalApp {
     /// Stores reminder changes on their own while the stored text is the
     /// buffer's, checked against its revision.
     pub(super) fn persist_reminders_if_text_saved(&mut self, db: &Db) {
-        if self.session.dirty || !self.reminders_unsaved() || !self.active_note_holds_reminders() {
+        if self.session.dirty() || !self.reminders_unsaved() || !self.active_note_holds_reminders()
+        {
             return;
         }
         // An autosave in flight decides the stored revision first.
         self.poll_background_save(db, true);
-        if self.session.dirty || !self.reminders_unsaved() {
+        if self.session.dirty() || !self.reminders_unsaved() {
             return;
         }
         let Some(job) = self
@@ -127,12 +128,6 @@ impl TerminalApp {
     /// even where an empty line is left behind, as for the note's only line.
     /// The text change alone cannot tell that from emptying a line.
     pub(super) fn drop_reminders_on_deleted_lines(&mut self, start: usize, end: usize) {
-        let before = self.session.reminder_ghosts.len();
-        self.session
-            .reminder_ghosts
-            .retain(|line, _| *line < start || *line > end);
-        if self.session.reminder_ghosts.len() != before {
-            self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
-        }
+        self.session.drop_reminders_on_lines(start, end);
     }
 }

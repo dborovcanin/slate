@@ -844,9 +844,9 @@ impl TerminalApp {
                 }
                 self.adjust_scroll();
                 self.status = if redo {
-                    format!("redo ({} left)", self.session.history.redo_depth())
+                    format!("redo ({} left)", self.session.redo_depth())
                 } else {
-                    format!("undo ({} left)", self.session.undo_policy.undo_depth())
+                    format!("undo ({} left)", self.session.undo_depth())
                 };
             }
             note_session::SessionUndoOutcome::Reminder { line_idx } => {
@@ -2473,7 +2473,7 @@ impl TerminalApp {
             let note_id = self.active_note.id.clone();
             // Viewport evaluations repeat on every scroll step and edit;
             // rescan only the lines that changed since the last scan.
-            let generation = self.editor.text_generation;
+            let generation = self.editor.text_generation();
             let (line_hashes, refs) = self.session.calc.cross_note_refs(&self.editor);
             self.preload_cross_note_deps_for_refs(&refs);
             let extern_vars = if let Ok(mut index) = self.cross_note_var_index.lock() {

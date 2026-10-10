@@ -39,8 +39,17 @@ impl NoteSession {
     /// Keep protection metadata current after a host-side unlock/encryption operation.
     pub fn set_note_metadata(&mut self, note: &Note) {
         self.stored_revision = note.updated_at.clone();
-        self.access_mode = note.access_mode;
-        self.is_unlocked = note.is_unlocked;
+        self.set_protection(note.access_mode, note.is_unlocked);
+    }
+    /// Encryption or unlock state changed outside the editor; the text is kept.
+    pub fn set_protection(&mut self, access_mode: NoteAccessMode, is_unlocked: bool) {
+        self.access_mode = access_mode;
+        self.is_unlocked = is_unlocked;
+    }
+    /// A still-locked note has no text to compare with; track its stored
+    /// revision so the change is not reported again.
+    pub fn acknowledge_locked_revision(&mut self, revision: String) {
+        self.stored_revision = revision;
     }
     pub fn editable(&self) -> bool {
         self.access_mode == NoteAccessMode::None || self.is_unlocked

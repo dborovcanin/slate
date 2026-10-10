@@ -866,7 +866,7 @@ impl TerminalApp {
         use crate::editor_core::command_catalog::NoteSecurityAction;
         let action_label = action.as_str();
         // The note is re-read from the store, so unsaved edits must land first.
-        if self.session.dirty && !self.can_leave_note(db) {
+        if self.session.dirty() && !self.can_leave_note(db) {
             return;
         }
         let result = match action {
@@ -897,8 +897,7 @@ impl TerminalApp {
     fn unlock_active_note(&mut self, db: &Db, password: &str) -> Result<(), String> {
         let note = db.unlock_note(&self.active_note.id, password)?;
         // Only a buffer that was unlocked before holds the note's real text.
-        if self.session.dirty && self.session.is_unlocked {
-            self.session.is_unlocked = true;
+        if self.session.dirty() && self.session.is_unlocked() {
             self.save(db)?;
         } else {
             self.set_active_note(db, note)?;
@@ -1729,7 +1728,7 @@ impl TerminalApp {
                         self.status = "usage: backup export <path.zip>".to_string();
                         return;
                     };
-                    if self.session.dirty {
+                    if self.session.dirty() {
                         if let Err(error) = self.save(db) {
                             self.status = format!("backup failed: save failed: {error}");
                             return;
@@ -1757,7 +1756,7 @@ impl TerminalApp {
                         self.status = "usage: backup load <path.zip>".to_string();
                         return;
                     };
-                    if self.session.dirty {
+                    if self.session.dirty() {
                         if let Err(error) = self.save(db) {
                             self.status = format!("backup load failed: save failed: {error}");
                             return;
@@ -2007,10 +2006,8 @@ impl TerminalApp {
     }
 
     pub(super) fn joined_text_cached_ref(&mut self) -> &str {
-        if self.editor.joined_text_cache.is_none() {
-            self.editor.joined_text_cache = Some(join_lines(self.editor.lines()));
-        }
-        self.editor.joined_text_cache.as_deref().unwrap()
+        self.editor.ensure_joined_text();
+        self.editor.joined_text_cached().unwrap_or_default()
     }
 
     pub(super) fn build_snapshot(&mut self) -> crate::editor_core::types::EditorContextSnapshot {
@@ -2366,7 +2363,7 @@ impl TerminalApp {
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
-        if !self.session.editable() && (self.session.dirty || self.session.reminders_unsaved()) {
+        if !self.session.editable() && (self.session.dirty() || self.session.reminders_unsaved()) {
             return Err("note is locked; unlock first".to_string());
         }
         let Some(job) = self.session.request_save(
@@ -2415,7 +2412,7 @@ impl TerminalApp {
             self.execute_terminal_command(db, "format");
         }
         if !self.session.editable() {
-            if self.session.dirty || self.session.reminders_unsaved() {
+            if self.session.dirty() || self.session.reminders_unsaved() {
                 self.set_locked_note_status();
             }
             return Ok(());
@@ -2503,7 +2500,7 @@ impl TerminalApp {
                 Ok(()) => return true,
                 Err(error) => format!("save failed: {error}"),
             }
-        } else if self.session.dirty || self.reminders_unsaved() {
+        } else if self.session.dirty() || self.reminders_unsaved() {
             "no write since last change".to_string()
         } else {
             return true;
@@ -2530,8 +2527,6 @@ impl TerminalApp {
         self.editor.cursor_col = col;
         self.adjust_cursor();
         self.adjust_scroll();
-        self.session.autosave_paused_at = None;
-        self.session.leave_refused_at = None;
         Ok(())
     }
 
@@ -2586,10 +2581,10 @@ impl TerminalApp {
         let locked = note.access_mode != NoteAccessMode::None && !note.is_unlocked;
         if locked && !self.active_note_is_editable() {
             // Still locked here: there is no text to show, only a revision.
-            self.session.stored_revision = note.updated_at;
+            self.session.acknowledge_locked_revision(note.updated_at);
             return;
         }
-        if locked || note.access_mode != self.session.access_mode {
+        if locked || note.access_mode != self.session.access_mode() {
             // Encrypted or decrypted elsewhere: a locked note has no text to
             // diff against, so open it afresh, as switching to it would. A
             // locked one asks for its password at the first edit.
@@ -2608,7 +2603,6 @@ impl TerminalApp {
             } else {
                 "note was decrypted outside Slate; reloaded".to_string()
             };
-            self.session.outside_change_reported = None;
             self.render_state.dirty = true;
             return;
         }
@@ -2628,7 +2622,7 @@ impl TerminalApp {
 
     fn update_switcher_item_after_body_save(&mut self) {
         let note_id = &self.active_note.id;
-        let updated_at = self.session.stored_revision.clone();
+        let updated_at = self.session.stored_revision().to_owned();
         if let Some(item) = self.switcher.items.iter_mut().find(|i| &i.id == note_id) {
             item.updated_at = updated_at;
         }
@@ -2645,14 +2639,14 @@ impl TerminalApp {
         }
         self.last_reminder_check = Instant::now();
 
-        if self.session.reminder_ghosts.is_empty() {
+        if self.session.reminders().is_empty() {
             return;
         }
 
         let now_ms = notifications::now_epoch_ms();
         let mut due_lines = self
             .session
-            .reminder_ghosts
+            .reminders()
             .iter()
             .filter_map(|(line_idx, reminder)| {
                 if reminder.reminded_at_ms.is_none() && reminder.remind_at_ms <= now_ms {
@@ -2668,7 +2662,7 @@ impl TerminalApp {
         }
 
         for line_idx in due_lines {
-            let Some(reminder) = self.session.reminder_ghosts.get(&line_idx).cloned() else {
+            let Some(reminder) = self.session.reminders().get(&line_idx).cloned() else {
                 continue;
             };
             let body = self
@@ -2693,7 +2687,7 @@ impl TerminalApp {
                 continue;
             }
 
-            if let Some(mut entry) = self.session.reminder_ghosts.get(&line_idx).cloned() {
+            if let Some(mut entry) = self.session.reminders().get(&line_idx).cloned() {
                 entry.reminded_at_ms = Some(now_ms);
                 if self
                     .session
@@ -3027,11 +3021,7 @@ impl TerminalApp {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);
         }
-        self.session.history.checkpoint(
-            self.editor.lines(),
-            self.editor.cursor_line,
-            self.editor.cursor_col,
-        );
+        self.session.checkpoint_history(&self.editor);
         self.maybe_compact_buffers_after_note_switch();
         Ok(())
     }

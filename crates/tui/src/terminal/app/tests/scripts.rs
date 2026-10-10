@@ -222,8 +222,7 @@ fn locked_note_cannot_run_scripts_and_registered_names_complete() {
     app.command_input = "run ex".into();
     assert!(app.open_command_completion_menu());
     assert_eq!(app.command_input, "run example");
-    app.session.access_mode = NoteAccessMode::Encrypted;
-    app.session.is_unlocked = false;
+    app.session.set_protection(NoteAccessMode::Encrypted, false);
     app.execute_terminal_command(&db, "run example");
     assert!(app.status.contains("locked"));
     assert_eq!(app.editor.lines(), vec!["original"]);
@@ -254,12 +253,12 @@ fn selection_script_copies_selected_lines_without_joining_whole_note() {
         ScriptInput::Selection,
         ScriptOutput::ReplaceSelection,
     );
-    app.editor.joined_text_cache = None;
+    app.editor.clear_joined_text_cache();
     app.mode = UiMode::Visual;
     app.editor.cursor_line = 5000;
     app.editor.selection_anchor = Some((5000, 0));
     app.execute_terminal_command(&db, "run example");
-    assert!(app.editor.joined_text_cache.is_none());
+    assert!(app.editor.joined_text_cached().is_none());
     wait_for_result(&mut app);
     assert_eq!(app.editor.lines()[5000], "É tail");
     assert_eq!(app.editor.lines()[0], "unselected line");

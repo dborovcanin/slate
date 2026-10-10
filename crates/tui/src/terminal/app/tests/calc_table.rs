@@ -2659,7 +2659,7 @@ fn unchanged_autocomplete_moves_to_word_end_without_recording_an_edit() {
     assert!(app.apply_variable_autocomplete_pick(0, 4, "base".into()));
     assert_eq!(app.editor.cursor_col, 4);
     assert_eq!(app.session.edit_seq(), seq);
-    assert!(!app.session.dirty);
+    assert!(!app.session.dirty());
     cleanup_db_files(&path);
 }
 
@@ -2668,11 +2668,11 @@ fn calc_tab_followed_by_table_format_is_not_recorded_a_third_time() {
     let (db, mut app, path) = app_with_note("x := 4\n| value| x + 2 |");
     app.editor.cursor_line = 1;
     app.editor.cursor_col = line_char_len(app.current_line());
-    let before = app.session.edit_seq;
+    let before = app.session.edit_seq();
     app.handle_editor_key(&db, Key::Tab).expect("tab applies");
     assert_eq!(app.editor.lines()[1], "| value | 6 |");
     assert_eq!(
-        app.session.edit_seq - before,
+        app.session.edit_seq() - before,
         2,
         "replacement and formatting each finalize once"
     );

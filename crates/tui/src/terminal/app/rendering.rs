@@ -434,7 +434,7 @@ impl TerminalApp {
             Some(title) => title.clone(),
             None => derive_title_from_lines(self.editor.lines()),
         };
-        let dirty = if self.session.dirty { " •" } else { "" };
+        let dirty = if self.session.dirty() { " •" } else { "" };
         let mut badges = Vec::new();
         if crate::file_path_from_note_id(&self.active_note.id).is_some() {
             badges.push("FILE");
@@ -1936,7 +1936,7 @@ impl TerminalApp {
                 rendered_line = Cow::Owned(rendered);
                 wiki_link_underline_ranges = underlines;
             }
-            if let Some(reminder) = self.session.reminder_ghosts.get(&line_idx) {
+            if let Some(reminder) = self.session.reminders().get(&line_idx) {
                 reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
                 reminder_strikethrough = reminder.remind_at_ms <= now_ms;
             }

@@ -164,7 +164,7 @@ fn rename_pins_titles_without_touching_the_text() {
     type_text(&mut app, &db, "Budget 2027");
     app.handle_key(&db, Key::Enter).expect("submit");
     assert_eq!(app.editor.lines()[0], "# Budget");
-    assert!(!app.session.dirty);
+    assert!(!app.session.dirty());
     assert_eq!(app.active_note.pinned_title.as_deref(), Some("Budget 2027"));
     assert!(app
         .browser
@@ -489,7 +489,7 @@ fn restoring_the_open_note_edits_its_buffer_and_history_opens_from_everywhere() 
         let replacement: Vec<String> = vec!["# Budget".into(), "rent := 1500".into()];
         app.editor.set_text(&replacement.join("\n"));
     };
-    app.session.dirty = true;
+    app.session.set_dirty_for_tests(true);
     app.save(&db).expect("save");
 
     app.execute_terminal_command(&db, "history");

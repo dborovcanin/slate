@@ -102,17 +102,15 @@ impl Host {
         }
     }
     fn add_reminder(&mut self, line: usize) {
-        self.session.reminder_ghosts.insert(
-            line,
-            LineReminderGhost {
-                remind_at_ms: 10,
-                display_at: "soon".into(),
-                line_text: self.doc.lines()[line].clone(),
-                reminded_at_ms: None,
-            },
-        );
-        self.session.reminders_generation += 1;
-        self.session.note_changed();
+        let mark = LineReminderGhost {
+            remind_at_ms: 10,
+            display_at: "soon".into(),
+            line_text: self.doc.lines()[line].clone(),
+            reminded_at_ms: None,
+        };
+        assert!(self
+            .session
+            .set_reminder(&self.doc, line, Some(mark), false));
     }
 }
 impl Drop for Host {
@@ -148,7 +146,7 @@ fn synchronous_and_delayed_saves_acknowledge_storage_without_losing_newer_typing
             current: false
         }
     );
-    assert!(host.session.dirty);
+    assert!(host.session.dirty());
     assert_eq!(host.doc.lines(), &["λéoriginal"]);
     assert_eq!(host.db.get_note("a").unwrap().unwrap().body, "λoriginal");
     let latest = run_save(host.save_job(false), &host.db);
@@ -159,14 +157,15 @@ fn synchronous_and_delayed_saves_acknowledge_storage_without_losing_newer_typing
             current: true
         }
     );
-    let revision = host.session.stored_revision.clone();
+    let revision = host.session.stored_revision().to_owned();
     assert_eq!(host.db.get_note("a").unwrap().unwrap().body, "λéoriginal");
     host.ack(duplicate);
     assert_eq!(
-        host.session.stored_revision, revision,
+        host.session.stored_revision(),
+        revision,
         "late acknowledgement cannot roll revision back"
     );
-    assert!(!host.session.dirty);
+    assert!(!host.session.dirty());
     assert!(host
         .session
         .request_save(&mut host.doc, SaveContext::default())
@@ -226,16 +225,16 @@ fn joins_and_block_replacements_preserve_reminder_ownership_through_history() {
     host.add_reminder(2);
     // Installed marks are the persisted baseline for this history round.
     host.session
-        .install_reminders(host.session.reminder_ghosts.clone());
+        .install_reminders(host.session.reminders().clone());
     host.doc.cursor_line = 1;
     host.doc.cursor_col = 0;
     host.edit(SessionEdit::Primitive(PrimitiveEdit::Backspace));
     assert_eq!(host.doc.lines(), &["leftright", "last"]);
-    assert!(host.session.reminder_ghosts.contains_key(&0));
-    assert!(host.session.reminder_ghosts.contains_key(&1));
+    assert!(host.session.reminders().contains_key(&0));
+    assert!(host.session.reminders().contains_key(&1));
     host.session.undo(&mut host.doc).unwrap();
     assert_eq!(host.doc.lines(), &["left", "right", "last"]);
-    assert!(host.session.reminder_ghosts.contains_key(&2));
+    assert!(host.session.reminders().contains_key(&2));
     host.session.redo(&mut host.doc).unwrap();
     assert_eq!(host.doc.lines(), &["leftright", "last"]);
     let op = host
@@ -244,7 +243,7 @@ fn joins_and_block_replacements_preserve_reminder_ownership_through_history() {
         .unwrap();
     host.edit(SessionEdit::Operation(&op));
     assert_eq!(host.doc.lines(), &["replacement", "last"]);
-    assert!(host.session.reminder_ghosts.contains_key(&1));
+    assert!(host.session.reminders().contains_key(&1));
     host.session.undo(&mut host.doc).unwrap();
     assert_eq!(host.doc.lines(), &["leftright", "last"]);
     host.session.redo(&mut host.doc).unwrap();

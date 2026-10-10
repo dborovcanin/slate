@@ -196,12 +196,7 @@ impl NoteSession {
                 text_changed = plan.text_changed;
                 if let Some((start, end)) = plan.deleted_lines {
                     // Deletion discards ownership even when a matching empty slot survives.
-                    let before = self.reminder_ghosts.len();
-                    self.reminder_ghosts
-                        .retain(|line, _| *line < start || *line > end);
-                    if self.reminder_ghosts.len() != before {
-                        self.reminders_generation = self.reminders_generation.wrapping_add(1);
-                    }
+                    self.drop_reminders_on_lines(start, end);
                     self.record_block(delta, vec![None; delta.old_span]);
                 }
                 if let Some(edit) = plan.exact_edit {

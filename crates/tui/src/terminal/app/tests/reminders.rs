@@ -19,7 +19,8 @@ fn app_with_reminders(body: &str, lines: &[usize]) -> (Db, TerminalApp, PathBuf)
         .expect("reminder");
     }
     app.load_reminders(&db).expect("reminders");
-    app.session.history.set_marks(app.reminder_marks());
+    let marks = app.reminder_marks();
+    app.session.history_mut_for_tests().set_marks(marks);
     app.autosave_enabled = false;
     app.mode = UiMode::Normal;
     (db, app, path)
@@ -29,7 +30,7 @@ fn app_with_reminders(body: &str, lines: &[usize]) -> (Db, TerminalApp, PathBuf)
 fn shown(app: &TerminalApp) -> Vec<(usize, i64, String, Option<i64>)> {
     let mut rows: Vec<_> = app
         .session
-        .reminder_ghosts
+        .reminders()
         .iter()
         .map(|(line, ghost)| {
             (
@@ -108,7 +109,7 @@ fn backward_word_delete_preserves_unicode_reminders_and_physical_line_joins() {
     assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
     app.undo(&db);
     assert_eq!(app.editor.lines()[0], "αβ_γ !!");
-    app.session.history.break_coalescing();
+    app.session.break_undo_coalescing();
     app.editor.cursor_line = 2;
     app.editor.cursor_col = 0;
     app.folds.visible_to_real = vec![0, 2];
@@ -313,12 +314,12 @@ fn a_merged_edit_that_cancels_itself_keeps_history_aligned() {
     // Typing and erasing a character on the reminded line, where the step
     // began: the merged step cancels itself and is dropped.
     app.editor.cursor_col = 0;
-    let depth = app.session.history.undo_depth();
+    let depth = app.session.history().undo_depth();
     run_keys(&mut app, &db, &[Key::Char('i'), Key::Char('x')]);
-    assert_eq!(app.session.history.undo_depth(), depth + 1);
+    assert_eq!(app.session.history().undo_depth(), depth + 1);
     run_keys(&mut app, &db, &[Key::Backspace]);
     assert_eq!(
-        app.session.history.undo_depth(),
+        app.session.history().undo_depth(),
         depth,
         "the step cancelled itself"
     );
@@ -389,7 +390,7 @@ fn reminder_changes_interleaved_with_text_undo_in_order() {
 fn notification_state_moves_and_saves_with_the_reminder() {
     let (db, mut app, path) = app_with_reminders("milk\nend", &[0]);
     app.session
-        .reminder_ghosts
+        .reminders_mut_for_tests()
         .get_mut(&0)
         .expect("ghost")
         .reminded_at_ms = Some(5);
@@ -467,8 +468,9 @@ fn changing_a_line_keeps_its_reminder() {
 fn reminders_deferred_at_startup_load_before_the_first_edit() {
     let (db, mut app, path) = app_with_reminders("- [ ] buy milk\n- [ ] buy eggs", &[0]);
     // As at startup with background tasks: not loaded yet.
-    app.session.reminder_ghosts.clear();
-    app.session.history.set_marks(app.reminder_marks());
+    app.session.reminders_mut_for_tests().clear();
+    let marks = app.reminder_marks();
+    app.session.history_mut_for_tests().set_marks(marks);
     app.startup_reminder_hydration_pending = true;
     run_keys(&mut app, &db, &DD);
     assert_eq!(shown(&app), vec![]);
@@ -484,12 +486,13 @@ fn reminders_deferred_at_startup_load_before_the_first_edit() {
 #[test]
 fn a_stale_session_cannot_write_over_reminder_changes() {
     let (db, mut app, path) = app_with_reminders("milk\nend", &[0]);
-    let stale_revision = app.session.stored_revision.clone();
+    let stale_revision = app.session.stored_revision().to_owned();
     // This session removes the reminder; the text is saved, so it is stored.
     command(&mut app, &db, "remind toggle");
     assert_eq!(stored(&db), vec![]);
     assert_ne!(
-        app.session.stored_revision, stale_revision,
+        app.session.stored_revision(),
+        stale_revision,
         "the revision moved"
     );
     // Another session still holding the old revision is refused.
@@ -533,10 +536,11 @@ fn deleting_one_of_two_identical_lines_keeps_the_others_reminder() {
 #[test]
 fn reminders_follow_text_reloaded_after_an_outside_change() {
     let (db, mut app, path) = app_with_reminders("a\nb\nc", &[1]);
-    app.session.stored_revision = db
-        .get_note_updated_at("n1")
-        .expect("revision")
-        .expect("note");
+    app.session.acknowledge_locked_revision(
+        db.get_note_updated_at("n1")
+            .expect("revision")
+            .expect("note"),
+    );
     std::thread::sleep(std::time::Duration::from_millis(2));
     db.save_note("n1", "new\na\nb\nc").expect("outside edit");
 

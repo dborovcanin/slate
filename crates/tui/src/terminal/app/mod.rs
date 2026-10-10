@@ -733,7 +733,7 @@ impl TerminalApp {
         self.folds.real_to_visible.shrink_to_fit();
         self.folds.hidden_owner.shrink_to_fit();
         self.folds.placeholder_hidden_lines.shrink_to_fit();
-        self.session.history.compact();
+        self.session.compact_history();
     }
 
     pub(super) fn working_collection_status_suffix(&self) -> String {
@@ -835,7 +835,7 @@ impl TerminalApp {
     }
 
     fn require_startup_password_if_needed(&mut self, db: &Db) {
-        if self.session.access_mode == NoteAccessMode::None || self.session.is_unlocked {
+        if self.session.access_mode() == NoteAccessMode::None || self.session.is_unlocked() {
             return;
         }
         self.active_note_key_collection = db
@@ -872,14 +872,14 @@ impl TerminalApp {
             note_id: self.active_note.id.clone(),
             note_title,
             collection: self.active_note_key_collection.clone(),
-            access_mode: self.session.access_mode,
+            access_mode: self.session.access_mode(),
             password: String::new(),
             line_number: None,
         });
         self.switcher.delete_confirm = None;
         self.status = format!(
             "password required to open {}",
-            Self::access_mode_prompt_label(self.session.access_mode)
+            Self::access_mode_prompt_label(self.session.access_mode())
         );
     }
 
@@ -1356,7 +1356,7 @@ impl TerminalApp {
     /// first, so they stay in the database the restore sets aside.
     fn apply_staged_restore(&mut self, db: &Db) -> Result<String, String> {
         self.poll_background_save(db, true);
-        if self.session.dirty {
+        if self.session.dirty() {
             self.save(db)?;
         }
         if !crate::commands::backup::apply_restore_in_session(db)? {
@@ -1406,7 +1406,7 @@ impl TerminalApp {
         if !self.autosave_enabled || !self.session.autosave_allowed() {
             return Ok(());
         }
-        if (self.session.dirty || self.reminders_unsaved())
+        if (self.session.dirty() || self.reminders_unsaved())
             && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS)
         {
             self.start_background_autosave(db)?;
@@ -1451,7 +1451,7 @@ impl TerminalApp {
                 }
             }
             // Placed against the stored text: wait for unsaved edits to land.
-            if self.session.dirty {
+            if self.session.dirty() {
                 return;
             }
             let started = Instant::now();

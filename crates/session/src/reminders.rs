@@ -163,9 +163,15 @@ impl crate::NoteSession {
         true
     }
 
-    /// Compatibility boundary for reconciliation that already changed the mark map.
-    /// Hosts retain persistence and debounce clocks; the session owns change identity.
-    pub fn reminder_changed_outside_text(&mut self) -> bool {
+    /// Test fixtures that changed the mark map directly record the change here.
+    #[cfg(feature = "test-support")]
+    pub fn reminder_changed_outside_text_for_tests(&mut self) -> bool {
+        self.reminder_changed_outside_text()
+    }
+
+    /// Records a reminder change already made to the mark map. Hosts retain
+    /// persistence and debounce clocks; the session owns change identity.
+    pub(crate) fn reminder_changed_outside_text(&mut self) -> bool {
         if !self.editable() || !self.holds_reminders() {
             return false;
         }

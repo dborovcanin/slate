@@ -184,11 +184,11 @@ impl TerminalApp {
                 self.scripts.pending_since = None;
                 self.command_selection_linewise = self.mode == UiMode::VisualLine;
                 self.command_selection = self.capture_visual_command_selection();
-                self.session.history.break_coalescing();
+                self.session.break_undo_coalescing();
                 self.execute_terminal_command(db, &command);
                 self.command_selection = None;
                 self.command_selection_linewise = false;
-                self.session.history.break_coalescing();
+                self.session.break_undo_coalescing();
             }
         } else {
             // Replay the prefix as ordinary input, then handle the breaking key

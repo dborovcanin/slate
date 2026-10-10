@@ -934,7 +934,7 @@ fn vim_remind_set_is_undoable_and_redoable() {
     assert_eq!(app.mode, UiMode::DatePicker);
 
     run_keys(&mut app, &db, &[Key::Enter]);
-    assert!(!app.session.reminder_ghosts.is_empty());
+    assert!(!app.session.reminders().is_empty());
     assert_eq!(
         db.list_reminders(&app.active_note.id)
             .expect("list reminders after remind set")
@@ -943,7 +943,7 @@ fn vim_remind_set_is_undoable_and_redoable() {
     );
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert!(app.session.reminder_ghosts.is_empty());
+    assert!(app.session.reminders().is_empty());
     assert!(db
         .list_reminders(&app.active_note.id)
         .expect("list reminders after undo")
@@ -1302,10 +1302,10 @@ fn non_vim_typing_coalesces_until_a_pause_then_starts_a_new_step() {
     run_keys(&mut app, &db, &[Key::Char('b')]);
     app.last_edit = Instant::now() - Duration::from_millis(100);
     run_keys(&mut app, &db, &[Key::Char('c')]);
-    assert_eq!(app.session.history.undo_depth(), 1);
+    assert_eq!(app.session.history().undo_depth(), 1);
     app.last_edit = Instant::now() - Duration::from_secs(1);
     run_keys(&mut app, &db, &[Key::Char('d')]);
-    assert_eq!(app.session.history.undo_depth(), 2);
+    assert_eq!(app.session.history().undo_depth(), 2);
     app.undo(&db);
     assert_eq!(app.editor.lines(), vec!["abc"]);
     app.undo(&db);
@@ -1434,13 +1434,14 @@ fn app_with_reminder(body: &str, line: usize) -> (Db, TerminalApp, std::path::Pa
     )
     .expect("reminder");
     app.load_reminders(&db).expect("reminders");
-    app.session.history.set_marks(app.reminder_marks());
+    let marks = app.reminder_marks();
+    app.session.history_mut_for_tests().set_marks(marks);
     app.mode = UiMode::Normal;
     (db, app, path)
 }
 
 fn reminder_lines(app: &TerminalApp) -> Vec<usize> {
-    let mut lines: Vec<usize> = app.session.reminder_ghosts.keys().copied().collect();
+    let mut lines: Vec<usize> = app.session.reminders().keys().copied().collect();
     lines.sort_unstable();
     lines
 }
@@ -1452,7 +1453,7 @@ fn deleting_a_reminded_task_does_not_pass_the_reminder_to_the_next() {
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
     assert_eq!(app.editor.lines(), vec!["- [ ] buy eggs".to_string()]);
     assert!(
-        app.session.reminder_ghosts.is_empty(),
+        app.session.reminders().is_empty(),
         "buy eggs gets no reminder"
     );
 
@@ -1525,7 +1526,7 @@ fn open_above_then_escape_records_the_empty_line_for_save_and_undo() {
     let seq = app.session.edit_seq();
     run_keys(&mut app, &db, &[Key::Char('O'), Key::Esc]);
     assert_eq!(app.editor.lines(), vec!["", "original"]);
-    assert!(app.session.dirty);
+    assert!(app.session.dirty());
     assert!(app.session.edit_seq() > seq);
     run_keys(&mut app, &db, &[Key::Char('u')]);
     assert_eq!(app.editor.lines(), vec!["original"]);
@@ -1547,13 +1548,14 @@ fn deleting_the_sole_empty_line_finalizes_reminder_ownership() {
     db.upsert_reminder("n1", 1, 1_900_000_000_000, "2030-03-10 09:00", "")
         .unwrap();
     app.load_reminders(&db).unwrap();
-    app.session.history.set_marks(app.reminder_marks());
+    let marks = app.reminder_marks();
+    app.session.history_mut_for_tests().set_marks(marks);
     app.mode = UiMode::Normal;
     run_keys(&mut app, &db, &[Key::Char('V'), Key::Char('d')]);
-    assert!(app.session.reminder_ghosts.is_empty());
-    assert!(app.session.history.current_marks().is_empty());
-    assert!(app.session.pending_line_edits.is_empty());
-    assert!(app.session.dirty);
+    assert!(app.session.reminders().is_empty());
+    assert!(app.session.history().current_marks().is_empty());
+    assert!(app.session.pending_line_edits().is_empty());
+    assert!(app.session.dirty());
     app.save(&db).unwrap();
     assert!(db.list_reminders("n1").unwrap().is_empty());
     drop(app);
@@ -1574,6 +1576,6 @@ fn visual_yank_preserves_pending_calc_work() {
     assert!(app.calc_runtime.recompute_pending);
     assert!(app.calc_runtime.pending_viewport_pass);
     assert!(app.calc_runtime.pending_full_pass);
-    assert!(!app.session.dirty);
+    assert!(!app.session.dirty());
     cleanup_db_files(&path);
 }

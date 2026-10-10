@@ -202,14 +202,23 @@ Terminal behavior is frozen by replay tests in `crates/tui/src/terminal/app/test
 ## Note session and document
 
 `note_session::Document` carries source lines, character cursor/selection, joined
-text cache and text generation. Source lines are private to the crate and exposed
-as `lines() -> &[String]`. `from_lines`/`from_text` initialize a document; `set_text`
+text cache and text generation. Source lines, the joined-text cache and the text
+generation are private to the crate; front ends read them through `lines()`,
+`text_generation()`, `ensure_joined_text`/`joined_text_cached` and may only drop
+the cache (`clear_joined_text_cache`). `from_lines`/`from_text` initialize a document; `set_text`
 is for open/reload initialization, never an interactive edit bypass. Viewport
 state lives separately. Public cursor/selection fields use Unicode scalar columns;
 exact text edit metadata and command operation offsets use UTF-8 bytes.
 
 `NoteSession` owns note lifetime/identity, access and stored revision, dirty state,
 edit sequence, history/undo policy, reminder marks, calc state and fold structure.
+Its fields are crate-private: front ends read through accessors (`dirty()`,
+`stored_revision()`, `reminders()`, `history()`, ...) and change state only through
+named methods (`set_protection`, `acknowledge_locked_revision`, `begin_input`,
+`break_undo_coalescing`, `checkpoint_history`, `drop_reminders_on_lines`,
+`set_reminder`, ...). `calc` and `folds` remain public while front ends still
+schedule viewport evaluation and fold rescans. Test fixtures use `*_for_tests`
+setters available only with the `test-support` feature.
 `apply` prepares and consumes a `SessionEdit` against the separate document.
 Requests cover primitives, character replacements, paste/import, whole-line edits,
 visual ranges, word deletion, byte-offset operations and ticketed script output.

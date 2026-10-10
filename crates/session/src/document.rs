@@ -5,9 +5,9 @@ use editor_core::buffer::primitives::BufferCursor;
 #[derive(Default)]
 pub struct Document {
     pub(crate) lines: Vec<String>,
-    pub joined_text_cache: Option<String>,
+    pub(crate) joined_text_cache: Option<String>,
     /// Changes with text/cache invalidation, without rehashing the document.
-    pub text_generation: u64,
+    pub(crate) text_generation: u64,
     pub cursor_line: usize,
     /// Character column, not a byte offset.
     pub cursor_col: usize,
@@ -27,6 +27,23 @@ impl Document {
     }
     pub fn lines(&self) -> &[String] {
         &self.lines
+    }
+    /// Changes whenever the text does; equal values promise equal text.
+    pub fn text_generation(&self) -> u64 {
+        self.text_generation
+    }
+    /// Fill the joined-text cache if needed; read it with `joined_text_cached`.
+    pub fn ensure_joined_text(&mut self) {
+        if self.joined_text_cache.is_none() {
+            self.joined_text_cache = Some(self.lines.join("\n"));
+        }
+    }
+    pub fn joined_text_cached(&self) -> Option<&str> {
+        self.joined_text_cache.as_deref()
+    }
+    /// Drop the joined-text cache; it is rebuilt on the next request.
+    pub fn clear_joined_text_cache(&mut self) {
+        self.joined_text_cache = None;
     }
     /// Replace document text on open/reload; invalidate derived text once.
     pub fn set_text(&mut self, text: &str) {
