@@ -1,25 +1,19 @@
 //! Exchange rates for calc: cached rates at startup, then a background
 //! refresh through the configured `[currency]` script, also available on demand.
 use super::TerminalApp;
-use app_core::currency::{self, ExchangeRates};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc, Arc,
-};
+use app_core::currency;
+use std::sync::mpsc;
 
-pub(super) struct Fetched {
-    pub(super) rates: ExchangeRates,
-    /// The rates work, but could not be cached for the next start.
-    pub(super) save_error: Option<String>,
-}
+#[cfg(test)]
+pub(super) use note_session::rates::Fetched;
+use note_session::rates::{RateJob, RateResult, RateService};
 struct Refresh {
-    cancel: Arc<AtomicBool>,
-    rx: mpsc::Receiver<Result<Fetched, String>>,
+    rx: mpsc::Receiver<RateResult>,
+    generation: u64,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 impl Drop for Refresh {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
         // On editor exit, wait for process cleanup before the host exits.
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -28,6 +22,8 @@ impl Drop for Refresh {
 }
 #[derive(Default)]
 pub(super) struct CurrencyState {
+    // Drops first: cancels service work before the host joins its worker.
+    service: RateService,
     refresh: Option<Refresh>,
 }
 impl CurrencyState {
@@ -50,58 +46,61 @@ impl CurrencyState {
         path: std::path::PathBuf,
         background_tasks_enabled: bool,
     ) -> (Self, Option<String>) {
-        // A broken cache is refetched, not fatal.
-        let mut problem = None;
-        match currency::load_cache(&path) {
-            Ok(Some(rates)) => {
-                currency::install(rates);
-            }
-            Ok(None) => {}
-            Err(error) => problem = Some(format!("currency: {error}")),
-        }
         let mut state = Self::default();
-        if background_tasks_enabled {
-            state.fetch(config, path);
+        let startup = note_session::rates::RateStartupJob {
+            config,
+            cache_path: path,
+            background_enabled: background_tasks_enabled,
+        };
+        let result = note_session::jobs::run_rate_startup(&startup);
+        let (job, problem) = state.service.complete_startup(startup, result);
+        if let Some(job) = job {
+            state.launch(job);
         }
         (state, problem)
     }
 
+    #[cfg(test)]
     fn fetch(&mut self, config: currency::CurrencyConfig, path: std::path::PathBuf) {
-        let cancel = Arc::new(AtomicBool::new(false));
+        if let Ok(job) = self.service.request_refresh(config, path) {
+            self.launch(job);
+        }
+    }
+    fn launch(&mut self, job: RateJob) {
+        let generation = job.generation;
         let (tx, rx) = mpsc::channel();
-        let worker_cancel = cancel.clone();
         let worker = std::thread::spawn(move || {
-            let result = currency::fetch_rates(&config, worker_cancel).map(|rates| Fetched {
-                save_error: currency::save_cache(&path, &rates).err(),
-                rates,
-            });
-            let _ = tx.send(result);
+            let _ = tx.send(note_session::jobs::run_rate_job(job));
         });
         self.refresh = Some(Refresh {
-            cancel,
+            generation,
             rx,
             worker: Some(worker),
         });
     }
 
     /// The finished refresh's result, if one is waiting to be applied.
-    fn take_result(&mut self) -> Option<Result<Fetched, String>> {
+    fn take_result(&mut self) -> Option<RateResult> {
         let result = match self.refresh.as_ref()?.rx.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return None,
-            Err(mpsc::TryRecvError::Disconnected) => Err("rates worker disconnected".into()),
+            Err(mpsc::TryRecvError::Disconnected) => RateResult {
+                generation: self.refresh.as_ref()?.generation,
+                result: Err("rates worker disconnected".into()),
+            },
         };
         self.refresh = None;
         Some(result)
     }
 
     fn request_refresh(&mut self) -> Result<(), String> {
-        if self.refresh.is_some() {
-            return Err("exchange rates refresh already running".into());
-        }
+        self.service.ensure_idle()?;
         let config = app_core::config::load_currency_config()?
             .ok_or("currency: configure [currency] argv first")?;
-        self.fetch(config, currency::cache_path()?);
+        let job = self
+            .service
+            .request_refresh(config, currency::cache_path()?)?;
+        self.launch(job);
         Ok(())
     }
 
@@ -110,9 +109,20 @@ impl CurrencyState {
     pub(super) fn pending() -> Self {
         let (tx, rx) = mpsc::channel();
         std::mem::forget(tx);
+        let mut service = RateService::default();
+        let job = service
+            .request_refresh(
+                currency::CurrencyConfig {
+                    argv: Vec::new(),
+                    timeout_seconds: 1,
+                },
+                std::path::PathBuf::new(),
+            )
+            .unwrap();
         Self {
+            service,
             refresh: Some(Refresh {
-                cancel: Arc::new(AtomicBool::new(false)),
+                generation: job.generation,
                 rx,
                 worker: None,
             }),
@@ -121,11 +131,26 @@ impl CurrencyState {
 
     #[cfg(test)]
     pub(super) fn with_result(result: Result<Fetched, String>) -> Self {
+        let mut service = RateService::default();
+        let job = service
+            .request_refresh(
+                currency::CurrencyConfig {
+                    argv: Vec::new(),
+                    timeout_seconds: 1,
+                },
+                std::path::PathBuf::new(),
+            )
+            .unwrap();
         let (tx, rx) = mpsc::channel();
-        tx.send(result).unwrap();
+        tx.send(RateResult {
+            generation: job.generation,
+            result,
+        })
+        .unwrap();
         Self {
+            service,
             refresh: Some(Refresh {
-                cancel: Arc::new(AtomicBool::new(false)),
+                generation: job.generation,
                 rx,
                 worker: None,
             }),
@@ -157,19 +182,24 @@ impl TerminalApp {
         }
     }
 
-    fn apply_currency_result(&mut self, result: Result<Fetched, String>) {
+    fn apply_currency_result(&mut self, result: RateResult) {
         self.render_state.dirty = true;
-        let Fetched { rates, save_error } = match result {
+        let Some(result) = self.currency.service.complete(result) else {
+            return;
+        };
+        let note_session::rates::RateCompletion {
+            changed,
+            as_of,
+            save_error,
+        } = match result {
             Ok(fetched) => fetched,
             Err(error) => {
                 self.status = format!("exchange rates: {error}");
                 return;
             }
         };
-        let as_of = rates.as_of.clone();
-        // Unchanged rates leave every calc result valid; skip re-evaluating.
-        let changed = currency::install(rates);
         if changed {
+            self.session.invalidate_calc();
             if let Ok(mut index) = self.cross_note_var_index.lock() {
                 index.invalidate_calculations();
             }
@@ -221,6 +251,7 @@ mod tests {
             .rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()
+            .result
             .unwrap();
         assert_eq!(fetched.rates.rates["USD"], 1.5);
         assert!(fetched.save_error.is_none());

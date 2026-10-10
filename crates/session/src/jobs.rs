@@ -212,6 +212,8 @@ impl crate::NoteSession {
 
 pub use crate::save::{run_save, SaveJob, SaveResult};
 
+pub use crate::rates::{run_rate_job, run_rate_startup};
+
 #[cfg(test)]
 mod tests {
     use super::*;

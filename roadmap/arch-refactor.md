@@ -550,7 +550,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 13: open/reload/outside-change/leave policy.
 - [x] Step 14: save and autosave jobs/policy.
 - [x] Step 15: script tickets and result validation.
-- [ ] Step 16: application-wide rate service.
+- [x] Step 16: application-wide rate service.
 - [ ] Step 17: headless host integration.
 - [ ] Phase 8: shared semantic display and source mappings.
 - [ ] Final round: checks, performance A/B, live terminal and diff review.
@@ -1121,3 +1121,11 @@ Seven shared tests cover switch-away/back, Unicode edits, access changes,
 delayed consumption, cursor/undo and Send bounds. Workspace and existing
 terminal script tests pass, no new warnings; Visual/Vim reset and process
 cancellation remain in the host.
+
+Step 16: RateService lives beside the note session and owns one-fetch policy,
+startup cache acceptance, refresh generation, cancellation and installation.
+Shared startup/fetch runners perform IO; publication is fenced while writing the
+cache. Identical rates skip calc invalidation; failures preserve installed
+rates. The host retains workers, receiver polling and joins. Shared policy/Send
+coverage plus existing actual-process startup/currency tests and all workspace
+checks pass, no new warnings. Note lifetimes do not affect global refresh.

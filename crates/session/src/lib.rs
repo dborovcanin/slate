@@ -31,3 +31,5 @@ pub mod lifecycle;
 pub mod save;
 
 pub mod scripts;
+
+pub mod rates;
