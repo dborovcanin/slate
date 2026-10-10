@@ -528,6 +528,38 @@ change with core tests.
   mode does.
 - **Display model.** Now phase 8.
 
+## Session execution (2026-10-10)
+
+Branch: `session`, based on `af2a090` (current `main`). The owner explicitly
+approved unattended code changes and one commit per step, including mechanical
+moves. Existing golden cases and performance limits remain unchanged.
+
+- [x] Step 0: branch, clean main snapshot and baseline capture.
+- [ ] Step 1: Normal-mode undo/redo cursor regression.
+- [ ] Step 2: fold upkeep from exact edit spans.
+- [ ] Step 3: core same-line replacement plans.
+- [ ] Step 4: core line insertion/removal plans.
+- [ ] Step 5: document crate and terminal view separation.
+- [ ] Step 6: undo, dirty and reminder session state.
+- [ ] Step 7: session edit pipeline and undo/redo.
+- [ ] Step 8: private document text.
+- [ ] Step 9: shared calc state.
+- [ ] Step 10: session calc upkeep.
+- [ ] Step 11: calc preparation/index jobs.
+- [ ] Step 12: session fold structure.
+- [ ] Step 13: open/reload/outside-change/leave policy.
+- [ ] Step 14: save and autosave jobs/policy.
+- [ ] Step 15: script tickets and result validation.
+- [ ] Step 16: application-wide rate service.
+- [ ] Step 17: headless host integration.
+- [ ] Phase 8: shared semantic display and source mappings.
+- [ ] Final round: checks, performance A/B, live terminal and diff review.
+- [ ] Step 18: final contracts and readiness evidence.
+
+Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
+could not create a private runtime image; the approved rerun passed. Baseline
+Clippy warnings and performance captures are in `/tmp/slate-session-*.log`.
+
 ## Phase 7 implementation plan
 
 Written for an agent implementing phase 7 without prior context. Read
@@ -551,6 +583,12 @@ each step, since earlier steps move code.
   `aho-corasick`) and nothing else.
 - Do not change `perf/baselines/*.json`. A regression is fixed or reported,
   never absorbed into a limit.
+- The typing path must not get new work. `EditOutcome`, `Effects` and other
+  values returned per key must not allocate on that path (an empty
+  `Vec::new()` is fine; a status `String` or a non-empty job list only when
+  there is something to report). Cross-crate calls are free in release
+  builds (`lto = "thin"`, `codegen-units = 1`), so no `#[inline]` tuning is
+  needed; do not trade structure for imagined call overhead.
 - Stop and ask instead of improvising when: a step needs a behavior change
   not listed here, a perf regression from the table below cannot be removed,
   a golden replay fixture would have to change, or the code no longer
@@ -734,7 +772,13 @@ the exact edit or block fates, applies the plan, bumps `text_generation`,
 drops the joined-text cache, sets dirty, increments `edit_seq`, records
 history with the `UndoGrouping` from `ctx`, and maps reminders. This is the
 existing order in `apply_buffer_primitive`, `mark_edited_from_line_with_span`
-and `record_history_after_edit`; keep it exactly. Calc and fold upkeep stay
+and `record_history_after_edit`; keep it exactly, and keep each variant's
+fast path: a same-line character edit records no structural reminder change
+(only edits that add or remove lines call `note_line_edit` today) and
+refreshes calc metadata for one line only. Do not route every variant
+through the most general path. Run the **[perf]** check for this step even
+though it is not marked, and compare `type_prose`, `type_calc`,
+`delete_char` and `enter`. Calc and fold upkeep stay
 in the terminal and run from the returned outcome. Add `undo(doc)` and
 `redo(doc)` returning outcomes the same way. Session tests: reminder
 positions through joins, splits, block replacement and undo/redo; dirty and
@@ -760,15 +804,20 @@ built matcher, so the renderer keeps reusing it; the terminal imports it.
 
 **Step 10 [perf]: `Run calc upkeep in the note session`.**
 Move the calc work that runs after an edit into `CalcState` methods taking
-`&Document` and a `CalcInputs` value (feature mask, module flags, extern
-variables, thresholds, whether a key is still being handled): the
+`&Document` and a `CalcInputs` value (feature mask, module flags, thresholds,
+whether a key is still being handled, and a way to get extern variables): the
 `CalcAfterEdit` dispatch from `mark_edited_from_line_with_span`,
 `try_remap_calc_results_after_structural_edit`, `recompute_calc_range`, and
 the non-scheduling part of `run_calc_recompute` and
 `ensure_calc_for_viewport`. They return a `CalcEffect` (done, schedule an idle
 pass, recompute after the current key, refresh the viewport). The terminal
-keeps `CalcRuntime`, debounce times, idle ticks and `key_depth`, and reads
-extern variables from `CrossNoteVarIndex` to pass in. Split into two commits
+keeps `CalcRuntime`, debounce times, idle ticks and `key_depth`. Extern
+variables must be fetched lazily: today `run_calc_recompute` locks
+`CrossNoteVarIndex` and copies `extern_vars_for` only after deciding to
+recompute (`editing.rs`, the `incremental_extern_vars` block). Pass a closure
+or a small trait object that the session calls only on paths that evaluate
+cross-note references, never a precomputed `Vec` built before every call,
+which would add a lock and a copy to every keystroke. Split into two commits
 (remap and range first, full recompute second) if one exceeds 300 lines.
 Check `type_calc`, `enter`, `delete_line`, `undo` and `scroll_*`.
 
