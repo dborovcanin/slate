@@ -950,6 +950,7 @@ impl TerminalApp {
         self.calc_runtime.pending_viewport_pass = false;
         self.calc_runtime.pending_full_pass = false;
         let label = match outcome {
+            note_session::calc_recompute::CalcRecompute::Disabled => "math_disabled",
             note_session::calc_recompute::CalcRecompute::StaleFull => "stale_full",
             note_session::calc_recompute::CalcRecompute::Incremental => "incremental",
         };

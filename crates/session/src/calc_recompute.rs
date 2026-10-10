@@ -22,6 +22,7 @@ pub struct CalcRecomputeInputs<'a> {
 }
 #[derive(Clone, Copy)]
 pub enum CalcRecompute {
+    Disabled,
     StaleFull,
     Incremental,
 }
@@ -32,6 +33,14 @@ impl crate::NoteSession {
         inputs: CalcRecomputeInputs<'_>,
         extern_vars: &mut dyn FnMut(&[String]) -> Vec<ExternVar>,
     ) -> CalcRecompute {
+        if !inputs.base.math_enabled {
+            self.calc.clear(doc);
+            self.calc.range_context = Default::default();
+            self.calc.cross_note_refs_scan = None;
+            self.calc.cross_note_refs_generation = None;
+            self.calc.pending_result_splices.clear();
+            return CalcRecompute::Disabled;
+        }
         self.calc.ensure_calc_line_metadata(doc, inputs.base);
         if !doc.lines().is_empty() {
             let cursor_line = doc.cursor_line.min(doc.lines().len().saturating_sub(1));
@@ -528,5 +537,35 @@ mod tests {
                 if selected { Some("6") } else { None }
             );
         }
+    }
+    #[test]
+    fn disabled_math_clears_results_without_io_or_text_mutation() {
+        let mut doc = crate::Document::from_text("base := 3\nbase * 2 = 4");
+        doc.joined_text_cache = Some(doc.lines().join("\n"));
+        let generation = doc.text_generation;
+        let history =
+            editor_core::history::LineHistory::new(32, doc.lines(), 0, 0, Default::default());
+        let mut session = crate::NoteSession::new(history, Default::default(), Default::default());
+        session.calc.results = vec![Some("3".into()), Some("6".into())];
+        session.calc.variable_names.set(vec!["base".into()]);
+        session.calc.stale = true;
+        let index = Arc::new(Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        ));
+        let mut options = inputs(&index, None);
+        options.base.math_enabled = false;
+        options.cross_note_enabled = true;
+        let result = session.recompute_calc(&mut doc, options, &mut |_| {
+            panic!("disabled math must not read external values")
+        });
+        assert!(matches!(result, CalcRecompute::Disabled));
+        assert_eq!(doc.lines()[1], "base * 2 = 4");
+        assert_eq!(doc.text_generation, generation);
+        assert!(doc.joined_text_cache.is_some());
+        assert_eq!(session.calc.results, vec![None, None]);
+        assert!(session.calc.variable_names.is_empty());
+        assert!(!session.calc.stale);
+        assert!(session.calc.line_metadata.is_empty());
+        assert!(!session.dirty);
     }
 }

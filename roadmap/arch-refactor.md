@@ -1155,3 +1155,8 @@ Final bug round, access: a locked-session edit failed its new regression before
 the fix. Shared mutation entry now rejects before touching text/history/identity;
 nonmutating visual yank and canonical buffer initialization remain available.
 Four focused access tests pass.
+
+Final bug round, disabled math: direct shared recomputation now clears derived
+state and reports Disabled before evaluation, external IO or trailer rewriting.
+The focused disabled-module regression passes; terminal result handling is
+exhaustive.
