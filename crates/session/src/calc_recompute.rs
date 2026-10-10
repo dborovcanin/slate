@@ -27,6 +27,14 @@ pub enum CalcRecompute {
     Incremental,
 }
 impl crate::NoteSession {
+    pub(crate) fn clear_disabled_calc(&mut self, doc: &crate::Document) {
+        self.calc.clear(doc);
+        self.calc.range_context = Default::default();
+        self.calc.cross_note_refs_scan = None;
+        self.calc.cross_note_refs_generation = None;
+        self.calc.pending_result_splices.clear();
+    }
+
     pub fn recompute_calc(
         &mut self,
         doc: &mut crate::Document,
@@ -34,11 +42,7 @@ impl crate::NoteSession {
         extern_vars: &mut dyn FnMut(&[String]) -> Vec<ExternVar>,
     ) -> CalcRecompute {
         if !inputs.base.math_enabled {
-            self.calc.clear(doc);
-            self.calc.range_context = Default::default();
-            self.calc.cross_note_refs_scan = None;
-            self.calc.cross_note_refs_generation = None;
-            self.calc.pending_result_splices.clear();
+            self.clear_disabled_calc(doc);
             return CalcRecompute::Disabled;
         }
         self.calc.ensure_calc_line_metadata(doc, inputs.base);

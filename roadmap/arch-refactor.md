@@ -1302,3 +1302,20 @@ a claim that every performance or future GUI/platform gate is green.
 
 The clean main worktree and its separate target directory were removed after
 qualification; raw logs and runtime evidence remain in the paths above.
+
+### Follow-up: shared session API review fixes
+
+- [x] Guard both provider-backed full recomputation and viewport evaluation when
+  math is disabled, before scanning/loading cross-note references or evaluating.
+  Both paths use the same reset for cached results, range context and references.
+- [x] Keep raw reminder line removal internal. TUI line deletion now supplies
+  pre-edit line ownership through `SessionEdit::LinewiseOperation`, so access,
+  edit identity and text/reminder history run in one shared transaction.
+- [x] Add regressions for disabled calc, locked linewise edits, no-op operations,
+  reminder restoration through text undo/redo, and the retained canonical empty
+  line. Existing no-text-undo behavior for an already empty line is preserved.
+- [x] Run formatting, workspace Clippy (no new warnings against the recorded
+  baseline), and workspace tests. All pass; six existing tests remain ignored.
+
+Evidence: `/tmp/slate-session-findings-{1,2,3}.log`. This follow-up did not rerun
+live terminal qualification or performance benchmarks.

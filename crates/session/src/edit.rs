@@ -21,6 +21,12 @@ pub enum SessionEdit<'a> {
         text: &'a str,
     },
     Operation(&'a editor_core::types::EditOperation),
+    /// Delete reminders owned by these inclusive, zero-based pre-edit lines
+    /// together with a linewise text operation, including a retained empty line.
+    LinewiseOperation {
+        operation: &'a editor_core::types::EditOperation,
+        deleted_lines: (usize, usize),
+    },
     TableCellPaste {
         text: &'a str,
         tables: bool,
@@ -129,6 +135,18 @@ impl NoteSession {
             }
             SessionEdit::Operation(op) => {
                 let outcome = self.apply_operation_text(doc, op)?;
+                calc_splices = outcome.calc_splices;
+                fold_rescan = outcome.fold_rescan;
+                outcome.delta
+            }
+            SessionEdit::LinewiseOperation {
+                operation,
+                deleted_lines: (start, end),
+            } => {
+                if !operation.changes.is_empty() {
+                    self.drop_reminders_on_lines(start, end);
+                }
+                let outcome = self.apply_operation_text(doc, operation)?;
                 calc_splices = outcome.calc_splices;
                 fold_rescan = outcome.fold_rescan;
                 outcome.delta
@@ -717,6 +735,96 @@ mod tests {
         session.redo(&mut doc).unwrap();
         assert!(session.reminder_ghosts.is_empty());
     }
+    #[test]
+    fn linewise_operation_guards_and_restores_reminder_ownership() {
+        use editor_core::types::{EditOperation, TextChange};
+        for empty in [false, true] {
+            let (mut doc, mut session, ctx) = setup();
+            if empty {
+                doc.lines = vec![String::new()];
+                session.history = LineHistory::new(32, &doc.lines, 0, 0, Default::default());
+            }
+            session.reminder_ghosts.insert(
+                0,
+                crate::LineReminderGhost {
+                    remind_at_ms: 1,
+                    display_at: "later".into(),
+                    line_text: doc.lines[0].clone(),
+                    reminded_at_ms: None,
+                },
+            );
+            session
+                .history
+                .set_marks(crate::reminders::reminder_marks_of(
+                    &session.reminder_ghosts,
+                ));
+            let op = EditOperation {
+                changes: vec![TextChange {
+                    from: 0,
+                    to: if empty { 0 } else { "éx\n".len() },
+                    insert: String::new(),
+                }],
+                selection: None,
+            };
+            let before = doc.lines.clone();
+            let generation = session.reminders_generation;
+            session.access_mode = app_core::storage::NoteAccessMode::Encrypted;
+            session.is_unlocked = false;
+            assert!(session
+                .apply(
+                    &mut doc,
+                    SessionEdit::LinewiseOperation {
+                        operation: &op,
+                        deleted_lines: (0, 0),
+                    },
+                    ctx
+                )
+                .is_none());
+            assert_eq!(doc.lines, before);
+            assert!(session.reminder_ghosts.contains_key(&0));
+            assert_eq!(session.reminders_generation, generation);
+            assert_eq!(session.edit_seq, 0);
+            assert_eq!(session.history.undo_depth(), 0);
+            session.is_unlocked = true;
+            let no_op = EditOperation {
+                changes: vec![],
+                selection: None,
+            };
+            assert!(session
+                .apply(
+                    &mut doc,
+                    SessionEdit::LinewiseOperation {
+                        operation: &no_op,
+                        deleted_lines: (0, 0),
+                    },
+                    ctx
+                )
+                .is_none());
+            assert!(session.reminder_ghosts.contains_key(&0));
+            session
+                .apply(
+                    &mut doc,
+                    SessionEdit::LinewiseOperation {
+                        operation: &op,
+                        deleted_lines: (0, 0),
+                    },
+                    ctx,
+                )
+                .unwrap();
+            assert!(session.reminder_ghosts.is_empty());
+            assert_eq!(session.edit_seq, 1);
+            // The canonical empty line stays empty, preserving existing no-text-undo
+            // behavior. Real line removals restore text and marks together.
+            if !empty {
+                session.undo(&mut doc).unwrap();
+                assert_eq!(doc.lines, before);
+                assert!(session.reminder_ghosts.contains_key(&0));
+                session.redo(&mut doc).unwrap();
+                assert!(session.reminder_ghosts.is_empty());
+            }
+        }
+    }
+
     #[test]
     fn locked_session_rejects_mutations_before_any_bookkeeping() {
         let (mut doc, mut session, ctx) = setup();

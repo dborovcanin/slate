@@ -138,7 +138,7 @@ impl NoteSession {
         provider: &dyn CalcProvider,
     ) -> CalcRecompute {
         let inputs = provider.inputs(&self.calc);
-        if inputs.cross_note_enabled {
+        if inputs.base.math_enabled && inputs.cross_note_enabled {
             let refs = app_core::calc::scan_cross_note_refs(doc.lines());
             provider.preload_refs(&refs);
         }
@@ -155,6 +155,10 @@ impl NoteSession {
         provider: &NoteCalcProvider<'_>,
     ) {
         let inputs = provider.inputs(&self.calc);
+        if !inputs.base.math_enabled {
+            self.clear_disabled_calc(doc);
+            return;
+        }
         let extern_vars = if inputs.cross_note_enabled {
             let generation = doc.text_generation();
             let (line_hashes, refs) = self.calc.cross_note_refs(doc);
@@ -205,5 +209,109 @@ pub fn load_extern_vars_at_startup(
             index.extern_vars_for(note_id)
         }
         Err(_) => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use editor_core::calc_plan::CalcFeatureMask;
+    use std::cell::Cell;
+
+    fn base(math_enabled: bool) -> CalcInputs {
+        CalcInputs {
+            mask: CalcFeatureMask {
+                math_enabled,
+                table_enabled: true,
+                variables_enabled: true,
+            },
+            math_enabled,
+            viewport_only: false,
+        }
+    }
+    fn session(doc: &Document) -> NoteSession {
+        NoteSession::new(
+            crate::lifecycle::build_history_for_note(doc.lines(), 0, 0, Default::default()),
+            Default::default(),
+            Default::default(),
+        )
+    }
+    struct DisabledProvider {
+        index: Arc<Mutex<CrossNoteVarIndex>>,
+        preloads: Cell<usize>,
+    }
+    impl CalcProvider for DisabledProvider {
+        fn inputs(&self, _: &CalcState) -> CalcRecomputeInputs<'_> {
+            CalcRecomputeInputs {
+                base: base(false),
+                variables_enabled: true,
+                cross_note_enabled: true,
+                table_enabled: true,
+                note_id: "active",
+                index: &self.index,
+                selection_range: None,
+                thresholds: Default::default(),
+            }
+        }
+        fn preload_refs(&self, refs: &[CrossNoteRef]) {
+            assert!(!refs.is_empty());
+            self.preloads.set(self.preloads.get() + 1);
+        }
+        fn extern_vars(&self, _: &[String]) -> Vec<ExternVar> {
+            panic!("disabled math must not request external values")
+        }
+    }
+    #[test]
+    fn disabled_full_recompute_does_not_preload() {
+        let mut doc = Document::from_text("[[01KP0YD099X9TQENYJQ1SE9X8V]].price * 2");
+        let mut session = session(&doc);
+        let provider = DisabledProvider {
+            index: Arc::new(Mutex::new(Default::default())),
+            preloads: Cell::new(0),
+        };
+        assert!(matches!(
+            session.recompute_calc_with(&mut doc, &provider),
+            CalcRecompute::Disabled
+        ));
+        assert_eq!(provider.preloads.get(), 0);
+        assert!(session.calc().results.iter().all(Option::is_none));
+    }
+    #[test]
+    fn disabled_viewport_clears_results_without_loading_references() {
+        let mut doc = Document::from_text("1 + 1");
+        let mut session = session(&doc);
+        let root =
+            std::env::temp_dir().join(format!("slate-disabled-range-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = Db::open(root.join("notes.db")).unwrap();
+        let index = Arc::new(Mutex::new(Default::default()));
+        let loaded = Condvar::new();
+        let mut provider = NoteCalcProvider {
+            base: base(true),
+            cross_note_enabled: false,
+            table_enabled: true,
+            cross_note: CrossNoteSource {
+                note_id: "active",
+                index: &index,
+                db: &db,
+                loaded: &loaded,
+            },
+            selection_range: None,
+        };
+        session.evaluate_calc_range(&doc, 0, 1, &provider);
+        assert_eq!(session.calc().results[0].as_deref(), Some("2"));
+        doc.set_text("1 + 1\n[[01KP0YD099X9TQENYJQ1SE9X8V]].price");
+        provider.base = base(false);
+        provider.cross_note_enabled = true;
+        session.evaluate_calc_range(&doc, 0, 2, &provider);
+        assert!(session.calc().results.iter().all(Option::is_none));
+        assert!(session.calc().cross_note_refs_scan.is_none());
+        assert!(session.calc().cross_note_refs_generation.is_none());
+        assert!(!index
+            .lock()
+            .unwrap()
+            .was_full_eval_attempted("01KP0YD099X9TQENYJQ1SE9X8V"));
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

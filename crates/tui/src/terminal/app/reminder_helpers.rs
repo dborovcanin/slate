@@ -122,12 +122,4 @@ impl TerminalApp {
             self.status = format!("reminders not saved yet: {error}");
         }
     }
-
-    /// Lines `start..=end` are about to go by a command that deletes whole
-    /// lines (`dd`, a linewise visual delete): their reminders go with them,
-    /// even where an empty line is left behind, as for the note's only line.
-    /// The text change alone cannot tell that from emptying a line.
-    pub(super) fn drop_reminders_on_deleted_lines(&mut self, start: usize, end: usize) {
-        self.session.drop_reminders_on_lines(start, end);
-    }
 }

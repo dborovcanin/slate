@@ -204,9 +204,15 @@ impl TerminalApp {
         &mut self,
         result: crate::editor_core::vim_actions::VimActionExecutionResult,
         mirror_register_to_system_clipboard: bool,
+        mut deleted_lines: Option<(usize, usize)>,
     ) {
         for operation in &result.operations {
-            self.apply_edit_operation(operation);
+            let span = if operation.changes.is_empty() {
+                None
+            } else {
+                deleted_lines.take()
+            };
+            self.apply_edit_operation_with_deleted_lines(operation, span);
         }
         if let Some(register) = result.register {
             if mirror_register_to_system_clipboard {
@@ -435,12 +441,11 @@ impl TerminalApp {
             if let Some((shared, scope_start_offset)) =
                 self.try_execute_shared_vim_action(action.intent, count, action.target_char)
             {
-                if action.intent == crate::editor_core::vim::VimIntent::DeleteLine
-                    && !shared.operations.is_empty()
-                {
-                    let start = self.editor.cursor_line;
-                    self.drop_reminders_on_deleted_lines(start, start + count.max(1) - 1);
-                }
+                let deleted_lines =
+                    (action.intent == crate::editor_core::vim::VimIntent::DeleteLine).then(|| {
+                        let start = self.editor.cursor_line;
+                        (start, start.saturating_add(count.max(1) - 1))
+                    });
                 let had_register = shared.register.is_some();
                 let mapped = crate::editor_core::vim_actions::VimActionExecutionResult {
                     operations: shared
@@ -453,6 +458,7 @@ impl TerminalApp {
                 self.apply_shared_vim_action_result(
                     mapped,
                     vim_intent_mirrors_register_to_system_clipboard(action.intent),
+                    deleted_lines,
                 );
                 if had_register {
                     let status = match action.intent {
@@ -806,7 +812,7 @@ impl TerminalApp {
                                         .collect(),
                                     register: None,
                                 };
-                            self.apply_shared_vim_action_result(mapped, false);
+                            self.apply_shared_vim_action_result(mapped, false, None);
                         }
                     }
                 }

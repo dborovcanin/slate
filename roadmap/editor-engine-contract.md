@@ -215,10 +215,12 @@ edit sequence, history/undo policy, reminder marks, calc state and fold structur
 Its fields are crate-private: front ends read through accessors (`dirty()`,
 `stored_revision()`, `reminders()`, `history()`, ...) and change state only through
 named methods (`set_protection`, `acknowledge_locked_revision`, `begin_input`,
-`break_undo_coalescing`, `checkpoint_history`, `drop_reminders_on_lines`,
-`set_reminder`, ...), including calc and fold state (`calc()`/`folds()` read
+`break_undo_coalescing`, `checkpoint_history`, `set_reminder`, ...), including
+calc and fold state (`calc()`/`folds()` read
 access; `fold_upkeep`, `recompute_folds`, `take_fold_rescan`,
-`sync_calc_index_after_idle`, `compact_derived_state`). Test fixtures use
+`sync_calc_index_after_idle`, `compact_derived_state`). Linewise operations discard
+reminders inside the guarded `SessionEdit::LinewiseOperation` transaction,
+preserving edit identity and text undo ownership. Test fixtures use
 `*_for_tests` setters available only with the `test-support` feature.
 
 Calc policy shared by front ends lives in the crate: `calc_provider` holds the

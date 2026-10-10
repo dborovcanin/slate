@@ -1855,11 +1855,26 @@ impl TerminalApp {
     }
 
     pub(super) fn apply_edit_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
+        self.apply_edit_operation_with_deleted_lines(op, None);
+    }
+
+    pub(super) fn apply_edit_operation_with_deleted_lines(
+        &mut self,
+        op: &crate::editor_core::types::EditOperation,
+        deleted_lines: Option<(usize, usize)>,
+    ) {
         if !self.active_note_is_editable() && !op.changes.is_empty() {
             self.set_locked_note_status();
             return;
         }
-        let outcome = self.apply_session_edit(note_session::SessionEdit::Operation(op));
+        let edit = match deleted_lines {
+            Some(deleted_lines) => note_session::SessionEdit::LinewiseOperation {
+                operation: op,
+                deleted_lines,
+            },
+            None => note_session::SessionEdit::Operation(op),
+        };
+        let outcome = self.apply_session_edit(edit);
         if let Some(outcome) = outcome {
             let delta = outcome.delta;
             if outcome.calc_splices.is_empty() {

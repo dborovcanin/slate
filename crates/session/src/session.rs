@@ -114,7 +114,7 @@ impl NoteSession {
 
     /// Whole lines `start..=end` are about to be deleted by a linewise command:
     /// their reminders go with them, even where an empty line remains.
-    pub fn drop_reminders_on_lines(&mut self, start: usize, end: usize) {
+    pub(crate) fn drop_reminders_on_lines(&mut self, start: usize, end: usize) {
         let before = self.reminder_ghosts.len();
         self.reminder_ghosts
             .retain(|line, _| *line < start || *line > end);
