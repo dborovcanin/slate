@@ -1,5 +1,6 @@
 //! Incremental fold cache upkeep. Host applies the returned view/cache effects.
 use super::{edits_require_rebuild, map_ranges_through_line_edits, FoldLineEdit, FoldRange};
+use crate::buffer::EditDelta;
 #[derive(Debug, Clone, Copy)]
 pub struct FoldUpkeepFlags {
     pub reduced_features: bool,
@@ -45,10 +46,24 @@ fn decide_remap(
         FoldUpkeep::Unchanged
     }
 }
-/// Updates only the affected cache entries; a full rescan is a returned host effect.
+/// Compatibility entry point for hosts without exact line-span metadata.
 pub fn plan_fold_upkeep(
     lines: &[String],
     cursor_line: usize,
+    structure: &mut Vec<bool>,
+    snapshot: &mut Vec<String>,
+    ranges: &[FoldRange],
+    flags: FoldUpkeepFlags,
+) -> FoldUpkeep {
+    plan_fold_upkeep_with_delta(lines, cursor_line, None, structure, snapshot, ranges, flags)
+}
+
+/// Updates only the affected cache entries; a full rescan is a returned host effect.
+#[allow(clippy::too_many_arguments)] // Borrowed cache slices preserve the existing hot path.
+pub fn plan_fold_upkeep_with_delta(
+    lines: &[String],
+    cursor_line: usize,
+    delta: Option<EditDelta>,
     structure: &mut Vec<bool>,
     snapshot: &mut Vec<String>,
     ranges: &[FoldRange],
@@ -71,7 +86,62 @@ pub fn plan_fold_upkeep(
         snapshot.clear();
         return FoldUpkeep::Empty;
     }
-    let cl = cursor_line.min(lines.len().saturating_sub(1));
+    if let Some(delta) = delta {
+        let old_len = structure.len();
+        let valid_range = delta
+            .start_line
+            .checked_add(delta.old_span)
+            .is_some_and(|end| end <= old_len);
+        let valid_new_range = delta
+            .start_line
+            .checked_add(delta.new_span)
+            .is_some_and(|end| end <= lines.len());
+        if snapshot.len() != old_len
+            || !valid_range
+            || !valid_new_range
+            || old_len
+                .checked_sub(delta.old_span)
+                .and_then(|len| len.checked_add(delta.new_span))
+                != Some(lines.len())
+            || !matches!((delta.old_span, delta.new_span), (1, 1) | (1, 2) | (2, 1))
+        {
+            // Zero-span edits cannot use FoldLineEdit's at-least-one-line
+            // coordinate contract. Bulk replacements also need a full scan.
+            return FoldUpkeep::Recompute;
+        }
+        if delta.old_span != delta.new_span {
+            let at = delta.start_line;
+            let old_line_text = snapshot[at].clone();
+            let new_line_text = lines[at].clone();
+            structure.splice(
+                at..at + delta.old_span,
+                lines[at..at + delta.new_span]
+                    .iter()
+                    .map(|line| line_has_fold_structure(line)),
+            );
+            snapshot.splice(
+                at..at + delta.old_span,
+                lines[at..at + delta.new_span].iter().cloned(),
+            );
+            return decide_remap(
+                ranges,
+                &[FoldLineEdit {
+                    old_start_line: at,
+                    old_line_span: delta.old_span,
+                    new_line_span: delta.new_span,
+                    old_line_text,
+                    new_line_text,
+                }],
+                lines.len(),
+                flags.has_collapsed,
+                true,
+                true,
+            );
+        }
+    }
+    let cl = delta
+        .map_or(cursor_line, |edit| edit.start_line)
+        .min(lines.len().saturating_sub(1));
     let line_count_changed = lines.len() != structure.len();
 
     if line_count_changed {
@@ -160,37 +230,48 @@ pub fn plan_fold_upkeep(
         );
     }
 
-    // Same-line edit: check whether the current line touches fold structure.
-    let old_text = snapshot.get(cl).cloned().unwrap_or_default();
-    let current_text = lines.get(cl).map(|s| s.as_str()).unwrap_or("");
-    let new_text = current_text.to_string();
+    // Compare borrowed text before replacing the cached snapshot. Only the
+    // replacement snapshot allocates; unchanged typing needs no text copies.
+    let current_text = lines[cl].as_str();
+    let old_text = snapshot.get(cl).map(String::as_str).unwrap_or("");
+    let rebuild = super::fold_structural_signature(old_text)
+        != super::fold_structural_signature(current_text);
+    let changed = old_text != current_text;
     let next_flag = line_has_fold_structure(current_text);
     let prev_flag = structure.get(cl).copied().unwrap_or(false);
-
-    if next_flag != prev_flag {
-        if let Some(flag) = structure.get_mut(cl) {
-            *flag = next_flag;
+    if let Some(flag) = structure.get_mut(cl) {
+        *flag = next_flag;
+    }
+    if changed {
+        if let Some(text) = snapshot.get_mut(cl) {
+            let _ = std::mem::replace(text, current_text.to_owned());
         }
     }
-    if let Some(text) = snapshot.get_mut(cl) {
-        *text = new_text.clone();
+    if rebuild {
+        if next_flag || prev_flag {
+            if flags.has_collapsed {
+                FoldUpkeep::Recompute
+            } else {
+                FoldUpkeep::Defer { reset_map: false }
+            }
+        } else {
+            FoldUpkeep::Unchanged
+        }
+    } else {
+        // Text is no longer needed once signatures agree; this same-line
+        // mapping still invalidates folds overlapping the edited line.
+        FoldUpkeep::Mapped(map_ranges_through_line_edits(
+            ranges,
+            &[FoldLineEdit {
+                old_start_line: cl,
+                old_line_span: 1,
+                new_line_span: 1,
+                old_line_text: String::new(),
+                new_line_text: String::new(),
+            }],
+            lines.len().max(1),
+        ))
     }
-
-    let remap_edits = [FoldLineEdit {
-        old_start_line: cl,
-        old_line_span: 1,
-        new_line_span: 1,
-        old_line_text: old_text,
-        new_line_text: new_text,
-    }];
-    decide_remap(
-        ranges,
-        &remap_edits,
-        lines.len(),
-        flags.has_collapsed,
-        next_flag || prev_flag,
-        false,
-    )
 }
 
 #[cfg(test)]
@@ -208,7 +289,7 @@ mod tests {
         let mut structure = old.iter().map(|s| line_has_fold_structure(s)).collect();
         let mut snapshot = old.iter().map(|s| s.to_string()).collect();
         let lines = new.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        plan_fold_upkeep(&lines, 0, &mut structure, &mut snapshot, &[], flags)
+        plan_fold_upkeep_with_delta(&lines, 0, None, &mut structure, &mut snapshot, &[], flags)
     }
     #[test]
     fn pending_rescan_stays_idle_unless_content_is_hidden() {
@@ -263,9 +344,10 @@ mod tests {
         let mut structure = vec![false];
         let mut snapshot = vec![];
         assert_eq!(
-            plan_fold_upkeep(
+            plan_fold_upkeep_with_delta(
                 &["one".into(), "two".into()],
                 0,
+                None,
                 &mut structure,
                 &mut snapshot,
                 &[],
@@ -273,5 +355,135 @@ mod tests {
             ),
             FoldUpkeep::Recompute
         );
+    }
+    #[test]
+    fn deltas_locate_insert_delete_and_same_line_away_from_cursor() {
+        for (old, new, delta) in [
+            (
+                vec!["a", "b", "c"],
+                vec!["a", "b", "", "c"],
+                EditDelta {
+                    start_line: 1,
+                    old_span: 1,
+                    new_span: 2,
+                },
+            ),
+            (
+                vec!["a", "b", "", "c"],
+                vec!["a", "b", "c"],
+                EditDelta {
+                    start_line: 1,
+                    old_span: 2,
+                    new_span: 1,
+                },
+            ),
+            (
+                vec!["a", "b", "c"],
+                vec!["a", "changed", "c"],
+                EditDelta {
+                    start_line: 1,
+                    old_span: 1,
+                    new_span: 1,
+                },
+            ),
+        ] {
+            let mut structure = old.iter().map(|s| line_has_fold_structure(s)).collect();
+            let mut snapshot = old.iter().map(|s| s.to_string()).collect();
+            let lines = new.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            let result = plan_fold_upkeep_with_delta(
+                &lines,
+                0,
+                Some(delta),
+                &mut structure,
+                &mut snapshot,
+                &[],
+                flags(),
+            );
+            assert!(!matches!(result, FoldUpkeep::Recompute));
+            assert_eq!(snapshot, lines);
+            assert_eq!(structure.len(), lines.len());
+        }
+    }
+    #[test]
+    fn bulk_undo_zero_spans_and_invalid_delta_recompute_without_mutation() {
+        for delta in [
+            EditDelta {
+                start_line: 1,
+                old_span: 1,
+                new_span: 3,
+            },
+            EditDelta {
+                start_line: 1,
+                old_span: 0,
+                new_span: 1,
+            },
+            EditDelta {
+                start_line: 99,
+                old_span: 1,
+                new_span: 1,
+            },
+            EditDelta {
+                start_line: 1,
+                old_span: 1,
+                new_span: 2,
+            },
+        ] {
+            let mut structure = vec![false; 3];
+            let mut snapshot = vec!["a".into(), "b".into(), "c".into()];
+            let before = snapshot.clone();
+            assert_eq!(
+                plan_fold_upkeep_with_delta(
+                    &before,
+                    0,
+                    Some(delta),
+                    &mut structure,
+                    &mut snapshot,
+                    &[],
+                    flags()
+                ),
+                FoldUpkeep::Recompute
+            );
+            assert_eq!(snapshot, before);
+        }
+    }
+    #[test]
+    fn undo_restoring_multiple_lines_recomputes_and_unchanged_typing_keeps_snapshot() {
+        let mut structure = vec![false; 2];
+        let mut snapshot = vec!["a".into(), "d".into()];
+        assert_eq!(
+            plan_fold_upkeep_with_delta(
+                &["a".into(), "b".into(), "c".into(), "d".into()],
+                0,
+                Some(EditDelta {
+                    start_line: 0,
+                    old_span: 1,
+                    new_span: 3
+                }),
+                &mut structure,
+                &mut snapshot,
+                &[],
+                flags()
+            ),
+            FoldUpkeep::Recompute
+        );
+        let lines = snapshot.clone();
+        let pointer = snapshot[1].as_ptr();
+        assert_eq!(
+            plan_fold_upkeep_with_delta(
+                &lines,
+                0,
+                Some(EditDelta {
+                    start_line: 1,
+                    old_span: 1,
+                    new_span: 1
+                }),
+                &mut structure,
+                &mut snapshot,
+                &[],
+                flags()
+            ),
+            FoldUpkeep::Mapped(vec![])
+        );
+        assert_eq!(snapshot[1].as_ptr(), pointer);
     }
 }

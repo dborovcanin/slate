@@ -675,7 +675,7 @@ impl TerminalApp {
         self.calc.stale = true;
     }
 
-    pub(super) fn recompute_folding_if_needed(&mut self) {
+    pub(super) fn recompute_folding_if_needed(&mut self, delta: Option<EditDelta>) {
         use crate::editor_core::folding::upkeep::{FoldUpkeep, FoldUpkeepFlags};
         let flags = FoldUpkeepFlags {
             reduced_features: self.large_note_reduced_features(),
@@ -683,9 +683,10 @@ impl TerminalApp {
             has_collapsed: !self.folds.collapsed_starts.is_empty(),
             view_line_count: self.folds.real_to_visible.len(),
         };
-        let plan = crate::editor_core::folding::upkeep::plan_fold_upkeep(
+        let plan = crate::editor_core::folding::upkeep::plan_fold_upkeep_with_delta(
             &self.editor.lines,
             self.editor.cursor_line,
+            delta,
             &mut self.folds.line_has_structure,
             &mut self.folds.line_text_snapshot,
             &self.folds.ranges,
@@ -1069,7 +1070,7 @@ impl TerminalApp {
         };
         self.invalidate_fence_checkpoints_from_line(clamped_changed_line);
         self.update_calc_flags_incremental();
-        self.recompute_folding_if_needed();
+        self.recompute_folding_if_needed(delta);
         use crate::editor_core::calc_plan::{AfterEditFlags, CalcAfterEdit};
         let plan = crate::editor_core::calc_plan::plan_after_edit(AfterEditFlags {
             line_count: self.editor.lines.len(),
@@ -1229,7 +1230,7 @@ impl TerminalApp {
             // History may replace any lines; rescan, deferred to idle time
             // unless a collapsed fold depends on it.
             self.folds.rescan_pending = true;
-            self.recompute_folding_if_needed();
+            self.recompute_folding_if_needed(None);
             self.adjust_cursor();
             if self.mode == UiMode::Normal {
                 self.editor.cursor_col = self
@@ -1273,7 +1274,7 @@ impl TerminalApp {
             // History may replace any lines; rescan, deferred to idle time
             // unless a collapsed fold depends on it.
             self.folds.rescan_pending = true;
-            self.recompute_folding_if_needed();
+            self.recompute_folding_if_needed(None);
             self.adjust_cursor();
             if self.mode == UiMode::Normal {
                 self.editor.cursor_col = self

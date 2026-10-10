@@ -536,7 +536,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 
 - [x] Step 0: branch, clean main snapshot and baseline capture.
 - [x] Step 1: Normal-mode undo/redo cursor regression.
-- [ ] Step 2: fold upkeep from exact edit spans.
+- [x] Step 2: fold upkeep from exact edit spans.
 - [ ] Step 3: core same-line replacement plans.
 - [ ] Step 4: core line insertion/removal plans.
 - [ ] Step 5: document crate and terminal view separation.
@@ -560,6 +560,11 @@ Step 1: the added replay failed before the fix and passes afterwards; all
 existing cases remain unchanged. Restored Normal-mode cursors clamp before
 history checkpoints; Insert-mode exhaustion behavior is retained. Workspace
 tests, formatting and Clippy warning comparison passed.
+
+Step 2: exact deltas locate off-cursor fold edits; unchanged same-line edits
+retain their snapshot allocation. Core regression tests and workspace checks
+passed, with no new Clippy warnings. Release large-note gates passed; no
+30k/100k metric crossed the investigation threshold against the lower baseline.
 
 Baseline workspace: 1,294 tests passed, six ignored. The initial sandbox run
 could not create a private runtime image; the approved rerun passed. Baseline

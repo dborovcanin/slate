@@ -1518,7 +1518,7 @@ impl TerminalApp {
     /// that folding is off.
     fn recompute_folding_for_note_size(&mut self) {
         if self.large_note_reduced_features() {
-            self.recompute_folding_if_needed();
+            self.recompute_folding_if_needed(None);
         } else {
             self.recompute_folding();
         }
