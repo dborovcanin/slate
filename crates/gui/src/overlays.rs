@@ -517,6 +517,20 @@ fn menu_row(
         .when(highlighted, |d| d.bg(t.active))
         .hover(|s| s.bg(t.active))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, act, cx)))
+        .when(matches!(act, Act::Sub(_)), |d| {
+            d.on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                // Open the submenu once, not on every pixel of movement.
+                let already = match (&this.overlay, act) {
+                    (Overlay::Menu { sub, .. } | Overlay::Context { sub, .. }, Act::Sub(s)) => {
+                        *sub == Some(s)
+                    }
+                    _ => true,
+                };
+                if !already {
+                    activate(this, act, cx);
+                }
+            }))
+        })
         .child(
             div()
                 .w(px(14.0))
