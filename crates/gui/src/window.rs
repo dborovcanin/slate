@@ -13,8 +13,38 @@ use gpui::{
     div, list, prelude::*, px, AnyElement, ClipboardItem, Context, FocusHandle, FontWeight,
     KeyDownEvent, ListAlignment, ListState, MouseButton, SharedString, Window,
 };
+use note_session::display::mapping::Affinity;
 use note_session::input::{HostRequest, InputOutcome};
 use std::time::Duration;
+
+/// The word around character column `col` of `text`: a run of letters,
+/// digits and `_`, or of other non-space characters.
+fn word_at(text: &str, col: usize) -> (usize, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return (0, 0);
+    }
+    let col = col.min(chars.len() - 1);
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    };
+    let k = class(chars[col]);
+    let mut from = col;
+    while from > 0 && class(chars[from - 1]) == k {
+        from -= 1;
+    }
+    let mut to = col + 1;
+    while to < chars.len() && class(chars[to]) == k {
+        to += 1;
+    }
+    (from, to)
+}
 
 pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Format", "Calc", "Help"];
 /// Sidebar entries; the rest of the notes are one search away.
@@ -40,6 +70,10 @@ pub struct SlateWindow {
     pub(crate) overlay: crate::overlays::Overlay,
     /// Lines of the table under the mouse, which shows its add row/column bars.
     hover_table: Option<(usize, usize)>,
+    /// Text layouts from the last paint, by line, to map mouse positions to characters.
+    layouts: std::cell::RefCell<std::collections::HashMap<usize, gpui::TextLayout>>,
+    /// Where a mouse drag started; set while the left button is held.
+    drag_anchor: Option<(usize, usize)>,
     /// Window size in pixels from the last paint, to reveal far jumps and fit the status bar.
     viewport: std::cell::Cell<(f32, f32)>,
     fences: Vec<FenceState>,
@@ -61,6 +95,8 @@ impl SlateWindow {
             status: None,
             overlay: Default::default(),
             hover_table: None,
+            layouts: Default::default(),
+            drag_anchor: None,
             viewport: std::cell::Cell::new((1280.0, 800.0)),
             fences: Vec::new(),
             cache: Vec::new(),
@@ -527,6 +563,119 @@ impl SlateWindow {
         self.after_input(before, InputOutcome::default(), cx);
     }
 
+    /// The source column under `position` on line `ix`, from the last paint.
+    fn column_at(&self, ix: usize, position: gpui::Point<gpui::Pixels>) -> Option<usize> {
+        let layout = self.layouts.borrow().get(&ix)?.clone();
+        let line = self.cache.get(ix)?.as_ref()?;
+        let map = line.map.as_ref()?;
+        // gpui panics for a layout that was measured but never painted.
+        let index = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            layout.index_for_position(position)
+        }))
+        .ok()?;
+        let byte = match index {
+            Ok(b) | Err(b) => b,
+        };
+        let text: String = line.runs.iter().map(|r| r.text.as_str()).collect();
+        let shown = text[..byte.min(text.len())].chars().count();
+        let hit = map.display_to_source(line.display_skip + shown, Affinity::After)?;
+        let len = self.host.doc.lines().get(ix)?.chars().count();
+        Some(
+            hit.caret
+                .or(hit.owner.map(|r| r.start))
+                .unwrap_or(len)
+                .min(len),
+        )
+    }
+
+    /// Button down on line `ix`: place the cursor at the character, or select
+    /// a word (double click) or the line (triple click).
+    fn mouse_down(
+        &mut self,
+        ix: usize,
+        position: gpui::Point<gpui::Pixels>,
+        clicks: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.snapshot_cursor();
+        let text = self.host.doc.lines()[ix].clone();
+        let len = text.chars().count();
+        let col = self.column_at(ix, position).unwrap_or(0).min(len);
+        let vim = self.mode == EditingMode::Vim;
+        // A click leaves Visual mode and any selection.
+        if matches!(
+            self.host.input.mode(),
+            VimMode::Visual | VimMode::VisualLine
+        ) {
+            self.host.input.vim = Default::default();
+        }
+        self.host.doc.selection_anchor = None;
+        self.drag_anchor = None;
+        match clicks {
+            0 | 1 => {
+                self.host.doc.cursor_line = ix;
+                self.host.doc.cursor_col = col;
+                self.drag_anchor = Some((ix, col));
+            }
+            2 => {
+                let (from, to) = word_at(&text, col);
+                self.host.doc.cursor_line = ix;
+                if vim && self.host.input.mode() == VimMode::Normal {
+                    // Visual includes the character under the cursor.
+                    self.host.doc.selection_anchor = Some((ix, from));
+                    self.host.doc.cursor_col = to.saturating_sub(1).max(from);
+                    self.host.input.vim.mode = VimMode::Visual;
+                } else {
+                    self.host.doc.selection_anchor = Some((ix, from));
+                    self.host.doc.cursor_col = to;
+                }
+            }
+            _ => {
+                self.host.doc.cursor_line = ix;
+                if vim && self.host.input.mode() == VimMode::Normal {
+                    self.host.doc.selection_anchor = Some((ix, 0));
+                    self.host.doc.cursor_col = 0;
+                    self.host.input.vim.mode = VimMode::VisualLine;
+                } else {
+                    self.host.doc.selection_anchor = Some((ix, 0));
+                    self.host.doc.cursor_col = len;
+                }
+            }
+        }
+        self.after_input(before, InputOutcome::default(), cx);
+    }
+
+    /// The mouse moved over line `ix` with the button held: extend the
+    /// selection to the character under it.
+    fn mouse_drag(
+        &mut self,
+        ix: usize,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(anchor) = self.drag_anchor else {
+            return;
+        };
+        let len = self
+            .host
+            .doc
+            .lines()
+            .get(ix)
+            .map_or(0, |l| l.chars().count());
+        let col = self.column_at(ix, position).unwrap_or(0).min(len);
+        if (ix, col) == (self.host.doc.cursor_line, self.host.doc.cursor_col) {
+            return;
+        }
+        let before = self.snapshot_cursor();
+        self.host.doc.selection_anchor = Some(anchor);
+        self.host.doc.cursor_line = ix;
+        self.host.doc.cursor_col = col;
+        if self.mode == EditingMode::Vim && self.host.input.mode() == VimMode::Normal {
+            self.host.input.vim.mode = VimMode::Visual;
+        }
+        self.after_input(before, InputOutcome::default(), cx);
+    }
+
     fn line(&mut self, ix: usize) -> Option<LineView> {
         if ix >= self.cache.len() {
             return None;
@@ -583,6 +732,16 @@ impl SlateWindow {
         let delimiter = line.kind == LineKind::TableDelimiter;
         let table = matches!(line.kind, LineKind::TableRow { .. });
         let in_table = table || delimiter;
+        let mut text_layout = None;
+        let body = editor_lines::body(&line, &style, &mut text_layout);
+        match text_layout {
+            Some(layout) => {
+                self.layouts.borrow_mut().insert(ix, layout);
+            }
+            None => {
+                self.layouts.borrow_mut().remove(&ix);
+            }
+        }
         let hovered = self
             .hover_table
             .is_some_and(|(start, end)| (start..=end).contains(&ix));
@@ -623,12 +782,17 @@ impl SlateWindow {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
+                cx.listener(move |this, ev: &gpui::MouseDownEvent, window, cx| {
                     window.focus(&this.focus);
                     crate::overlays::close(this);
-                    this.move_cursor_to(ix, cx)
+                    this.mouse_down(ix, ev.position, ev.click_count, cx);
                 }),
             )
+            .on_mouse_move(cx.listener(move |this, ev: &gpui::MouseMoveEvent, _, cx| {
+                if ev.dragging() {
+                    this.mouse_drag(ix, ev.position, cx);
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, ev: &gpui::MouseDownEvent, window, cx| {
@@ -638,12 +802,7 @@ impl SlateWindow {
                 }),
             )
             .child(gutter)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(editor_lines::body(&line, &style)),
-            )
+            .child(div().flex_1().min_w_0().child(body))
             .when(table, |d| {
                 // Space for the add-column bar is always reserved, so
                 // hovering never moves the table.
@@ -1038,6 +1197,14 @@ impl Render for SlateWindow {
             .id("slate")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.drag_anchor = None),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.drag_anchor = None),
+            )
             .relative()
             .size_full()
             .flex()
@@ -1058,5 +1225,20 @@ impl Render for SlateWindow {
             .children(crate::overlays::which_key(self))
             .child(self.status_bar())
             .children(crate::overlays::render(self, window, cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::word_at;
+
+    #[test]
+    fn double_click_selects_words_and_symbol_runs() {
+        assert_eq!(word_at("let total_cost = 5;", 6), (4, 14));
+        assert_eq!(word_at("let total_cost = 5;", 15), (14, 15));
+        assert_eq!(word_at("a := b", 3), (2, 4));
+        assert_eq!(word_at("héllo wörld", 8), (6, 11));
+        assert_eq!(word_at("", 0), (0, 0));
+        assert_eq!(word_at("end", 99), (0, 3));
     }
 }

@@ -3,6 +3,7 @@ use crate::note_view::{LineKind, LineView, Run, TableCell};
 use crate::theme::Theme;
 use gpui::{
     div, prelude::*, px, AnyElement, FontWeight, HighlightStyle, Hsla, SharedString, StyledText,
+    TextLayout, UnderlineStyle,
 };
 use std::ops::Range;
 
@@ -64,17 +65,27 @@ fn styled(
         ));
     }
     if let Some(c) = block {
-        let style = if s.focused {
-            HighlightStyle {
+        let style = match (s.focused, s.cursor) {
+            (true, CursorShape::Block) => HighlightStyle {
                 background_color: Some(t.text),
                 color: Some(t.bg),
                 ..Default::default()
-            }
-        } else {
-            HighlightStyle {
+            },
+            // Insert mode: a tinted cell with an underline, so the line stays
+            // one text run and can wrap.
+            (true, CursorShape::Bar) => HighlightStyle {
+                background_color: Some(t.blue.opacity(0.3)),
+                underline: Some(UnderlineStyle {
+                    thickness: px(2.0),
+                    color: Some(t.blue),
+                    wavy: false,
+                }),
+                ..Default::default()
+            },
+            (false, _) => HighlightStyle {
                 background_color: Some(t.muted.opacity(0.4)),
                 ..Default::default()
-            }
+            },
         };
         overlays.push((bytes(c..c + 1), style));
     }
@@ -146,27 +157,12 @@ fn shift(sel: Option<&Range<usize>>, by: usize) -> Option<Range<usize>> {
     sel.map(|r| r.start.saturating_sub(by)..r.end.saturating_sub(by))
 }
 
-/// The line's text with its cursor and selection.
-fn text_with_cursor(line: &LineView, s: &LineStyle) -> AnyElement {
-    let sel = line.selection.as_ref();
-    match (line.cursor, s.cursor) {
-        (Some(c), CursorShape::Bar) => {
-            let (left, right) = split_runs(&line.runs, c);
-            let caret = div().w(px(2.0)).h(px(18.0)).flex_none().bg(if s.focused {
-                s.theme.blue
-            } else {
-                s.theme.faint
-            });
-            div()
-                .flex()
-                .items_center()
-                .child(styled(&left, sel, None, s))
-                .child(caret)
-                .child(styled(&right, shift(sel, c).as_ref(), None, s))
-                .into_any_element()
-        }
-        (cursor, _) => styled(&line.runs, sel, cursor, s).into_any_element(),
-    }
+/// The line's text with its cursor and selection, as one run so it wraps.
+fn text_with_cursor(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> AnyElement {
+    let text = styled(&line.runs, line.selection.as_ref(), line.cursor, s);
+    // The window maps mouse positions to characters through this layout.
+    *layout = Some(text.layout().clone());
+    text.into_any_element()
 }
 
 fn ghost(text: &str, t: &Theme) -> impl IntoElement {
@@ -222,8 +218,9 @@ fn table_row(cells: &[TableCell], header: bool, t: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// The body of a line (without gutter).
-pub fn body(line: &LineView, s: &LineStyle) -> AnyElement {
+/// The body of a line (without gutter). `layout` receives the text layout
+/// of lines that have editable text, for mouse hit-testing.
+pub fn body(line: &LineView, s: &LineStyle, layout: &mut Option<TextLayout>) -> AnyElement {
     let t = s.theme;
     match &line.kind {
         LineKind::Heading(level) => {
@@ -239,7 +236,7 @@ pub fn body(line: &LineView, s: &LineStyle) -> AnyElement {
                 .text_size(px(size))
                 .line_height(px(size * 1.4))
                 .text_color(t.heading)
-                .child(text_with_cursor(line, s))
+                .child(text_with_cursor(line, s, layout))
                 .into_any_element()
         }
         LineKind::Checklist { checked } => div()
@@ -250,7 +247,7 @@ pub fn body(line: &LineView, s: &LineStyle) -> AnyElement {
             .child(
                 div()
                     .when(*checked, |d| d.text_color(t.faint).line_through())
-                    .child(text_with_cursor(line, s)),
+                    .child(text_with_cursor(line, s, layout)),
             )
             .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
             .into_any_element(),
@@ -260,7 +257,7 @@ pub fn body(line: &LineView, s: &LineStyle) -> AnyElement {
         LineKind::Text => div()
             .flex()
             .items_center()
-            .child(text_with_cursor(line, s))
+            .child(text_with_cursor(line, s, layout))
             .when_some(line.ghost.as_deref(), |d, g| d.child(ghost(g, t)))
             .into_any_element(),
     }

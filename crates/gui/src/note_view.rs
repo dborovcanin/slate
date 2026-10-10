@@ -69,7 +69,7 @@ pub enum LineKind {
     TableDelimiter,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct LineView {
     pub index: usize,
     pub kind: LineKind,
@@ -82,6 +82,11 @@ pub struct LineView {
     pub selection: Option<Range<usize>>,
     /// The whole line is selected (Visual Line mode, or a selected table row).
     pub line_selected: bool,
+    /// Display columns to source columns, for mapping mouse positions back
+    /// to the text. `None` for table rows.
+    pub map: Option<Arc<note_session::display::mapping::SourceDisplayMap>>,
+    /// Display columns before the first run (a checklist's marker).
+    pub display_skip: usize,
 }
 
 /// What running a command-bar command did.
@@ -782,6 +787,8 @@ impl NoteHost {
                 .flatten(),
             selection,
             line_selected,
+            map: Some(styled.source_map.clone()),
+            display_skip: map.source_to_display(start, Affinity::After).unwrap_or(0),
         }
     }
 
@@ -795,6 +802,8 @@ impl NoteHost {
             cursor: None,
             selection: None,
             line_selected: false,
+            map: None,
+            display_skip: 0,
         };
         if table_syntax::is_delimiter_line_in(lines, index) {
             return view;
