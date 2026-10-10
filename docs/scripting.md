@@ -6,6 +6,9 @@ optional currency rates script (see "Currency rates" below), which Slate runs
 once in the background at startup and on `:currency refresh`. Use trusted executables:
 they run with your user permissions, including filesystem and network access.
 
+[`scripts/examples`](../scripts/examples/README.md) has ready-to-copy examples
+with setup steps, including an offline currency rates script.
+
 ```toml
 [scripts.uppercase]
 argv = ["python3", "/absolute/path/to/slate/scripts/examples/uppercase.py"]
@@ -119,7 +122,7 @@ timeout_seconds = 30
 ```
 
 The example uses open.er-api.com (about 160 currencies, updated daily; see
-its terms). Any executable works: it gets the same v1 request with empty
+its terms); `rates_fixed.py` is an offline alternative with invented rates. Any executable works: it gets the same v1 request with empty
 `text` and must print:
 
 ```json
