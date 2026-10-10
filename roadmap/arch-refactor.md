@@ -255,7 +255,7 @@ them when a second consumer or a test needs them, not before.
 
 | Phase | Status | Notes |
 | --- | --- | --- |
-| 1. Buffer primitives | Planned | |
+| 1. Buffer primitives | In progress | Offset helpers and prepared text changes extracted; typing and paste primitives remain in the terminal |
 | 2. Undo store and policy | Planned | Store relocation alone is an intermediate step |
 | 3. Word motions | Planned | |
 | 4. Vim intent execution | Planned | Same as plan.md Commands/Vim action point 1 |

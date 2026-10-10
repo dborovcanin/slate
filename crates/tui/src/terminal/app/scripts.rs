@@ -1,6 +1,6 @@
 //! Terminal adapters for core script configuration, workers, and edit plans.
-use super::editing::{document_text_len, line_and_byte_for_offset};
 use super::{Db, Key, TerminalApp, UiMode};
+use crate::editor_core::buffer::{document_text_len, line_and_byte_for_offset};
 use crate::editor_core::types::TextRange;
 use app_core::scripts::{ScriptConfig, ScriptInput, ScriptOutput, ScriptRequest, ScriptResponse};
 use std::sync::{

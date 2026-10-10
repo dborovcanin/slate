@@ -1,3 +1,4 @@
+pub mod buffer;
 pub mod calc_plan;
 pub mod command_catalog;
 pub mod command_history;

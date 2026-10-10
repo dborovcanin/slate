@@ -14,6 +14,10 @@ use super::{
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
     UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
+use crate::editor_core::buffer::{
+    apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
+    map_offset_through_changes, prepare_text_change,
+};
 use crate::terminal::text_utils::{
     byte_index, char_col_at_byte, cursor_render_char_col, remove_char_at,
     viewport_col_for_display_col,
@@ -172,100 +176,6 @@ mod tests {
         assert!(normalize_pasted_path_token(path.to_string_lossy().as_ref()).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
-}
-
-fn map_offset_through_changes(
-    mut offset: usize,
-    changes_desc: &[crate::editor_core::types::TextChange],
-) -> usize {
-    for change in changes_desc {
-        let from = change.from;
-        let to = change.to.max(from);
-        let added = change.insert.len();
-        let removed = to.saturating_sub(from);
-        if from <= offset {
-            if to <= offset {
-                offset = offset.saturating_add(added).saturating_sub(removed);
-            } else {
-                let inside = offset.saturating_sub(from);
-                offset = from.saturating_add(inside.min(added));
-            }
-        }
-    }
-    offset
-}
-
-pub(super) fn document_text_len(lines: &[String]) -> usize {
-    if lines.len() == 1 && lines.first().is_some_and(String::is_empty) {
-        0
-    } else {
-        let line_bytes: usize = lines.iter().map(|line| line.len()).sum();
-        line_bytes.saturating_add(lines.len().saturating_sub(1))
-    }
-}
-
-pub(super) fn line_and_byte_for_offset(lines: &[String], target: usize) -> (usize, usize) {
-    if lines.is_empty() {
-        return (0, 0);
-    }
-    let mut offset = 0usize;
-    for (idx, line) in lines.iter().enumerate() {
-        let line_end = offset + line.len();
-        if target <= line_end {
-            return (idx, target.saturating_sub(offset));
-        }
-        offset = line_end + 1;
-    }
-    let last = lines.len().saturating_sub(1);
-    (last, lines[last].len())
-}
-
-fn apply_text_change_in_place(
-    lines: &mut Vec<String>,
-    change: &crate::editor_core::types::TextChange,
-    doc_len: usize,
-) -> (usize, usize, usize) {
-    let from = change.from.min(doc_len);
-    let to = change.to.min(doc_len);
-    let (from_line, from_byte) = line_and_byte_for_offset(lines, from);
-    let (to_line, to_byte) = line_and_byte_for_offset(lines, to);
-
-    let from_text = lines.get(from_line).cloned().unwrap_or_default();
-    let to_text = lines.get(to_line).cloned().unwrap_or_default();
-    let prefix = &from_text[..from_byte.min(from_text.len())];
-    let suffix = &to_text[to_byte.min(to_text.len())..];
-    let insert_parts = change.insert.split('\n').collect::<Vec<_>>();
-    let mut replacement = Vec::with_capacity(insert_parts.len().max(1));
-
-    if insert_parts.len() <= 1 {
-        replacement.push(format!(
-            "{prefix}{}{suffix}",
-            insert_parts.first().copied().unwrap_or("")
-        ));
-    } else {
-        replacement.push(format!("{prefix}{}", insert_parts[0]));
-        for part in &insert_parts[1..insert_parts.len() - 1] {
-            replacement.push((*part).to_string());
-        }
-        replacement.push(format!(
-            "{}{suffix}",
-            insert_parts.last().copied().unwrap_or("")
-        ));
-    }
-
-    let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
-    let new_line_span = replacement.len().max(1);
-    if from_line <= to_line && from_line < lines.len() {
-        let end = to_line.min(lines.len().saturating_sub(1));
-        lines.splice(from_line..=end, replacement);
-    } else {
-        *lines = replacement;
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-
-    (from_line, old_line_span, new_line_span)
 }
 
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
@@ -3307,8 +3217,9 @@ impl TerminalApp {
             let doc_len = document_text_len(&self.editor.lines);
             let from = change.from.min(doc_len);
             let to = change.to.min(doc_len);
-            let (from_line, from_byte) = line_and_byte_for_offset(&self.editor.lines, from);
-            let (to_line, to_byte) = line_and_byte_for_offset(&self.editor.lines, to);
+            let prepared = prepare_text_change(&self.editor.lines, change, doc_len);
+            let edit = prepared.edit;
+            let from_line = edit.from.0;
 
             let mut mapped_anchor =
                 self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
@@ -3323,50 +3234,10 @@ impl TerminalApp {
                 }
             }
 
-            let from_text = self
-                .editor
-                .lines
-                .get(from_line)
-                .cloned()
-                .unwrap_or_default();
-            let to_text = self.editor.lines.get(to_line).cloned().unwrap_or_default();
-            let prefix = &from_text[..from_byte.min(from_text.len())];
-            let suffix = &to_text[to_byte.min(to_text.len())..];
-            let insert_parts = change.insert.split('\n').collect::<Vec<_>>();
-            let mut replacement = Vec::with_capacity(insert_parts.len().max(1));
-
-            if insert_parts.len() <= 1 {
-                replacement.push(format!(
-                    "{prefix}{}{suffix}",
-                    insert_parts.first().copied().unwrap_or("")
-                ));
-            } else {
-                replacement.push(format!("{prefix}{}", insert_parts[0]));
-                for part in &insert_parts[1..insert_parts.len() - 1] {
-                    replacement.push((*part).to_string());
-                }
-                replacement.push(format!(
-                    "{}{suffix}",
-                    insert_parts.last().copied().unwrap_or("")
-                ));
-            }
-
-            let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
-            let new_line_span = replacement.len().max(1);
-            self.note_line_edit(
-                (from_line, from_byte),
-                (to_line, to_byte),
-                insert_parts.len() - 1,
-            );
-            if from_line <= to_line && from_line < self.editor.lines.len() {
-                let end = to_line.min(self.editor.lines.len().saturating_sub(1));
-                self.editor.lines.splice(from_line..=end, replacement);
-            } else {
-                self.editor.lines = replacement;
-            }
-            if self.editor.lines.is_empty() {
-                self.editor.lines.push(String::new());
-            }
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+            let delta = apply_text_change_in_place(&mut self.editor.lines, prepared);
+            let old_line_span = delta.old_span;
+            let new_line_span = delta.new_span;
 
             self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
 
@@ -3426,12 +3297,11 @@ impl TerminalApp {
             let from = change.from.min(current_doc_len);
             let to = change.to.min(current_doc_len);
             let removed = to.saturating_sub(from);
-            let from_at = line_and_byte_for_offset(&self.editor.lines, from);
-            let to_at = line_and_byte_for_offset(&self.editor.lines, to);
-            self.note_line_edit(from_at, to_at, change.insert.matches('\n').count());
-            let (from_line, old_line_span, new_line_span) =
-                apply_text_change_in_place(&mut self.editor.lines, change, current_doc_len);
-            self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
+            let prepared = prepare_text_change(&self.editor.lines, change, current_doc_len);
+            let edit = prepared.edit;
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+            let delta = apply_text_change_in_place(&mut self.editor.lines, prepared);
+            self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
             current_doc_len = current_doc_len
                 .saturating_add(change.insert.len())
                 .saturating_sub(removed);

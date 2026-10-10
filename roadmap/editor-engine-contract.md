@@ -16,6 +16,20 @@ This document defines the canonical shared-core contract for editor semantics.
 
 ## Current input/output contracts
 
+- Buffer contract (`editor_core::buffer`):
+  - `prepare_text_change`: input is the current lines, a byte-offset `TextChange`
+    and current document byte length; output is replacement lines plus
+    `ExactTextEdit` (pre-edit line/byte coordinates, boundary-line byte lengths
+    and inserted line breaks) and `EditDelta` (line-span invalidation summary).
+  - Record host metadata before calling `apply_text_change_in_place`, which
+    consumes the prepared change and mutates only the affected lines. The
+    buffer must stay unchanged between preparation and application.
+  - Change offsets must be UTF-8 boundaries; offsets beyond the document
+    length retain the existing end clamping. The host still applies compound
+    changes in descending offset order, records each change before mutation
+    and retains the existing undo/calc transaction boundary.
+  - Offset helpers use bytes and count inter-line newlines. They do not build
+    a joined copy of the document.
 - Command contract:
   - input: `CommandMode`, `raw_input`
   - output: canonical command definition (or none), suggestions, normalized input

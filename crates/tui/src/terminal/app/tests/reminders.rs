@@ -516,3 +516,37 @@ fn reminders_follow_text_reloaded_after_an_outside_change() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn compound_text_edits_preserve_exact_reminder_mapping_and_one_undo_step() {
+    let original = "é task\nβ task\nend";
+    let (db, mut app, path) = app_with_reminders(original, &[0, 1, 2]);
+    // The operation uses pre-operation byte offsets; the host applies it
+    // back to front. One split is mid-line, the other at column zero.
+    app.apply_edit_operation(&EditOperation {
+        changes: vec![
+            TextChange {
+                from: 2,
+                to: 2,
+                insert: "\n".into(),
+            },
+            TextChange {
+                from: 8,
+                to: 8,
+                insert: "\n".into(),
+            },
+        ],
+        selection: None,
+    });
+    assert_eq!(app.editor.lines.join("\n"), "é\n task\n\nβ task\nend");
+    assert_eq!(shown(&app), vec![reminder(0), moved(1, 3), moved(2, 4)]);
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert_eq!(app.editor.lines.join("\n"), original);
+    assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
+    run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+    assert_eq!(app.editor.lines.join("\n"), "é\n task\n\nβ task\nend");
+    assert_eq!(shown(&app), vec![reminder(0), moved(1, 3), moved(2, 4)]);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

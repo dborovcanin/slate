@@ -1,5 +1,6 @@
 // Pure logic lives in the editor-core crate. Re-export so terminal code can use
 // `crate::editor_core::*` paths.
+pub use editor_core::buffer;
 pub use editor_core::calc_plan;
 pub use editor_core::command_catalog;
 pub use editor_core::command_history;
