@@ -7,12 +7,15 @@ use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::DatePickerAction;
 use super::folding::FoldKind;
 use super::folding_state::FoldingState;
-use super::history::LineHistory;
 use super::input::{self, Key};
 use super::render;
 use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
+use crate::editor_core::completion::VariableAutocompleteState;
+use crate::editor_core::history::policy::{UndoAction, UndoPolicy};
+use crate::editor_core::history::LineHistory;
+use crate::editor_core::vim_actions::{VimRegisterMode, VimRegisterValue as VimRegister};
 
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
@@ -48,7 +51,6 @@ const CALC_RECOMPUTE_DEBOUNCE_MS: u64 = 90;
 const CALC_RECOMPUTE_PENDING_RETRY_MS: u64 = 35;
 const CALC_IDLE_EVAL_BUDGET_MS: u64 = 6;
 const CALC_ASYNC_MIN_LINES: usize = 2_000;
-const UNDO_DEBOUNCE_MS: u64 = 300;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
 const FOLD_PREFIX_TIMEOUT_MS: u64 = 900;
 const TITLE_ROW: usize = 1;
@@ -190,51 +192,10 @@ enum VimPipelineResult {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VimRegisterMode {
-    Charwise,
-    Linewise,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct VimRegister {
-    text: String,
-    mode: VimRegisterMode,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VimMacroStep {
     Action(crate::editor_core::vim::VimAction),
     InsertKey(crate::editor_core::vim::VimKey),
-}
-
-impl Default for VimRegister {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            mode: VimRegisterMode::Charwise,
-        }
-    }
-}
-
-impl VimRegister {
-    fn charwise(text: String) -> Self {
-        Self {
-            text,
-            mode: VimRegisterMode::Charwise,
-        }
-    }
-
-    fn linewise(text: String) -> Self {
-        Self {
-            text,
-            mode: VimRegisterMode::Linewise,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.mode == VimRegisterMode::Charwise && self.text.is_empty()
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -264,12 +225,6 @@ struct ReminderUndoEntry {
     line_idx: usize,
     before: Option<LineReminderGhost>,
     after: Option<LineReminderGhost>,
-}
-
-#[derive(Debug, Clone)]
-enum UndoAction {
-    Text,
-    Reminder(ReminderUndoEntry),
 }
 
 #[derive(Debug, Clone)]
@@ -309,24 +264,6 @@ struct CollectionEditDialogState {
     name: String,
     description: String,
     default_tags: String,
-}
-
-#[derive(Debug, Clone)]
-struct VariableCompletionPrefix {
-    from_col: usize,
-    to_col: usize,
-    query: String,
-}
-
-#[derive(Debug, Clone)]
-struct VariableAutocompleteState {
-    /// Column used to anchor the popup box visually (start of `[[` for cross-note,
-    /// same as `from_col` for regular variables).
-    popup_anchor_col: usize,
-    from_col: usize,
-    to_col: usize,
-    query: String,
-    suggestions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -612,6 +549,21 @@ struct EditorModel {
     markdown_formatting_right_boundary_exit: Option<(usize, usize)>,
 }
 
+impl EditorModel {
+    /// The cursor as the core buffer APIs take it (character column).
+    fn cursor(&self) -> crate::editor_core::buffer::primitives::BufferCursor {
+        crate::editor_core::buffer::primitives::BufferCursor {
+            line: self.cursor_line,
+            column: self.cursor_col,
+        }
+    }
+
+    fn set_cursor(&mut self, cursor: crate::editor_core::buffer::primitives::BufferCursor) {
+        self.cursor_line = cursor.line;
+        self.cursor_col = cursor.column;
+    }
+}
+
 /// Note-switcher overlay state: the fuzzy query + result list, the reused
 /// scoring scratch buffer, selection cursor, open/delete confirmation prompts,
 /// the active collection filter, and the prewarm / title-refresh flags.
@@ -826,8 +778,7 @@ struct TerminalApp {
     clipboard_watch: ClipboardWatch,
     // Undo/redo
     history: LineHistory<ReminderMarks>,
-    undo_actions: Vec<UndoAction>,
-    undo_action_pos: usize,
+    undo_policy: UndoPolicy<ReminderUndoEntry>,
     perf_trace: PerfTraceState,
     /// Terminal graphics support for the image preview. `None` until the
     /// first preview, which queries the terminal, so startup never pays for it.
@@ -1336,8 +1287,7 @@ impl TerminalApp {
                 last_poll: Instant::now(),
             },
             history,
-            undo_actions: Vec::new(),
-            undo_action_pos: 0,
+            undo_policy: UndoPolicy::default(),
             perf_trace: PerfTraceState {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()

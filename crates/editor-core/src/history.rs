@@ -1,3 +1,7 @@
+use crate::buffer::EditDelta;
+
+pub mod policy;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HistoryCursor {
     pub line: usize,
@@ -45,11 +49,14 @@ pub struct LineHistory<M = ()> {
     coalesce_anchor: Option<HistorySnapshot<M>>,
     /// The entry the last recorded edit created or merged into.
     recorded_entry: Option<usize>,
+    // Entry-count changes cannot distinguish append from merge at the retention cap.
+    recorded_new_entry: bool,
+    recorded_eviction: bool,
     /// The last recorded edit's change, for [`LineHistory::take_last_delta`].
     last_delta: Option<LineDelta>,
 }
 
-pub(crate) const COALESCE_ANCHOR_MAX_LINES: usize = 5_000;
+pub const COALESCE_ANCHOR_MAX_LINES: usize = 5_000;
 
 impl<M: Clone + Default> LineHistory<M> {
     pub fn new(
@@ -74,12 +81,22 @@ impl<M: Clone + Default> LineHistory<M> {
             },
             coalesce_anchor: None,
             recorded_entry: None,
+            recorded_new_entry: false,
+            recorded_eviction: false,
             last_delta: None,
         }
     }
 
     fn disabled(&self) -> bool {
         self.max_entries == 0
+    }
+
+    /// Forget which entry the last edit recorded, so marks and the undo
+    /// policy no longer attach to it.
+    fn clear_recorded(&mut self) {
+        self.recorded_entry = None;
+        self.recorded_new_entry = false;
+        self.recorded_eviction = false;
     }
 
     #[cfg(test)]
@@ -99,11 +116,11 @@ impl<M: Clone + Default> LineHistory<M> {
             marks: M::default(),
         };
         self.coalesce_anchor = None;
-        self.recorded_entry = None;
+        self.clear_recorded();
     }
 
     pub fn checkpoint(&mut self, lines: &[String], cursor_line: usize, cursor_col: usize) {
-        self.recorded_entry = None;
+        self.clear_recorded();
         if self.disabled() {
             self.snapshot.lines.clear();
             self.snapshot.cursor = HistoryCursor {
@@ -137,7 +154,7 @@ impl<M: Clone + Default> LineHistory<M> {
     pub fn set_marks(&mut self, marks: M) {
         self.snapshot.marks = marks;
         self.coalesce_anchor = None;
-        self.recorded_entry = None;
+        self.clear_recorded();
     }
 
     /// The marks the last recorded edit left: the step it created or merged
@@ -172,7 +189,7 @@ impl<M: Clone + Default> LineHistory<M> {
         cursor_col: usize,
         coalesce: bool,
     ) -> bool {
-        self.recorded_entry = None;
+        self.clear_recorded();
         self.last_delta = None;
         if self.disabled() {
             self.snapshot.cursor = HistoryCursor {
@@ -242,25 +259,27 @@ impl<M: Clone + Default> LineHistory<M> {
     }
 
     fn push_entry(&mut self, entry: HistoryEntry<M>) {
+        self.recorded_new_entry = true;
         self.entries.push(entry);
         self.pos = self.entries.len();
         if self.entries.len() > self.max_entries {
+            self.recorded_eviction = true;
             self.entries.remove(0);
             self.pos = self.pos.saturating_sub(1);
         }
         self.recorded_entry = Some(self.entries.len() - 1);
     }
 
+    /// Record the supplied pre-edit line range and its replacement span.
+    /// The delta must describe the change from the stored snapshot to `lines`.
     pub fn record_edit_span(
         &mut self,
         lines: &[String],
         cursor_line: usize,
         cursor_col: usize,
-        start_line: usize,
-        old_line_span: usize,
-        new_line_span: usize,
+        delta: EditDelta,
     ) -> bool {
-        self.recorded_entry = None;
+        self.clear_recorded();
         self.last_delta = None;
         if self.disabled() {
             self.snapshot.cursor = HistoryCursor {
@@ -272,9 +291,9 @@ impl<M: Clone + Default> LineHistory<M> {
         }
         let before_len = self.snapshot.lines.len();
         let after_len = lines.len();
-        let start = start_line.min(before_len).min(after_len);
-        let old_end = start.saturating_add(old_line_span).min(before_len);
-        let new_end = start.saturating_add(new_line_span).min(after_len);
+        let start = delta.start_line.min(before_len).min(after_len);
+        let old_end = start.saturating_add(delta.old_span).min(before_len);
+        let new_end = start.saturating_add(delta.new_span).min(after_len);
         let removed_lines = self.snapshot.lines[start..old_end].to_vec();
         let inserted_lines = lines[start..new_end].to_vec();
 
@@ -337,7 +356,7 @@ impl<M: Clone + Default> LineHistory<M> {
     /// Steps back one entry; [`LineHistory::current_marks`] then holds the
     /// marks from before it.
     pub fn undo(&mut self, lines: &mut Vec<String>) -> Option<HistoryCursor> {
-        self.recorded_entry = None;
+        self.clear_recorded();
         if self.disabled() {
             return None;
         }
@@ -367,7 +386,7 @@ impl<M: Clone + Default> LineHistory<M> {
     /// Steps forward one entry; [`LineHistory::current_marks`] then holds the
     /// marks from after it.
     pub fn redo(&mut self, lines: &mut Vec<String>) -> Option<HistoryCursor> {
-        self.recorded_entry = None;
+        self.clear_recorded();
         if self.disabled() {
             return None;
         }
@@ -486,6 +505,7 @@ fn apply_line_replace(
 #[cfg(test)]
 mod tests {
     use super::{HistoryCursor, LineHistory};
+    use crate::buffer::EditDelta;
 
     #[test]
     fn history_roundtrip_replaces_line_range() {
@@ -523,7 +543,16 @@ mod tests {
             "THREE".to_string(),
             "four".to_string(),
         ];
-        assert!(history.record_edit_span(&edited, 2, 5, 1, 2, 2));
+        assert!(history.record_edit_span(
+            &edited,
+            2,
+            5,
+            EditDelta {
+                start_line: 1,
+                old_span: 2,
+                new_span: 2
+            },
+        ));
         assert_eq!(history.undo_depth(), 1);
 
         let undo_cursor = history.undo(&mut edited).expect("undo");
@@ -543,6 +572,56 @@ mod tests {
                 "four".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn span_history_matches_full_history_for_unicode_splits_joins_and_line_edits() {
+        let start: Vec<String> = ["αβ", "γδ", "tail"].map(String::from).to_vec();
+        let cases = [
+            (vec!["", "αβ", "γδ", "tail"], 0, 1, 2, 1, 0),
+            (vec!["α", "β", "γδ", "tail"], 0, 1, 2, 1, 0),
+            (vec!["αβ", "", "γδ", "tail"], 0, 1, 2, 1, 0),
+            (vec!["αβγδ", "tail"], 0, 2, 1, 0, 2),
+            (vec!["αβ", "γδ", "tail", "界"], 3, 0, 1, 3, 1),
+            (vec!["γδ", "tail"], 0, 1, 0, 0, 0),
+        ];
+        for (edited, from, old_span, new_span, line, col) in cases {
+            let edited: Vec<String> = edited.into_iter().map(String::from).collect();
+            let before_marks = vec![(1, "reminder")];
+            let after_marks = vec![(line, "reminder")];
+            let mut span = LineHistory::new(8, &start, 0, 2, before_marks.clone());
+            let mut full = span.clone();
+            assert!(span.record_edit_span(
+                &edited,
+                line,
+                col,
+                EditDelta {
+                    start_line: from,
+                    old_span,
+                    new_span
+                },
+            ));
+            assert!(full.record_edit(&edited, line, col, false));
+            span.record_marks(after_marks.clone());
+            full.record_marks(after_marks.clone());
+            let delta = span.take_last_delta().expect("exact span delta");
+            assert_eq!(delta.start, from);
+            assert_eq!(delta.removed, start[from..from + old_span]);
+            assert_eq!(delta.inserted, edited[from..from + new_span]);
+
+            for history in [&mut span, &mut full] {
+                let mut lines = edited.clone();
+                assert_eq!(history.undo_depth(), 1);
+                let cursor = history.undo(&mut lines).expect("undo");
+                assert_eq!((cursor.line, cursor.col), (0, 2));
+                assert_eq!(lines, start);
+                assert_eq!(history.current_marks(), &before_marks);
+                let cursor = history.redo(&mut lines).expect("redo");
+                assert_eq!((cursor.line, cursor.col), (line, col));
+                assert_eq!(lines, edited);
+                assert_eq!(history.current_marks(), &after_marks);
+            }
+        }
     }
 
     #[test]
@@ -597,9 +676,14 @@ mod tests {
         let mut history = LineHistory::new(8, &lines, 0, 0, ());
 
         lines[4000] = "edited".to_string();
-        assert!(history.record_edit_span(&lines, 4000, 6, 4000, 1, 1));
+        let delta = EditDelta {
+            start_line: 4000,
+            old_span: 1,
+            new_span: 1,
+        };
+        assert!(history.record_edit_span(&lines, 4000, 6, delta));
         lines[4000] = "edited again".to_string();
-        assert!(history.record_edit_span(&lines, 4000, 12, 4000, 1, 1));
+        assert!(history.record_edit_span(&lines, 4000, 12, delta));
 
         assert_eq!(history.undo_depth(), 2);
 

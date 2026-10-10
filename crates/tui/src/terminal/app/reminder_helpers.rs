@@ -1,6 +1,6 @@
 use super::{LineReminderGhost, ReminderMarks, TerminalApp};
+use crate::editor_core::history::LineDelta;
 use crate::storage::{Db, Note};
-use crate::terminal::history::LineDelta;
 use app_core::reminders::{block_line_fates, LineEdit};
 use app_core::storage::{NoteAccessMode, ReminderLine};
 use rustc_hash::FxHashMap;

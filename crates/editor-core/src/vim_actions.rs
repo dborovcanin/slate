@@ -1,3 +1,4 @@
+pub mod buffer;
 use crate::operations::replace_range;
 use crate::types::{EditOperation, OperationSelection, SelectionSnapshot};
 use crate::vim::VimIntent;
@@ -20,8 +21,29 @@ pub struct VimActionExecutionResult {
     pub register: Option<VimRegisterValue>,
 }
 
+impl Default for VimRegisterValue {
+    fn default() -> Self {
+        Self::charwise(String::new())
+    }
+}
+
 impl VimRegisterValue {
-    fn is_empty_charwise(&self) -> bool {
+    pub fn charwise(text: String) -> Self {
+        Self {
+            text,
+            mode: VimRegisterMode::Charwise,
+        }
+    }
+
+    pub fn linewise(text: String) -> Self {
+        Self {
+            text,
+            mode: VimRegisterMode::Linewise,
+        }
+    }
+
+    /// An empty charwise register; an empty linewise one still pastes a line.
+    pub fn is_empty(&self) -> bool {
         self.mode == VimRegisterMode::Charwise && self.text.is_empty()
     }
 }
@@ -913,7 +935,7 @@ fn execute_paste_after(
     register: Option<&VimRegisterValue>,
 ) -> Option<VimActionExecutionResult> {
     let register = register?;
-    if register.is_empty_charwise() {
+    if register.is_empty() {
         return None;
     }
 
@@ -998,7 +1020,7 @@ fn execute_paste_before(
     register: Option<&VimRegisterValue>,
 ) -> Option<VimActionExecutionResult> {
     let register = register?;
-    if register.is_empty_charwise() {
+    if register.is_empty() {
         return None;
     }
     let spans = line_spans(text);

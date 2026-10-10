@@ -4,6 +4,12 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
+mod after_edit;
+pub use after_edit::{
+    can_skip_after_edit, lines_affect_calc, plan_after_edit, plan_result_remap,
+    should_defer_after_edit, AfterEditFlags, CalcAfterEdit, CalcResultRemap,
+};
+
 /// Compute a deterministic 64-bit hash for a line using FxHasher — a fast,
 /// non-cryptographic hasher that is stable within a process run.
 pub fn hash_line(line: &str) -> u64 {

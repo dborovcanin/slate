@@ -1,6 +1,7 @@
 # Architecture Refactor: Core-Owned Editing
 
-Status: planned (2026-10-10). Execution reference for moving editing semantics
+Status: phases 1–3, 5 and 6 implemented, phase 4 partial (2026-10-10); see
+"Follow-ups". Execution reference for moving editing semantics
 out of `crates/tui` into the core crates. Ownership rules come from
 `AGENTS.md` and `roadmap/plan.md` ("Ownership Rules"); the existing contract
 is `roadmap/editor-engine-contract.md`.
@@ -29,11 +30,12 @@ Why now, independent of any future front end:
   phases improve editing ownership; they do not yet make those workflows
   reusable by another front end. A future extraction should share their
   correctness policy rather than copy it into each front end.
-- No behavior changes. Every step is a move plus seam, with existing replay
-  fixtures and perf gates unchanged.
+- The six phase commits preserve behavior. Separately committed, reproduced
+  bugs from the follow-up audit are listed below. Replay fixtures and performance
+  limits remain unchanged, with added regressions and coverage.
 - No new dependencies.
 
-## Current state
+## Baseline inventory before the refactor
 
 `crates/tui/src` is about 36.4k lines (tests excluded). About 11.9k import
 ratatui or crossterm; the other 24.5k do not. Import counts are descriptive,
@@ -185,7 +187,7 @@ Done when the terminal word motions only wrap core functions, and core tests
 cover punctuation and whitespace classes, line edges, folded neighbors and
 table cells.
 
-### Phase 4: vim intent execution
+### Phase 4: vim intent execution (partial)
 
 Split `apply_vim_actions` by intent group (motions, operators, text objects,
 visual selection, paste/registers). Core returns `EditOperation` plus
@@ -198,7 +200,21 @@ Done when each intent group executes through core, with its replay fixtures
 added before the move, and the host keeps only macros, system clipboard and
 status messages.
 
-### Phase 5: post-edit planning
+Phase 4 keeps line-buffer visual plans separate from byte-offset operator plans:
+selected text, replacement spans, register modes and resulting cursors are core
+owned without joining large notes. Horizontal prose movement, linewise paste
+line preparation and fallback register preparation also execute in core, and
+the host uses the core register type directly. Not done: linewise and charwise
+paste and open-line insertion still mutate the buffer in the host, and
+`insert_entry_column` / `paste_after_column` only compute cursor columns for
+intents the host still dispatches. Folded-line
+lookup, screen movement and markdown display-boundary exits remain presentation
+adapters; clipboard/image import, macro replay, reminder attachment, undo I/O,
+and status are host effects. The existing operator/text-object plans stay scoped.
+Unicode visual deletion, reverse multiline selection and counted EOF paste
+fixtures were added and passed before the move.
+
+### Phase 5: post-edit planning (complete)
 
 1. Add `editor_core::calc_plan::plan_after_edit(delta, flags) -> CalcAfterEdit`
    covering skip, defer, remap-only, recompute-range, schedule-idle and
@@ -210,7 +226,12 @@ Done when `mark_edited_from_line_with_span` and the fold upkeep only carry out
 core decisions, and the PR records `perf-check` large-note p50/p95 before and
 after.
 
-### Phase 6: completion and search
+Phase 5's calc dispatch uses cached flags and line counts; structural remap
+eligibility reads borrowed metadata and affected lines. Fold upkeep moved with
+its existing incremental cache updates and deferred-rescan rules. Scheduling,
+worker results, persistence and viewport application stay in the terminal.
+
+### Phase 6: completion and search (complete)
 
 Move completion prefix and candidate functions, wiki-link query parsing and
 filtering, and in-note search matching to core. Popups, selection state and
@@ -255,12 +276,12 @@ them when a second consumer or a test needs them, not before.
 
 | Phase | Status | Notes |
 | --- | --- | --- |
-| 1. Buffer primitives | Planned | |
-| 2. Undo store and policy | Planned | Store relocation alone is an intermediate step |
-| 3. Word motions | Planned | |
-| 4. Vim intent execution | Planned | Same as plan.md Commands/Vim action point 1 |
-| 5. Post-edit planning | Planned | |
-| 6. Completion and search | Planned | |
+| 1. Buffer primitives | Complete | Offset helpers, text changes, typing and plain/table paste delegate to core |
+| 2. Undo store and policy | Complete | Core owns span recording, grouping, redo truncation, self-cancelling text markers and text/reminder action order; host supplies time/session boundaries and applies effects |
+| 3. Word motions | Complete | Core owns word motions and backward deletion; host supplies lazy visible neighbors and retains edit bookkeeping |
+| 4. Vim intent execution | Partial | Visual selection, operator/text-object plans, registers and cursor placement are core-owned; paste and open-line buffer edits remain in the host |
+| 5. Post-edit planning | Complete | `plan_after_edit`, `plan_result_remap` and fold upkeep decisions are core-owned; fold upkeep still locates edits from the cursor (see "Follow-ups") |
+| 6. Completion and search | Complete | Prefixes, candidates, wiki-link queries and search matching are core-owned; applying a picked completion still edits in the host |
 
 Track progress by which semantic decisions have a canonical core owner,
 which terminal paths delegate to it, and which core regression tests cover
@@ -282,5 +303,107 @@ end.
 | Currency results applied globally | `currency.rs`: `apply_currency_result` | no note check; identical rates skipped; one fetch at a time |
 | Viewport calc preparation installed only for the same note | `editing.rs`: `install_viewport_calc_preparation` | changed text caught by rehashing in the calc cache and the reset `cross_note_refs_generation`; cross-note index writes fenced by `epoch()` |
 | Script and currency cancellation | `scripts.rs`, `currency.rs` | process-group termination lives in `app_core::scripts` |
-| Clock for undo coalescing | `mark_edited_from_line_with_span` | supplied to core as an input after phase 2 |
+| Clock for undo coalescing | `mark_edited_from_line_with_span` | elapsed time supplied to core; grouping decisions are core-owned |
 | Calc scheduling (debounce, idle ticks, `key_depth`) | `editing.rs` | timing only; decisions move in phase 5 |
+
+## Phase 5 performance comparison (2026-10-10)
+
+Release `large_note_perf`, same machine and unchanged latency limits; values are
+p50/p95 milliseconds for key handling plus repaint. Both runs passed every gate.
+400k lines remain report-only. These samples show preservation, not a guaranteed
+speedup across machines or runs.
+
+| Action | Lines | Before | After |
+|---|---:|---:|---:|
+| Enter | 30k | 0.80 / 1.86 | 0.68 / 1.69 |
+| Open line | 30k | 0.89 / 0.92 | 0.81 / 0.83 |
+| Paste | 30k | 6.01 / 6.37 | 5.09 / 5.41 |
+| Enter | 100k | 3.27 / 6.99 | 2.85 / 6.98 |
+| Open line | 100k | 3.83 / 4.06 | 3.40 / 3.91 |
+| Paste | 100k | 10.25 / 10.40 | 9.84 / 10.10 |
+
+Phase 6 moves variable/cross-note prefix parsing, candidate selection, table
+helper precedence, wiki query validation/filtering and character-range search
+matching into core. Popup visibility, current search match and DB/background
+export loading remain host state/effects. Existing popup integration and replay
+tests continue to exercise the terminal calls; core tests cover Unicode ranges,
+qualified names, suffix candidates, disabled modules and suggestion order.
+
+## Follow-up audit
+
+After the six extraction phases, the requested architecture/correctness pass:
+
+- Tracks new history entries and eviction explicitly, so bounded text history
+  stays in chronological order with reminder actions. Small-note and large-note
+  span recording are covered through undo and redo.
+- Converts fixed-padding table byte bounds to character columns before backward
+  word deletion; Unicode in preceding cells no longer leaves a partial word.
+- Keeps horizontal left movement within a line constant-time, without a new
+  full-line character count.
+- Initializes an empty buffer before newline application and reports zero
+  old lines for empty-buffer primitive/paste edits.
+- Corrects visual-plan deltas for unchanged yanks and the retained empty line
+  after whole-document deletion. Changed visual selections use the history span
+  fast path; empty no-op selections retain their previous history behavior.
+
+The startup probe source and app-core startup/config paths are unchanged against
+`main`. The unified checker exceeded its April startup baseline on this machine;
+a clean `main` worktree also exceeded it. Limits were not increased to hide the
+failure. Final validation results and the remaining startup qualification gate
+are recorded with the completion report below.
+
+## Completion checks (2026-10-10)
+
+- Workspace tests: 1,294 passed, six ignored benchmarks; full doctest pass.
+- `cargo fmt --all -- --check` and diff whitespace checks passed.
+- `cargo clippy --workspace --all-targets --locked` passed with existing warnings;
+  new completion/search re-exports were moved before the shim's test module.
+- Final unified performance check: table and large-note gates passed. Startup
+  remained above the existing baseline on both this branch and clean `main`.
+  Five clean-main runs had median config load 0.850 ms (limit 0.255 ms) and
+  app-core open 2.215 ms (limit 0.742 ms), using the same active config/database.
+- Startup qualification is deferred at the user's request. Performance limits
+  were kept unchanged. Review can proceed; this is not a claim that every merge
+  qualification gate is green.
+- Live terminal: a tmux run of a debug build (Vim mode, isolated config and
+  data directories) covering typing, visual delete, `o`, Ctrl-W, yank/paste,
+  undo/redo and calc results produced the same screens as `main`, with the
+  prepared-plan debug assertions active.
+
+## Follow-ups
+
+Found in the pre-merge review. None blocks the merge; each needs its own
+change with core tests.
+
+- **Fold upkeep from `EditDelta`.** `folding::upkeep::plan_fold_upkeep` infers
+  a one-line insert or delete at the cursor line. Pass the edit's `EditDelta`
+  instead, so edits away from the cursor (undo and redo, a mouse paste or
+  multiple cursors in another front end) map folds without a rescan. It also
+  clones the current line three times per keystroke.
+- **Host-only text edits.** These still mutate `editor.lines` in the terminal
+  crate without a core plan, and most record history through the
+  whole-document diff (`mark_edited`):
+  - applying a variable autocomplete pick (`apply_variable_autocomplete_pick`)
+  - applying a calc result with Tab (`apply_calc_tab`)
+  - calc trailer refresh in `run_calc_recompute`
+  - wiki-link selection and heading-suffix removal
+  - removing an empty table continuation row
+    (`prune_empty_table_continuation_row_at_cursor`)
+  - Vim linewise and charwise paste, and open-line insertion (phase 4)
+- **Vim paste performance.** Linewise paste inserts and clones one line at a
+  time, which is O(pasted lines × note lines); use one splice.
+- **Search allocation.** `search::find_matches` lowercases a copy of every line
+  on each query change; reuse one buffer.
+- **Document state.** The after-edit pipeline (calc plan execution, fold view
+  map, cache invalidation) and the fold structure/text caches still live in
+  `TerminalApp`. A core document-state type (lines, cursor, history, undo
+  policy, fold caches, calc metadata) whose `apply` returns effects would let
+  another front end reuse it.
+- **Pre-existing bug, also on `main`.** Typing `one`/`two`, then `o` with
+  `three`/`four`, `gg V d`, `u`, Ctrl-R, `u` and `x` in Vim mode joins the
+  first two lines (`onetwo`) instead of deleting a character. The restored
+  cursor is probably left past the line end; undo should clamp it as Normal
+  mode does.
+- **Display model.** `terminal/markdown_view.rs` and table display
+  reformatting remain terminal code; a second front end needs them as a
+  shared styled-line model.

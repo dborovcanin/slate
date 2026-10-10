@@ -1,19 +1,32 @@
 use super::{
-    build_variable_suggestions, compute_calc_data, compute_calc_data_cached,
-    compute_calc_data_for_lines, compute_calc_data_for_note, compute_calc_trailer_refresh,
-    contains_assignment_operator, cross_note_exports_for_autocomplete, display_cols_for_prefix,
-    extract_cross_note_completion_prefix, extract_variable_completion_prefix,
-    find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
-    is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
-    table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
-    table_cell_navigation_anchor, variable_completion_candidates, Db, FoldKind, LineReminderGhost,
+    compute_calc_data, compute_calc_data_cached, compute_calc_data_for_lines,
+    compute_calc_data_for_note, compute_calc_trailer_refresh, contains_assignment_operator,
+    cross_note_exports_for_autocomplete, display_cols_for_prefix,
+    extract_cross_note_completion_prefix, find_calc_segment_range, find_table_formula_segments,
+    gutter_width_for_visible_lines, is_markdown_table_line, line_char_len, line_display_cols,
+    preload_cross_note_dep_value, table_cell_edit_start, table_cell_info_at_char,
+    table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind, LineReminderGhost,
     ReminderUndoEntry, TerminalApp, UiMode, UndoAction, VariableAutocompletePopupState,
     VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
     CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
     CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
-    UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
+use crate::editor_core::buffer::paste::{
+    apply_plain_paste, apply_table_cell_paste, normalize_paste, parse_table_paste,
+    prepare_plain_paste, prepare_table_cell_paste, prepare_table_import, table_paste_outside_code,
+};
+use crate::editor_core::buffer::primitives::{
+    apply_primitive_edit, prepare_primitive_edit, PrimitiveEdit,
+};
+use crate::editor_core::buffer::words::{self, BackwardWordDelete};
+use crate::editor_core::buffer::{
+    apply_text_change_in_place, document_text_len, line_and_byte_for_offset,
+    map_offset_through_changes, prepare_text_change, EditDelta,
+};
+use crate::editor_core::history::policy::{UndoGrouping, UndoSession};
+use crate::editor_core::history::HistoryCursor;
 use crate::terminal::text_utils::{
     byte_index, char_col_at_byte, cursor_render_char_col, remove_char_at,
     viewport_col_for_display_col,
@@ -174,108 +187,17 @@ mod tests {
     }
 }
 
-fn map_offset_through_changes(
-    mut offset: usize,
-    changes_desc: &[crate::editor_core::types::TextChange],
-) -> usize {
-    for change in changes_desc {
-        let from = change.from;
-        let to = change.to.max(from);
-        let added = change.insert.len();
-        let removed = to.saturating_sub(from);
-        if from <= offset {
-            if to <= offset {
-                offset = offset.saturating_add(added).saturating_sub(removed);
-            } else {
-                let inside = offset.saturating_sub(from);
-                offset = from.saturating_add(inside.min(added));
-            }
-        }
-    }
-    offset
-}
-
-pub(super) fn document_text_len(lines: &[String]) -> usize {
-    if lines.len() == 1 && lines.first().is_some_and(String::is_empty) {
-        0
-    } else {
-        let line_bytes: usize = lines.iter().map(|line| line.len()).sum();
-        line_bytes.saturating_add(lines.len().saturating_sub(1))
-    }
-}
-
-pub(super) fn line_and_byte_for_offset(lines: &[String], target: usize) -> (usize, usize) {
-    if lines.is_empty() {
-        return (0, 0);
-    }
-    let mut offset = 0usize;
-    for (idx, line) in lines.iter().enumerate() {
-        let line_end = offset + line.len();
-        if target <= line_end {
-            return (idx, target.saturating_sub(offset));
-        }
-        offset = line_end + 1;
-    }
-    let last = lines.len().saturating_sub(1);
-    (last, lines[last].len())
-}
-
-fn apply_text_change_in_place(
-    lines: &mut Vec<String>,
-    change: &crate::editor_core::types::TextChange,
-    doc_len: usize,
-) -> (usize, usize, usize) {
-    let from = change.from.min(doc_len);
-    let to = change.to.min(doc_len);
-    let (from_line, from_byte) = line_and_byte_for_offset(lines, from);
-    let (to_line, to_byte) = line_and_byte_for_offset(lines, to);
-
-    let from_text = lines.get(from_line).cloned().unwrap_or_default();
-    let to_text = lines.get(to_line).cloned().unwrap_or_default();
-    let prefix = &from_text[..from_byte.min(from_text.len())];
-    let suffix = &to_text[to_byte.min(to_text.len())..];
-    let insert_parts = change.insert.split('\n').collect::<Vec<_>>();
-    let mut replacement = Vec::with_capacity(insert_parts.len().max(1));
-
-    if insert_parts.len() <= 1 {
-        replacement.push(format!(
-            "{prefix}{}{suffix}",
-            insert_parts.first().copied().unwrap_or("")
-        ));
-    } else {
-        replacement.push(format!("{prefix}{}", insert_parts[0]));
-        for part in &insert_parts[1..insert_parts.len() - 1] {
-            replacement.push((*part).to_string());
-        }
-        replacement.push(format!(
-            "{}{suffix}",
-            insert_parts.last().copied().unwrap_or("")
-        ));
-    }
-
-    let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
-    let new_line_span = replacement.len().max(1);
-    if from_line <= to_line && from_line < lines.len() {
-        let end = to_line.min(lines.len().saturating_sub(1));
-        lines.splice(from_line..=end, replacement);
-    } else {
-        *lines = replacement;
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-
-    (from_line, old_line_span, new_line_span)
-}
-
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
-    pub(super) fn push_undo_action(&mut self, action: UndoAction) {
-        if self.undo_action_pos < self.undo_actions.len() {
-            self.undo_actions.truncate(self.undo_action_pos);
+    pub(super) fn undo_session(&self) -> UndoSession {
+        if !self.vim_enabled {
+            return UndoSession::Other;
         }
-        self.undo_actions.push(action);
-        self.undo_action_pos = self.undo_actions.len();
+        match self.mode {
+            UiMode::Editor => UndoSession::Insert,
+            UiMode::Normal | UiMode::Visual | UiMode::VisualLine => UndoSession::Command,
+            _ => UndoSession::Other,
+        }
     }
 
     pub(super) fn push_reminder_undo_entry(
@@ -287,90 +209,25 @@ impl TerminalApp {
         if before == after {
             return;
         }
-        self.push_undo_action(UndoAction::Reminder(ReminderUndoEntry {
+        self.undo_policy.record_reminder(ReminderUndoEntry {
             line_idx,
             before,
             after,
-        }));
+        });
     }
 
-    fn prefer_span_history_fast_path(&self) -> bool {
-        // Above COALESCE_ANCHOR_MAX_LINES the generic `record_edit` path no longer
-        // coalesces (its coalesce anchor is only retained while the doc fits within
-        // that cap), so it already emits one undo entry per edit. The span fast path
-        // is then behavior-equivalent but O(changed lines) instead of O(doc) per
-        // keystroke, because `record_edit`'s prefix/suffix diff scans from the
-        // document ends. Gate on the coalesce cap rather than the much larger
-        // lightweight-fold threshold so mid-size notes (5k–30k lines) stop paying
-        // the per-keystroke full-document diff.
-        self.editor.lines.len() > crate::terminal::history::COALESCE_ANCHOR_MAX_LINES
-    }
-
-    fn record_history_after_edit(
-        &mut self,
-        coalesce_undo: bool,
-        history_span: Option<(usize, usize, usize)>,
-    ) {
-        self.record_text_history(coalesce_undo, history_span);
+    fn record_history_after_edit(&mut self, grouping: UndoGrouping, delta: Option<EditDelta>) {
+        self.undo_policy.record_text(
+            &mut self.history,
+            &self.editor.lines,
+            HistoryCursor {
+                line: self.editor.cursor_line,
+                col: self.editor.cursor_col,
+            },
+            delta,
+            grouping,
+        );
         self.move_reminders_with_recorded_edit();
-    }
-
-    fn record_text_history(
-        &mut self,
-        coalesce_undo: bool,
-        history_span: Option<(usize, usize, usize)>,
-    ) {
-        let undo_depth_before = self.history.undo_depth();
-        let history_changed = if let Some((start_line, old_line_span, new_line_span)) = history_span
-        {
-            if self.prefer_span_history_fast_path() {
-                let history_changed = self.history.record_edit_span(
-                    &self.editor.lines,
-                    self.editor.cursor_line,
-                    self.editor.cursor_col,
-                    start_line,
-                    old_line_span,
-                    new_line_span,
-                );
-                if history_changed {
-                    let undo_depth_after = self.history.undo_depth();
-                    if !coalesce_undo || undo_depth_after > undo_depth_before {
-                        self.push_undo_action(UndoAction::Text);
-                    }
-                }
-                return;
-            }
-            self.history.record_edit(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-                coalesce_undo,
-            )
-        } else {
-            self.history.record_edit(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-                coalesce_undo,
-            )
-        };
-        let undo_depth_after = self.history.undo_depth();
-        if history_changed && (!coalesce_undo || undo_depth_after > undo_depth_before) {
-            self.push_undo_action(UndoAction::Text);
-        } else if undo_depth_after < undo_depth_before {
-            // A merged step that undid itself was dropped from the history;
-            // drop its marker too so `u` and `Ctrl-r` stay in step.
-            self.pop_undo_text_action();
-        }
-    }
-
-    fn pop_undo_text_action(&mut self) {
-        if self.undo_action_pos == self.undo_actions.len()
-            && matches!(self.undo_actions.last(), Some(UndoAction::Text))
-        {
-            self.undo_actions.pop();
-            self.undo_action_pos = self.undo_actions.len();
-        }
     }
 
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
@@ -528,12 +385,7 @@ impl TerminalApp {
     }
 
     pub(super) fn line_has_fold_structure(text: &str) -> bool {
-        let trimmed = text.trim_start();
-        trimmed.starts_with('#')
-            || trimmed.starts_with("```")
-            || trimmed.starts_with("~~~")
-            || (trimmed.starts_with('|') && trimmed.ends_with('|'))
-            || crate::editor_core::markdown_tokens::list_marker_end(text).is_some()
+        crate::editor_core::folding::upkeep::line_has_fold_structure(text)
     }
 
     pub(super) fn note_math_module_enabled(&self) -> bool {
@@ -586,24 +438,20 @@ impl TerminalApp {
         self.note_math_module_enabled() && self.note_cross_note_module_enabled()
     }
 
+    fn calc_signal_flags(&self) -> crate::editor_core::calc_plan::CalcSignalFlags {
+        crate::editor_core::calc_plan::CalcSignalFlags {
+            has_builtin_formula: self.calc.cached_has_builtin_formula,
+            has_variable_assignment: self.active_has_variable_assignments(),
+            has_expression: self.calc.cached_has_expression,
+        }
+    }
     pub(super) fn should_defer_calc_recompute(&self) -> bool {
-        self.editor.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
-            && !self.calc.cached_has_builtin_formula
-            && !self.active_has_variable_assignments()
+        crate::editor_core::calc_plan::should_defer_after_edit(
+            self.editor.lines.len(),
+            self.calc_signal_flags(),
+            LARGE_DOC_CALC_DEFER_LINES,
+        )
     }
-
-    pub(super) fn can_skip_calc_recompute(&self) -> bool {
-        // If no line holds a formula, an assignment, or anything that looks
-        // like a calculation, `compute_calc_data` would produce all-None
-        // results — matching the current state. Safe to skip regardless of
-        // doc size, which is the biggest input-latency win for notes that
-        // don't use calc at all.
-        !self.calc.cached_has_builtin_formula
-            && !self.active_has_variable_assignments()
-            && !self.calc.cached_has_expression
-            && !self.calc.stale
-    }
-
     fn calc_recompute_debounce_duration(&self) -> Duration {
         Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS)
     }
@@ -611,16 +459,7 @@ impl TerminalApp {
     /// Whether any of `lines` takes part in calc: tables, assignments,
     /// builtin formulas or calc expressions.
     fn lines_affect_calc(&self, lines: &[String]) -> bool {
-        let mask = self.calc_feature_mask();
-        (mask.table_enabled && lines.iter().any(|line| is_markdown_table_line(line)))
-            || crate::editor_core::calc_plan::contains_variable_assignment_with_mask(lines, mask)
-            || crate::editor_core::calc_plan::contains_builtin_formula_with_mask(lines, mask)
-            || lines.iter().any(|line| {
-                let eval_target =
-                    crate::editor_core::calc_plan::line_for_calc_evaluation_with_mask(line, mask);
-                let trimmed = eval_target.trim();
-                !trimmed.is_empty() && crate::editor_core::calc_plan::has_calc_signal(trimmed)
-            })
+        crate::editor_core::calc_plan::lines_affect_calc(lines, self.calc_feature_mask())
     }
 
     /// Viewport-only notes after an edit that may insert, delete or replace
@@ -720,33 +559,6 @@ impl TerminalApp {
         self.calc_runtime.recompute_due_at = None;
     }
 
-    fn shared_prefix_len_hashes(prev_hashes: &[u64], next_hashes: &[u64]) -> usize {
-        let max = prev_hashes.len().min(next_hashes.len());
-        let mut idx = 0usize;
-        while idx < max && prev_hashes[idx] == next_hashes[idx] {
-            idx += 1;
-        }
-        idx
-    }
-
-    fn shared_suffix_len_hashes(
-        prev_hashes: &[u64],
-        next_hashes: &[u64],
-        prefix_len: usize,
-    ) -> usize {
-        let max = prev_hashes
-            .len()
-            .min(next_hashes.len())
-            .saturating_sub(prefix_len);
-        let mut idx = 0usize;
-        while idx < max
-            && prev_hashes[prev_hashes.len() - 1 - idx] == next_hashes[next_hashes.len() - 1 - idx]
-        {
-            idx += 1;
-        }
-        idx
-    }
-
     fn try_remap_calc_results_after_structural_edit(&mut self) -> bool {
         if !self.note_math_module_enabled() || self.calc.stale {
             return false;
@@ -763,49 +575,16 @@ impl TerminalApp {
             return false;
         }
 
-        let prev_hashes = self
-            .calc
-            .prev_line_metadata
-            .iter()
-            .map(|entry| entry.hash)
-            .collect::<Vec<_>>();
-        let next_hashes = self
-            .calc
-            .line_metadata
-            .iter()
-            .map(|entry| entry.hash)
-            .collect::<Vec<_>>();
-        let prefix = Self::shared_prefix_len_hashes(&prev_hashes, &next_hashes);
-        let suffix = Self::shared_suffix_len_hashes(&prev_hashes, &next_hashes, prefix);
-        let changed_from = prefix.min(next_len);
-        let changed_to_next = next_len.saturating_sub(suffix).max(changed_from);
-        let prev_changed_from = prefix.min(prev_len);
-        let prev_changed_to = prev_len.saturating_sub(suffix).max(prev_changed_from);
-        let prev_changed_slice = self
-            .calc
-            .prev_line_metadata
-            .get(prev_changed_from..prev_changed_to)
-            .unwrap_or(&[]);
-
-        let prev_changed_had_assignment =
-            prev_changed_slice.iter().any(|entry| entry.has_assignment);
-        let prev_changed_had_builtin_formula = prev_changed_slice
-            .iter()
-            .any(|entry| entry.has_builtin_formula);
-        let changed_lines = self
-            .editor
-            .lines
-            .get(changed_from..changed_to_next)
-            .unwrap_or(&[]);
-
-        // Safe remap-only path: only line index shifting happened, and changed
-        // lines don't participate in calc semantics.
-        if prev_changed_had_assignment
-            || prev_changed_had_builtin_formula
-            || self.lines_affect_calc(changed_lines)
-        {
+        let Some(plan) = crate::editor_core::calc_plan::plan_result_remap(
+            &self.calc.prev_line_metadata,
+            &self.calc.line_metadata,
+            &self.editor.lines,
+            self.calc_feature_mask(),
+        ) else {
             return false;
-        }
+        };
+        let prefix = plan.prefix;
+        let suffix = plan.suffix;
 
         let mut remapped_results = vec![None; next_len];
         let mut remapped_cell_results = vec![Vec::new(); next_len];
@@ -897,237 +676,69 @@ impl TerminalApp {
     }
 
     pub(super) fn recompute_folding_if_needed(&mut self) {
-        if self.large_note_reduced_features() {
-            if !self.folds.ranges.is_empty() {
-                self.folds.ranges.clear();
+        use crate::editor_core::folding::upkeep::{FoldUpkeep, FoldUpkeepFlags};
+        let flags = FoldUpkeepFlags {
+            reduced_features: self.large_note_reduced_features(),
+            rescan_pending: self.folds.rescan_pending,
+            has_collapsed: !self.folds.collapsed_starts.is_empty(),
+            view_line_count: self.folds.real_to_visible.len(),
+        };
+        let plan = crate::editor_core::folding::upkeep::plan_fold_upkeep(
+            &self.editor.lines,
+            self.editor.cursor_line,
+            &mut self.folds.line_has_structure,
+            &mut self.folds.line_text_snapshot,
+            &self.folds.ranges,
+            flags,
+        );
+        match plan {
+            FoldUpkeep::Disabled => {
+                if !self.folds.ranges.is_empty() {
+                    self.folds.ranges.clear();
+                }
+                if self.folds.range_by_start.len() != self.editor.lines.len() {
+                    self.folds.range_by_start = vec![None; self.editor.lines.len()];
+                }
+                if !self.folds.collapsed_starts.is_empty() {
+                    self.folds.collapsed_starts.clear();
+                }
+                if self.folds.visible_to_real.len() != self.editor.lines.len()
+                    || self.folds.real_to_visible.len() != self.editor.lines.len()
+                    || self.folds.hidden_owner.len() != self.editor.lines.len()
+                    || self.folds.placeholder_hidden_lines.len() != self.editor.lines.len()
+                {
+                    self.rebuild_fold_view_map();
+                }
+                if self.folds.line_has_structure.len() != self.editor.lines.len() {
+                    self.folds.line_has_structure = vec![false; self.editor.lines.len()];
+                }
+                self.folds.line_text_snapshot.clear();
+                self.folds.rescan_pending = false;
+                self.folds.analysis_ready = false;
             }
-            if self.folds.range_by_start.len() != self.editor.lines.len() {
-                self.folds.range_by_start = vec![None; self.editor.lines.len()];
-            }
-            if !self.folds.collapsed_starts.is_empty() {
-                self.folds.collapsed_starts.clear();
-            }
-            if self.folds.visible_to_real.len() != self.editor.lines.len()
-                || self.folds.real_to_visible.len() != self.editor.lines.len()
-                || self.folds.hidden_owner.len() != self.editor.lines.len()
-                || self.folds.placeholder_hidden_lines.len() != self.editor.lines.len()
-            {
-                self.rebuild_fold_view_map();
-            }
-            if self.folds.line_has_structure.len() != self.editor.lines.len() {
-                self.folds.line_has_structure = vec![false; self.editor.lines.len()];
-            }
-            self.folds.line_text_snapshot.clear();
-            self.folds.rescan_pending = false;
-            self.folds.analysis_ready = false;
-            return;
-        }
-        // Process any pending deferred recompute first.
-        if self.folds.rescan_pending {
-            if self.folds.collapsed_starts.is_empty() {
-                // Nothing is hidden, so stale ranges do not change what is
-                // shown: keep the view map sized to the note and leave the
-                // O(N) rescan to the idle tick (fold commands force it).
-                if self.folds.real_to_visible.len() != self.editor.lines.len() {
+            FoldUpkeep::PendingVisible { reset_map } | FoldUpkeep::Defer { reset_map } => {
+                if reset_map {
                     self.folds.ranges.clear();
                     self.folds.range_by_start = vec![None; self.editor.lines.len()];
                     self.rebuild_fold_view_map();
                 }
-                self.folds.analysis_ready = false;
-                return;
-            }
-            self.folds.rescan_pending = false;
-            self.recompute_folding();
-            return;
-        }
-
-        if self.editor.lines.is_empty() {
-            self.folds.line_has_structure.clear();
-            self.folds.line_text_snapshot.clear();
-            self.apply_fold_ranges(Vec::new());
-            self.folds.analysis_ready = true;
-            return;
-        }
-
-        let cl = self
-            .editor
-            .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
-        let line_count_changed = self.editor.lines.len() != self.folds.line_has_structure.len();
-
-        if line_count_changed {
-            let next_len = self.editor.lines.len();
-            let prev_len = self.folds.line_has_structure.len();
-            // Safety guard: incremental insert/remove remap assumes snapshot and
-            // structure vectors are aligned. If a prior mode change/reset left
-            // them out of sync, use full recompute instead of risking panic on
-            // Vec::insert/remove indexes during Enter/Delete edits.
-            if self.folds.line_text_snapshot.len() != prev_len {
-                self.recompute_folding();
-                return;
-            }
-            let mut remap_edits: Vec<crate::editor_core::folding::FoldLineEdit> = Vec::new();
-            if next_len == prev_len + 1 {
-                // One line inserted near cursor.
-                let insert_at = cl.min(prev_len);
-                let old_line_text = self
-                    .folds
-                    .line_text_snapshot
-                    .get(insert_at)
-                    .cloned()
-                    .unwrap_or_default();
-                let new_line_text = self
-                    .editor
-                    .lines
-                    .get(insert_at)
-                    .cloned()
-                    .unwrap_or_default();
-                remap_edits.push(crate::editor_core::folding::FoldLineEdit {
-                    old_start_line: insert_at,
-                    old_line_span: 1,
-                    new_line_span: 2,
-                    old_line_text,
-                    new_line_text: new_line_text.clone(),
-                });
-
-                if cl > 0 {
-                    if let Some(flag) = self.folds.line_has_structure.get_mut(cl - 1) {
-                        *flag = self
-                            .editor
-                            .lines
-                            .get(cl - 1)
-                            .map(|l| Self::line_has_fold_structure(l))
-                            .unwrap_or(false);
-                    }
-                    if let Some(text) = self.folds.line_text_snapshot.get_mut(cl - 1) {
-                        *text = self.editor.lines.get(cl - 1).cloned().unwrap_or_default();
-                    }
-                }
-                let new_flag = self
-                    .editor
-                    .lines
-                    .get(insert_at)
-                    .map(|l| Self::line_has_fold_structure(l))
-                    .unwrap_or(false);
-                self.folds.line_has_structure.insert(insert_at, new_flag);
-                self.folds
-                    .line_text_snapshot
-                    .insert(insert_at, new_line_text);
-            } else if next_len + 1 == prev_len {
-                // One line deleted near cursor.
-                let remove_at = cl.min(prev_len.saturating_sub(1));
-                let old_start_line = remove_at.min(prev_len.saturating_sub(2));
-                let old_line_text = self
-                    .folds
-                    .line_text_snapshot
-                    .get(old_start_line)
-                    .cloned()
-                    .unwrap_or_default();
-                let new_line_text = self
-                    .editor
-                    .lines
-                    .get(old_start_line)
-                    .cloned()
-                    .unwrap_or_default();
-                remap_edits.push(crate::editor_core::folding::FoldLineEdit {
-                    old_start_line,
-                    old_line_span: 2,
-                    new_line_span: 1,
-                    old_line_text,
-                    new_line_text: new_line_text.clone(),
-                });
-
-                if remove_at < prev_len {
-                    self.folds.line_has_structure.remove(remove_at);
-                }
-                if remove_at < self.folds.line_text_snapshot.len() {
-                    self.folds.line_text_snapshot.remove(remove_at);
-                }
-                let update_at = remove_at.min(next_len.saturating_sub(1));
-                if let Some(flag) = self.folds.line_has_structure.get_mut(update_at) {
-                    *flag = self
-                        .editor
-                        .lines
-                        .get(update_at)
-                        .map(|l| Self::line_has_fold_structure(l))
-                        .unwrap_or(false);
-                }
-                if let Some(text) = self.folds.line_text_snapshot.get_mut(update_at) {
-                    *text = self
-                        .editor
-                        .lines
-                        .get(update_at)
-                        .cloned()
-                        .unwrap_or_default();
-                }
-            } else {
-                // Bulk change (paste, format, etc.): rebuild entirely.
-                self.recompute_folding();
-                return;
-            }
-
-            if self.try_incremental_fold_remap(&remap_edits) {
-                return;
-            }
-
-            if self.folds.collapsed_starts.is_empty() {
-                self.folds.ranges.clear();
-                self.folds.range_by_start = vec![None; self.editor.lines.len()];
-                self.rebuild_fold_view_map();
                 self.folds.rescan_pending = true;
                 self.folds.analysis_ready = false;
-            } else {
+            }
+            FoldUpkeep::Recompute => {
+                self.folds.rescan_pending = false;
                 self.recompute_folding();
             }
-            return;
-        }
-
-        // Same-line edit: check whether the current line touches fold structure.
-        let old_text = self
-            .folds
-            .line_text_snapshot
-            .get(cl)
-            .cloned()
-            .unwrap_or_default();
-        let current_text = self.editor.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
-        let new_text = current_text.to_string();
-        let next_flag = Self::line_has_fold_structure(current_text);
-        let prev_flag = self
-            .folds
-            .line_has_structure
-            .get(cl)
-            .copied()
-            .unwrap_or(false);
-
-        if next_flag != prev_flag {
-            if let Some(flag) = self.folds.line_has_structure.get_mut(cl) {
-                *flag = next_flag;
+            FoldUpkeep::Empty => {
+                self.apply_fold_ranges(Vec::new());
+                self.folds.analysis_ready = true;
             }
-        }
-        if let Some(text) = self.folds.line_text_snapshot.get_mut(cl) {
-            *text = new_text.clone();
-        }
-
-        let remap_edits = [crate::editor_core::folding::FoldLineEdit {
-            old_start_line: cl,
-            old_line_span: 1,
-            new_line_span: 1,
-            old_line_text: old_text,
-            new_line_text: new_text,
-        }];
-        if self.try_incremental_fold_remap(&remap_edits) {
-            return;
-        }
-
-        if next_flag || prev_flag {
-            if self.folds.collapsed_starts.is_empty() {
-                // Defer: fold analysis is O(N) and doesn't need to block typing.
-                // The idle tick (100 ms with no keypress) will run recompute_folding.
-                self.folds.rescan_pending = true;
-                self.folds.analysis_ready = false;
-            } else {
-                self.recompute_folding();
+            FoldUpkeep::Mapped(ranges) => {
+                self.folds.rescan_pending = false;
+                self.apply_fold_ranges(ranges);
+                self.folds.analysis_ready = true;
             }
+            FoldUpkeep::Unchanged => {}
         }
     }
 
@@ -1147,27 +758,6 @@ impl TerminalApp {
         let ranges = folding::build_fold_ranges(&self.editor.lines);
         self.apply_fold_ranges(ranges);
         self.folds.analysis_ready = true;
-    }
-
-    fn try_incremental_fold_remap(
-        &mut self,
-        edits: &[crate::editor_core::folding::FoldLineEdit],
-    ) -> bool {
-        if edits.is_empty() {
-            return false;
-        }
-        if crate::editor_core::folding::edits_require_rebuild(edits) {
-            return false;
-        }
-        let mapped = crate::editor_core::folding::map_ranges_through_line_edits(
-            &self.folds.ranges,
-            edits,
-            self.editor.lines.len().max(1),
-        );
-        self.folds.rescan_pending = false;
-        self.apply_fold_ranges(mapped);
-        self.folds.analysis_ready = true;
-        true
     }
 
     fn apply_fold_ranges(&mut self, ranges: Vec<crate::editor_core::folding::FoldRange>) {
@@ -1460,14 +1050,12 @@ impl TerminalApp {
     pub(super) fn mark_edited_from_line_with_span(
         &mut self,
         changed_from_line: usize,
-        history_span: Option<(usize, usize, usize)>,
+        delta: Option<EditDelta>,
     ) {
-        // A vim insert session is one undo step however long it pauses;
-        // without vim, edits merge while typing continues.
-        let coalesce_undo = (self.vim_enabled && self.mode == UiMode::Editor)
-            || self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
-        let line_count_changed = self.editor.lines.len() != self.calc.results.len();
-        let viewport_structural = line_count_changed && self.calc_runtime.viewport_only;
+        let grouping = UndoGrouping {
+            session: self.undo_session(),
+            elapsed: self.last_edit.elapsed(),
+        };
         self.invalidate_joined_text_cache();
         self.render_caches.table_formula_segment_cache.clear();
         self.dirty = true;
@@ -1482,92 +1070,93 @@ impl TerminalApp {
         self.invalidate_fence_checkpoints_from_line(clamped_changed_line);
         self.update_calc_flags_incremental();
         self.recompute_folding_if_needed();
-        if self.can_skip_calc_recompute() {
-            // No calc syntax anywhere in the doc and this edit didn't add any —
-            // calc_results are already correct (all None). Skip the scan.
-            // prev_line_metadata may drift from `lines` until the next real
-            // recompute, but the planner falls back to full eval safely when
-            // the diff looks large, so correctness holds.
-            self.calc_runtime.recompute_pending = false;
-            self.calc_runtime.recompute_due_at = None;
-            self.calc_runtime.pending_viewport_pass = false;
-            self.calc_runtime.pending_full_pass = false;
-        } else if self.should_defer_calc_recompute() {
-            self.defer_calc_state_after_edit();
-            self.calc_runtime.recompute_pending = false;
-            self.calc_runtime.recompute_due_at = None;
-            self.calc_runtime.pending_viewport_pass = false;
-            self.calc_runtime.pending_full_pass = false;
-        } else {
-            if self.editor.lines.len() >= CALC_ASYNC_MIN_LINES {
-                if viewport_structural {
-                    self.refresh_viewport_calc_after_edit();
-                } else if line_count_changed {
-                    // Structural edits (Enter/join/delete-at-boundary): try a
-                    // cheap remap-only path first, and recompute only when
-                    // changed lines may affect calc semantics.
-                    if !self.try_remap_calc_results_after_structural_edit() {
-                        self.recompute_calc_after_edit(history_span);
-                    }
-                } else {
-                    // Keep large-note typing non-blocking: schedule calc for
-                    // the next idle tick and clear only the edited line's
-                    // cached result so we don't show stale ghosts while
-                    // pending.
-                    if let Some(slot) = self.calc.results.get_mut(self.editor.cursor_line) {
-                        *slot = None;
-                    }
-                    if let Some(slot) = self.calc.cell_results.get_mut(self.editor.cursor_line) {
-                        slot.clear();
-                    }
-                    // Keep the edited lines' metadata current so a later
-                    // structural edit diffs against what is actually there.
-                    let (start, span) = match history_span {
-                        Some((start, old_span, new_span)) if old_span == new_span => {
-                            (start, new_span)
-                        }
-                        _ => (self.editor.cursor_line, 1),
-                    };
-                    // Without metadata yet (viewport notes build it at idle),
-                    // there is nothing to keep current.
-                    if !self.calc.line_metadata.is_empty() {
-                        for line_idx in start..start + span {
-                            self.refresh_calc_line_metadata_at(line_idx);
-                        }
-                        if !(start..start + span).contains(&self.editor.cursor_line) {
-                            self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                        }
-                    }
-                    self.schedule_calc_recompute(true, true);
+        use crate::editor_core::calc_plan::{AfterEditFlags, CalcAfterEdit};
+        let plan = crate::editor_core::calc_plan::plan_after_edit(AfterEditFlags {
+            line_count: self.editor.lines.len(),
+            previous_line_count: self.calc.results.len(),
+            signals: self.calc_signal_flags(),
+            stale: self.calc.stale,
+            viewport_only: self.calc_runtime.viewport_only,
+            async_min_lines: CALC_ASYNC_MIN_LINES,
+            defer_min_lines: LARGE_DOC_CALC_DEFER_LINES,
+        });
+        match plan {
+            CalcAfterEdit::Skip | CalcAfterEdit::Defer => {
+                if plan == CalcAfterEdit::Defer {
+                    self.defer_calc_state_after_edit();
                 }
-            } else {
-                self.recompute_calc_after_edit(history_span);
+                self.calc_runtime.recompute_pending = false;
+                self.calc_runtime.recompute_due_at = None;
+                self.calc_runtime.pending_viewport_pass = false;
+                self.calc_runtime.pending_full_pass = false;
+            }
+            CalcAfterEdit::ViewportRefresh => self.refresh_viewport_calc_after_edit(),
+            CalcAfterEdit::RemapOrRecompute => {
+                if !self.try_remap_calc_results_after_structural_edit() {
+                    self.recompute_calc_after_edit(delta);
+                }
+            }
+            CalcAfterEdit::RecomputeRange => self.recompute_calc_after_edit(delta),
+            CalcAfterEdit::ScheduleIdle => {
+                // Keep large-note typing non-blocking: schedule calc for
+                // the next idle tick and clear only the edited line's
+                // cached result so we don't show stale ghosts while
+                // pending.
+                if let Some(slot) = self.calc.results.get_mut(self.editor.cursor_line) {
+                    *slot = None;
+                }
+                if let Some(slot) = self.calc.cell_results.get_mut(self.editor.cursor_line) {
+                    slot.clear();
+                }
+                // Keep the edited lines' metadata current so a later
+                // structural edit diffs against what is actually there.
+                let (start, span) = match delta {
+                    Some(delta) if delta.old_span == delta.new_span => {
+                        (delta.start_line, delta.new_span)
+                    }
+                    _ => (self.editor.cursor_line, 1),
+                };
+                // Without metadata yet (viewport notes build it at idle),
+                // there is nothing to keep current.
+                if !self.calc.line_metadata.is_empty() {
+                    for line_idx in start..start + span {
+                        self.refresh_calc_line_metadata_at(line_idx);
+                    }
+                    if !(start..start + span).contains(&self.editor.cursor_line) {
+                        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
+                    }
+                }
+                self.schedule_calc_recompute(true, true);
             }
         }
         // Splices are only meaningful for the edit that recorded them.
         self.calc.pending_result_splices.clear();
-        self.record_history_after_edit(coalesce_undo, history_span);
+        self.record_history_after_edit(grouping, delta);
         self.last_edit = Instant::now();
     }
 
     /// Recomputes calc now, or once the key being handled is done when it may
     /// edit again (autoformat after the typed text). The edited lines'
     /// metadata is kept current so that recompute sees every edit.
-    fn recompute_calc_after_edit(&mut self, history_span: Option<(usize, usize, usize)>) {
+    fn recompute_calc_after_edit(&mut self, delta: Option<EditDelta>) {
         if self.key_depth == 0 {
             self.run_calc_recompute();
             return;
         }
         self.ensure_calc_line_metadata();
-        if let Some((start, old_span, new_span)) = history_span {
-            if old_span == new_span {
-                for line_idx in start..start + new_span {
+        if let Some(delta) = delta {
+            if delta.old_span == delta.new_span {
+                for line_idx in delta.start_line..delta.start_line + delta.new_span {
                     self.refresh_calc_line_metadata_at(line_idx);
                 }
             }
         }
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.calc_recompute_after_key = true;
+    }
+
+    pub(super) fn mark_edited_with_delta(&mut self, delta: EditDelta) {
+        self.mark_edited_from_line_with_span(delta.start_line, Some(delta));
     }
 
     pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {
@@ -1583,7 +1172,11 @@ impl TerminalApp {
             .editor
             .cursor_line
             .min(self.editor.lines.len().saturating_sub(1));
-        self.mark_edited_from_line_with_span(changed_line, Some((changed_line, 1, 1)));
+        self.mark_edited_with_delta(EditDelta {
+            start_line: changed_line,
+            old_span: 1,
+            new_span: 1,
+        });
     }
 
     fn apply_reminder_state(
@@ -1644,7 +1237,10 @@ impl TerminalApp {
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
-            self.status = format!("undo ({} left)", self.undo_action_pos.saturating_sub(1));
+            self.status = format!(
+                "undo ({} left)",
+                self.undo_policy.undo_depth().saturating_sub(1)
+            );
         } else {
             self.status = "already at oldest change".to_string();
         }
@@ -1686,11 +1282,10 @@ impl TerminalApp {
     }
 
     pub(super) fn undo(&mut self, db: &Db) {
-        if self.undo_action_pos == 0 {
+        let Some(action) = self.undo_policy.undo_action().cloned() else {
             self.status = "already at oldest change".to_string();
             return;
-        }
-        let action = self.undo_actions[self.undo_action_pos - 1].clone();
+        };
         match action {
             UndoAction::Text => self.undo_text_action(),
             UndoAction::Reminder(entry) => {
@@ -1701,15 +1296,14 @@ impl TerminalApp {
                 self.status = format!("undo reminder on line {}", entry.line_idx + 1);
             }
         }
-        self.undo_action_pos = self.undo_action_pos.saturating_sub(1);
+        self.undo_policy.complete_undo();
     }
 
     pub(super) fn redo(&mut self, db: &Db) {
-        if self.undo_action_pos >= self.undo_actions.len() {
+        let Some(action) = self.undo_policy.redo_action().cloned() else {
             self.status = "already at newest change".to_string();
             return;
-        }
-        let action = self.undo_actions[self.undo_action_pos].clone();
+        };
         match action {
             UndoAction::Text => self.redo_text_action(),
             UndoAction::Reminder(entry) => {
@@ -1720,7 +1314,7 @@ impl TerminalApp {
                 self.status = format!("redo reminder on line {}", entry.line_idx + 1);
             }
         }
-        self.undo_action_pos += 1;
+        self.undo_policy.complete_redo();
     }
 
     pub(super) fn run_calc_recompute(&mut self) {
@@ -2221,289 +1815,109 @@ impl TerminalApp {
 
     // --- Search ---
 
-    /// `w`/`b` on a table row: cell borders count as whitespace, so the
-    /// motion steps into the neighbouring cell, and past the row's first or
-    /// last word it continues on the adjacent row (skipping the delimiter).
-    /// Returns false when the cursor is not on a table row.
-    fn move_cursor_word_in_table(&mut self, forward: bool) -> bool {
-        use crate::editor_core::table::{
-            is_delimiter_line_in, table_row_next_word_start, table_row_prev_word_start,
-        };
-        if !self.note_table_module_enabled() || !is_markdown_table_line(self.current_line()) {
-            return false;
-        }
-        let on_row = if forward {
-            table_row_next_word_start(self.current_line(), self.editor.cursor_col)
+    fn move_cursor_word(&mut self, forward: bool) {
+        let current_virtual = self.current_virtual_line();
+        let cursor = self.editor.cursor();
+        let tables = self.note_table_module_enabled();
+        let after = if forward {
+            let neighbors = (current_virtual + 1..self.visible_line_count())
+                .map_while(|line| self.real_line_for_virtual(line));
+            words::move_cursor_right_word(&self.editor.lines, cursor, tables, neighbors)
         } else {
-            table_row_prev_word_start(self.current_line(), self.editor.cursor_col)
+            let neighbors = (0..current_virtual)
+                .rev()
+                .map_while(|line| self.real_line_for_virtual(line));
+            words::move_cursor_left_word(&self.editor.lines, cursor, tables, neighbors)
         };
-        if let Some(col) = on_row {
-            self.editor.cursor_col = col;
-            return true;
-        }
-
-        let mut virtual_line = self.current_virtual_line();
-        loop {
-            let next_virtual = if forward {
-                virtual_line + 1
-            } else {
-                let Some(prev) = virtual_line.checked_sub(1) else {
-                    return true;
-                };
-                prev
-            };
-            if next_virtual >= self.visible_line_count() {
-                return true;
-            }
-            let Some(line_idx) = self.real_line_for_virtual(next_virtual) else {
-                return true;
-            };
-            virtual_line = next_virtual;
-            let line = &self.editor.lines[line_idx];
-            if !is_markdown_table_line(line) {
-                self.editor.cursor_line = line_idx;
-                self.editor.cursor_col = if forward { 0 } else { line_char_len(line) };
-                return true;
-            }
-            if is_delimiter_line_in(&self.editor.lines, line_idx) {
-                continue;
-            }
-            let col = if forward {
-                table_row_next_word_start(line, 0)
-            } else {
-                table_row_prev_word_start(line, line_char_len(line))
-            };
-            self.editor.cursor_line = line_idx;
-            // An empty row has no word; land on it and let the cursor guard
-            // place the cursor in its first cell.
-            self.editor.cursor_col = col.unwrap_or(0);
-            return true;
-        }
+        self.editor.set_cursor(after);
     }
 
     pub(super) fn move_cursor_left_word(&mut self) {
-        if self.move_cursor_word_in_table(false) {
-            return;
-        }
-        if self.editor.cursor_col == 0 {
-            let current_virtual = self.current_virtual_line();
-            if current_virtual > 0 {
-                if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
-                    self.editor.cursor_line = prev_real;
-                    self.editor.cursor_col = line_char_len(self.current_line());
-                }
-            }
-            return;
-        }
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        let len = chars.len();
-
-        let mut col = self.editor.cursor_col;
-        if col > len {
-            col = len;
-        }
-        if col == 0 {
-            self.editor.cursor_col = 0;
-            return;
-        }
-
-        col -= 1;
-        while col > 0 && chars.get(col).map_or(false, |c| c.is_whitespace()) {
-            col -= 1;
-        }
-
-        let target_class = chars.get(col).map_or(0, |c| {
-            if c.is_alphanumeric() || *c == '_' {
-                1
-            } else {
-                2
-            }
-        });
-        while col > 0 {
-            let prev_class = chars.get(col - 1).map_or(0, |c| {
-                if c.is_whitespace() {
-                    0
-                } else if c.is_alphanumeric() || *c == '_' {
-                    1
-                } else {
-                    2
-                }
-            });
-            if prev_class == target_class {
-                col -= 1;
-            } else {
-                break;
-            }
-        }
-        self.editor.cursor_col = col;
+        self.move_cursor_word(false);
     }
 
     pub(super) fn move_cursor_right_word(&mut self) {
-        if self.move_cursor_word_in_table(true) {
-            return;
-        }
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        let len = chars.len();
-        if self.editor.cursor_col >= len {
-            let current_virtual = self.current_virtual_line();
-            if current_virtual + 1 < self.visible_line_count() {
-                if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
-                    self.editor.cursor_line = next_real;
-                    self.editor.cursor_col = 0;
-                }
-            }
-            return;
-        }
-        let mut col = self.editor.cursor_col;
-        let start_class = chars.get(col).map_or(0, |c| {
-            if c.is_whitespace() {
-                0
-            } else if c.is_alphanumeric() || *c == '_' {
-                1
-            } else {
-                2
-            }
-        });
-
-        while col < len {
-            let current_class = chars.get(col).map_or(0, |c| {
-                if c.is_whitespace() {
-                    0
-                } else if c.is_alphanumeric() || *c == '_' {
-                    1
-                } else {
-                    2
-                }
-            });
-            if current_class == start_class {
-                col += 1;
-            } else {
-                break;
-            }
-        }
-
-        if start_class != 0 {
-            while col < len && chars.get(col).map_or(false, |c| c.is_whitespace()) {
-                col += 1;
-            }
-        }
-
-        self.editor.cursor_col = col;
+        self.move_cursor_word(true);
     }
 
     pub(super) fn delete_word_backward(&mut self) -> bool {
-        if self.editor.cursor_col == 0 {
-            if self.editor.cursor_line > 0 {
-                self.backspace();
-                return true;
-            }
+        let Some(plan) = words::prepare_backward_word_delete(
+            &self.editor.lines,
+            self.editor.cursor(),
+            self.note_table_module_enabled(),
+        ) else {
             return false;
-        }
-        if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                let Some(col) = crate::editor_core::table::table_cell_word_delete_start(
-                    self.current_line(),
-                    self.editor.cursor_col,
-                    table_cell_edit_start(&cell),
-                    table_cell_navigation_anchor(self.current_line(), &cell),
-                ) else {
-                    return false;
-                };
-                let start_byte = byte_index(self.current_line(), col);
-                let end_byte = byte_index(self.current_line(), self.editor.cursor_col);
-                let text = self.current_line_mut();
-                text.replace_range(start_byte..end_byte, "");
-                self.editor.cursor_col = col;
-                self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                self.mark_edited_current_line();
+        };
+        match plan {
+            BackwardWordDelete::JoinPreviousLine => self.backspace(),
+            BackwardWordDelete::WithinLine(range) => {
+                let delta = range.delta;
+                self.editor.cursor_col = words::apply_word_delete(self.current_line_mut(), range);
+                self.refresh_calc_line_metadata_at(delta.start_line);
+                self.mark_edited_with_delta(delta);
                 self.prune_empty_table_continuation_row_at_cursor();
-                return true;
             }
         }
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        let mut col = self.editor.cursor_col;
-        while col > 0 && chars.get(col - 1).map_or(false, |c| !c.is_alphanumeric()) {
-            col -= 1;
-        }
-        while col > 0 && chars.get(col - 1).map_or(false, |c| c.is_alphanumeric()) {
-            col -= 1;
-        }
-
-        let start_byte = byte_index(self.current_line(), col);
-        let end_byte = byte_index(self.current_line(), self.editor.cursor_col);
-        let text = self.current_line_mut();
-        text.replace_range(start_byte..end_byte, "");
-        self.editor.cursor_col = col;
-        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-        self.mark_edited_current_line();
-        self.prune_empty_table_continuation_row_at_cursor();
         true
     }
 
+    fn apply_buffer_primitive(
+        &mut self,
+        primitive: PrimitiveEdit<'_>,
+    ) -> Option<crate::editor_core::buffer::EditDelta> {
+        let prepared = prepare_primitive_edit(&self.editor.lines, self.editor.cursor(), primitive)?;
+        let delta = prepared.delta;
+        // Preserve the existing structural reminder callbacks before mutation.
+        // Same-line character edits leave line-attached marks in place.
+        if delta.old_span != delta.new_span {
+            let edit = prepared.edit;
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+        }
+        let cursor = apply_primitive_edit(&mut self.editor.lines, prepared);
+        self.editor.set_cursor(cursor);
+        Some(delta)
+    }
+
     pub(super) fn insert_char(&mut self, ch: char) {
-        if ch.is_control() {
+        if self
+            .apply_buffer_primitive(PrimitiveEdit::InsertChar(ch))
+            .is_none()
+        {
             return;
         }
-        let col = self.editor.cursor_col;
-        let line = self.current_line_mut();
-        let idx = byte_index(line, col);
-        line.insert(idx, ch);
-        self.editor.cursor_col += 1;
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited_current_line();
     }
 
     pub(super) fn insert_text(&mut self, text: &str) {
-        if text.is_empty() {
+        if self
+            .apply_buffer_primitive(PrimitiveEdit::InsertText(text))
+            .is_none()
+        {
             return;
         }
-        let col = self.editor.cursor_col;
-        let line = self.current_line_mut();
-        let idx = byte_index(line, col);
-        line.insert_str(idx, text);
-        self.editor.cursor_col += text.chars().count();
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited_current_line();
     }
 
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
-        if !self.note_table_module_enabled() || self.editor.lines.is_empty() {
-            return false;
-        }
-        let line_idx = self
-            .editor
-            .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
-        let cursor_byte = byte_index(&self.editor.lines[line_idx], self.editor.cursor_col);
-        let Some(edit) = crate::editor_core::table::plan_table_cell_multiline_paste(
+        let Some(edit) = prepare_table_cell_paste(
             &self.editor.lines,
-            line_idx,
-            cursor_byte,
+            self.editor.cursor(),
             normalized,
+            self.note_table_module_enabled(),
             &mut self.table_format_cache,
         ) else {
             return false;
         };
-
         let replaced_count = edit.end - edit.start + 1;
         let inserted_count = edit.lines.len();
-        self.note_block_replace(edit.start, replaced_count, &edit.lines);
-        self.editor.lines.splice(edit.start..=edit.end, edit.lines);
-        self.editor.cursor_line = edit.cursor_line;
-        let target_line = &self.editor.lines[edit.cursor_line];
-        self.editor.cursor_col = target_line[..edit.cursor_byte.min(target_line.len())]
-            .chars()
-            .count();
-
-        self.splice_calc_line_metadata(edit.start, replaced_count, inserted_count);
-        self.mark_edited_from_line(edit.start);
+        let start = edit.start;
+        self.note_block_replace(start, replaced_count, &edit.lines);
+        let cursor = apply_table_cell_paste(&mut self.editor.lines, edit);
+        self.editor.set_cursor(cursor);
+        self.splice_calc_line_metadata(start, replaced_count, inserted_count);
+        self.mark_edited_from_line(start);
         true
     }
 
@@ -2511,59 +1925,24 @@ impl TerminalApp {
         if text.is_empty() {
             return;
         }
-
-        if self.editor.lines.is_empty() {
-            self.editor.lines.push(String::new());
-        }
-
-        // Normalize line endings to keep cursor/line mapping predictable.
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let normalized = normalize_paste(text);
         if self.try_insert_table_cell_multiline_paste(&normalized) {
             return;
         }
-        let parts: Vec<&str> = normalized.split('\n').collect();
-        if parts.is_empty() {
+        let Some(prepared) =
+            prepare_plain_paste(&self.editor.lines, self.editor.cursor(), &normalized)
+        else {
             return;
+        };
+        let delta = prepared.delta;
+        if prepared.edit.inserted_breaks > 0 {
+            let edit = prepared.edit;
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
         }
-
-        let line_idx = self
-            .editor
-            .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
-        let col = self.editor.cursor_col;
-        let current = self.editor.lines[line_idx].clone();
-        let split_idx = byte_index(&current, col);
-        let (left, right) = current.split_at(split_idx);
-
-        if parts.len() == 1 {
-            self.editor.lines[line_idx] = format!("{left}{}{right}", parts[0]);
-            self.editor.cursor_line = line_idx;
-            self.editor.cursor_col = col + parts[0].chars().count();
-            self.splice_calc_line_metadata(line_idx, 1, 1);
-            self.mark_edited_from_line(line_idx);
-            return;
-        }
-
-        self.note_line_edit(
-            (line_idx, split_idx),
-            (line_idx, split_idx),
-            parts.len() - 1,
-        );
-        self.editor.lines[line_idx] = format!("{left}{}", parts[0]);
-        let mut insert_at = line_idx + 1;
-        for part in &parts[1..parts.len() - 1] {
-            self.editor.lines.insert(insert_at, (*part).to_string());
-            insert_at += 1;
-        }
-
-        let tail = *parts.last().unwrap_or(&"");
-        self.editor
-            .lines
-            .insert(insert_at, format!("{tail}{right}"));
-        self.editor.cursor_line = insert_at;
-        self.editor.cursor_col = tail.chars().count();
-        self.splice_calc_line_metadata(line_idx, 1, parts.len());
-        self.mark_edited_from_line(line_idx);
+        let cursor = apply_plain_paste(&mut self.editor.lines, prepared);
+        self.editor.set_cursor(cursor);
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_from_line(delta.start_line);
     }
 
     pub(super) fn try_import_image_paste(
@@ -2628,16 +2007,9 @@ impl TerminalApp {
     /// off, or the cursor is in a fenced code block or already in a table
     /// (where a paste fills cells).
     pub(super) fn pasted_table(&mut self, text: &str) -> Option<Vec<String>> {
-        if !self.note_table_module_enabled() || is_markdown_table_line(self.current_line()) {
-            return None;
-        }
-        let table = crate::editor_core::table_import::delimited_text_to_table(text)?;
-        // The table lands on, above or below the cursor's line: none of it
-        // may be code, so an opening or closing fence line counts as code.
-        let mut fence = self.fence_state_before_line(self.editor.cursor_line);
-        let before = fence.in_code_block;
-        crate::editor_core::markdown_tokens::advance_fence_state(&mut fence, self.current_line());
-        (!before && !fence.in_code_block).then_some(table)
+        let table = parse_table_paste(text, self.current_line(), self.note_table_module_enabled())?;
+        let fence = self.fence_state_before_line(self.editor.cursor_line);
+        table_paste_outside_code(self.current_line(), fence).then_some(table)
     }
 
     /// Pastes CSV or TSV as a table: in place of a blank line, or on the
@@ -2646,29 +2018,20 @@ impl TerminalApp {
         let Some(table) = self.pasted_table(text) else {
             return false;
         };
-        let mut block = table.join("\n");
-        if !self.current_line().trim().is_empty() {
-            self.editor.cursor_col = line_char_len(self.current_line());
-            block.insert(0, '\n');
-        }
+        let (block, cursor) =
+            prepare_table_import(&table, self.current_line(), self.editor.cursor());
+        self.editor.set_cursor(cursor);
         self.insert_paste(&block);
         self.status = "pasted as table".to_string();
         true
     }
 
     pub(super) fn insert_newline(&mut self) {
-        let changed_from_line = self.editor.cursor_line;
-        let col = self.editor.cursor_col;
-        let idx = byte_index(self.current_line(), col);
-        self.note_line_edit((changed_from_line, idx), (changed_from_line, idx), 1);
-        let right = self.editor.lines[self.editor.cursor_line][idx..].to_string();
-        self.editor.lines[self.editor.cursor_line].truncate(idx);
-        let insert_at = self.editor.cursor_line + 1;
-        self.editor.lines.insert(insert_at, right);
-        self.editor.cursor_line += 1;
-        self.editor.cursor_col = 0;
-        self.splice_calc_line_metadata(changed_from_line, 1, 2);
-        self.mark_edited_from_line(changed_from_line);
+        let Some(delta) = self.apply_buffer_primitive(PrimitiveEdit::Newline) else {
+            return;
+        };
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_from_line(delta.start_line);
     }
 
     pub(super) fn variable_autocomplete_state(&self) -> Option<VariableAutocompleteState> {
@@ -2677,8 +2040,12 @@ impl TerminalApp {
         }
         let line = self.current_line();
         // Cross-note prefix takes priority: [[ID]].partial
-        if let Some((dep_id, bracket_col, from_col, partial)) =
-            extract_cross_note_completion_prefix(line, self.editor.cursor_col)
+        if let Some(crate::editor_core::completion::CrossNoteCompletionPrefix {
+            note_id: dep_id,
+            bracket_col,
+            from_col,
+            partial,
+        }) = extract_cross_note_completion_prefix(line, self.editor.cursor_col)
         {
             if !self.note_variables_module_enabled() {
                 return None;
@@ -2709,11 +2076,12 @@ impl TerminalApp {
                     bg_condvar.notify_all();
                 });
             }
-            let suggestions: Vec<String> = exports
-                .iter()
-                .filter(|e| e.normalized.starts_with(&partial) && e.normalized != partial)
-                .map(|e| e.name.clone())
-                .collect();
+            let suggestions = crate::editor_core::completion::cross_note_suggestions(
+                exports
+                    .iter()
+                    .map(|e| (e.normalized.as_str(), e.name.as_str())),
+                &partial,
+            );
             if !suggestions.is_empty() {
                 return Some(VariableAutocompleteState {
                     popup_anchor_col: bracket_col,
@@ -2726,65 +2094,15 @@ impl TerminalApp {
             return None;
         }
 
-        if self.note_table_module_enabled() {
-            if let Some(completion) =
-                crate::editor_core::calc_plan::table_formula_function_completion(
-                    line,
-                    self.editor.cursor_col,
-                    self.variable_autocomplete_min_chars,
-                )
-            {
-                // Helpers first, then variables sharing the typed prefix.
-                let mut suggestions: Vec<String> = completion
-                    .suggestions
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                if self.note_variables_module_enabled() {
-                    suggestions.extend(build_variable_suggestions(
-                        &self.calc.variable_names,
-                        &completion.query,
-                        self.variable_autocomplete_min_chars,
-                        VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-                    ));
-                    suggestions.truncate(VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS);
-                }
-                return Some(VariableAutocompleteState {
-                    popup_anchor_col: completion.from_col,
-                    from_col: completion.from_col,
-                    to_col: completion.to_col,
-                    query: completion.query,
-                    suggestions,
-                });
-            }
-        }
-        if !self.note_variables_module_enabled() {
-            return None;
-        }
-
-        if self.calc.variable_names.is_empty() {
-            return None;
-        }
-        let run = extract_variable_completion_prefix(line, self.editor.cursor_col)?;
-        let (prefix, suggestions) = variable_completion_candidates(&run)
-            .into_iter()
-            .map(|candidate| {
-                let suggestions = build_variable_suggestions(
-                    &self.calc.variable_names,
-                    &candidate.query,
-                    self.variable_autocomplete_min_chars,
-                    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-                );
-                (candidate, suggestions)
-            })
-            .find(|(_, suggestions)| !suggestions.is_empty())?;
-        Some(VariableAutocompleteState {
-            popup_anchor_col: prefix.from_col,
-            from_col: prefix.from_col,
-            to_col: prefix.to_col,
-            query: prefix.query,
-            suggestions,
-        })
+        crate::editor_core::completion::local_variable_completion(
+            line,
+            self.editor.cursor_col,
+            self.note_table_module_enabled(),
+            self.note_variables_module_enabled(),
+            &self.calc.variable_names,
+            self.variable_autocomplete_min_chars,
+            VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+        )
     }
 
     pub(super) fn variable_popup_anchor(&self, anchor_col: usize) -> Option<(usize, usize)> {
@@ -3307,8 +2625,9 @@ impl TerminalApp {
             let doc_len = document_text_len(&self.editor.lines);
             let from = change.from.min(doc_len);
             let to = change.to.min(doc_len);
-            let (from_line, from_byte) = line_and_byte_for_offset(&self.editor.lines, from);
-            let (to_line, to_byte) = line_and_byte_for_offset(&self.editor.lines, to);
+            let prepared = prepare_text_change(&self.editor.lines, change, doc_len);
+            let edit = prepared.edit;
+            let from_line = edit.from.0;
 
             let mut mapped_anchor =
                 self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
@@ -3323,50 +2642,10 @@ impl TerminalApp {
                 }
             }
 
-            let from_text = self
-                .editor
-                .lines
-                .get(from_line)
-                .cloned()
-                .unwrap_or_default();
-            let to_text = self.editor.lines.get(to_line).cloned().unwrap_or_default();
-            let prefix = &from_text[..from_byte.min(from_text.len())];
-            let suffix = &to_text[to_byte.min(to_text.len())..];
-            let insert_parts = change.insert.split('\n').collect::<Vec<_>>();
-            let mut replacement = Vec::with_capacity(insert_parts.len().max(1));
-
-            if insert_parts.len() <= 1 {
-                replacement.push(format!(
-                    "{prefix}{}{suffix}",
-                    insert_parts.first().copied().unwrap_or("")
-                ));
-            } else {
-                replacement.push(format!("{prefix}{}", insert_parts[0]));
-                for part in &insert_parts[1..insert_parts.len() - 1] {
-                    replacement.push((*part).to_string());
-                }
-                replacement.push(format!(
-                    "{}{suffix}",
-                    insert_parts.last().copied().unwrap_or("")
-                ));
-            }
-
-            let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
-            let new_line_span = replacement.len().max(1);
-            self.note_line_edit(
-                (from_line, from_byte),
-                (to_line, to_byte),
-                insert_parts.len() - 1,
-            );
-            if from_line <= to_line && from_line < self.editor.lines.len() {
-                let end = to_line.min(self.editor.lines.len().saturating_sub(1));
-                self.editor.lines.splice(from_line..=end, replacement);
-            } else {
-                self.editor.lines = replacement;
-            }
-            if self.editor.lines.is_empty() {
-                self.editor.lines.push(String::new());
-            }
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+            let delta = apply_text_change_in_place(&mut self.editor.lines, prepared);
+            let old_line_span = delta.old_span;
+            let new_line_span = delta.new_span;
 
             self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
 
@@ -3389,10 +2668,11 @@ impl TerminalApp {
             if !(old_line_span == 1 && new_line_span == 1 && from_line == self.editor.cursor_line) {
                 self.folds.rescan_pending = true;
             }
-            self.mark_edited_from_line_with_span(
-                from_line,
-                Some((from_line, old_line_span, new_line_span)),
-            );
+            self.mark_edited_with_delta(EditDelta {
+                start_line: from_line,
+                old_span: old_line_span,
+                new_span: new_line_span,
+            });
             self.adjust_cursor_after_operation(op);
             self.adjust_scroll();
             return;
@@ -3426,12 +2706,11 @@ impl TerminalApp {
             let from = change.from.min(current_doc_len);
             let to = change.to.min(current_doc_len);
             let removed = to.saturating_sub(from);
-            let from_at = line_and_byte_for_offset(&self.editor.lines, from);
-            let to_at = line_and_byte_for_offset(&self.editor.lines, to);
-            self.note_line_edit(from_at, to_at, change.insert.matches('\n').count());
-            let (from_line, old_line_span, new_line_span) =
-                apply_text_change_in_place(&mut self.editor.lines, change, current_doc_len);
-            self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
+            let prepared = prepare_text_change(&self.editor.lines, change, current_doc_len);
+            let edit = prepared.edit;
+            self.note_line_edit(edit.from, edit.to, edit.inserted_breaks);
+            let delta = apply_text_change_in_place(&mut self.editor.lines, prepared);
+            self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
             current_doc_len = current_doc_len
                 .saturating_add(change.insert.len())
                 .saturating_sub(removed);
@@ -3464,10 +2743,11 @@ impl TerminalApp {
             self.editor.cursor_col = char_col_at_byte(line, line_byte);
         }
         self.folds.rescan_pending = true;
-        self.mark_edited_from_line_with_span(
-            changed_from_line,
-            Some((changed_from_line, old_line_span, new_line_span)),
-        );
+        self.mark_edited_with_delta(EditDelta {
+            start_line: changed_from_line,
+            old_span: old_line_span,
+            new_span: new_line_span,
+        });
         self.adjust_cursor_after_operation(op);
         self.adjust_scroll();
     }
@@ -3544,70 +2824,34 @@ impl TerminalApp {
         if self.try_table_char_delete(true) {
             return;
         }
-
-        if self.editor.cursor_col > 0 {
-            let new_col = self.editor.cursor_col - 1;
-            remove_char_at(&mut self.editor.lines[self.editor.cursor_line], new_col);
-            self.editor.cursor_col = new_col;
+        let Some(delta) = self.apply_buffer_primitive(PrimitiveEdit::Backspace) else {
+            return;
+        };
+        if delta.old_span == delta.new_span {
             self.refresh_calc_line_metadata_at(self.editor.cursor_line);
             self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
-
-        if self.editor.cursor_line == 0 {
-            return;
-        }
-
-        let joined_onto = self.editor.cursor_line - 1;
-        self.note_line_edit(
-            (joined_onto, self.editor.lines[joined_onto].len()),
-            (self.editor.cursor_line, 0),
-            0,
-        );
-        let removed = self.editor.lines.remove(self.editor.cursor_line);
-        self.editor.cursor_line -= 1;
-        let prev_len = line_char_len(&self.editor.lines[self.editor.cursor_line]);
-        self.editor.lines[self.editor.cursor_line].push_str(&removed);
-        self.editor.cursor_col = prev_len;
-        self.splice_calc_line_metadata(self.editor.cursor_line, 2, 1);
-        self.mark_edited_from_line_with_span(
-            self.editor.cursor_line,
-            Some((self.editor.cursor_line, 2, 1)),
-        );
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_with_delta(delta);
     }
 
     pub(super) fn delete_forward(&mut self) {
         if self.try_table_char_delete(false) {
             return;
         }
-
-        let line_len = line_char_len(self.current_line());
-        if self.editor.cursor_col < line_len {
-            let col = self.editor.cursor_col;
-            remove_char_at(&mut self.editor.lines[self.editor.cursor_line], col);
+        let Some(delta) = self.apply_buffer_primitive(PrimitiveEdit::DeleteForward) else {
+            return;
+        };
+        if delta.old_span == delta.new_span {
             self.refresh_calc_line_metadata_at(self.editor.cursor_line);
             self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
-
-        if self.editor.cursor_line + 1 >= self.editor.lines.len() {
-            return;
-        }
-
-        self.note_line_edit(
-            (self.editor.cursor_line, self.current_line().len()),
-            (self.editor.cursor_line + 1, 0),
-            0,
-        );
-        let next = self.editor.lines.remove(self.editor.cursor_line + 1);
-        self.editor.lines[self.editor.cursor_line].push_str(&next);
-        self.splice_calc_line_metadata(self.editor.cursor_line, 2, 1);
-        self.mark_edited_from_line_with_span(
-            self.editor.cursor_line,
-            Some((self.editor.cursor_line, 2, 1)),
-        );
+        self.splice_calc_line_metadata(delta.start_line, delta.old_span, delta.new_span);
+        self.mark_edited_with_delta(delta);
     }
 
     pub(super) fn try_shared_table_cursor_motion(
@@ -3720,17 +2964,17 @@ impl TerminalApp {
             return;
         }
 
-        if self.editor.cursor_col > 0 {
-            self.editor.cursor_col -= 1;
-            return;
-        }
         let current_virtual = self.current_virtual_line();
-        if current_virtual > 0 {
-            if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
-                self.editor.cursor_line = prev_real;
-                self.editor.cursor_col = line_char_len(self.current_line());
-            }
-        }
+        let neighbour = current_virtual
+            .checked_sub(1)
+            .and_then(|idx| self.real_line_for_virtual(idx));
+        let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
+            &self.editor.lines,
+            self.editor.cursor(),
+            false,
+            neighbour,
+        );
+        self.editor.set_cursor(cursor);
     }
 
     pub(super) fn move_cursor_right(&mut self) {
@@ -3756,23 +3000,21 @@ impl TerminalApp {
             return;
         }
 
-        let line_len = line_char_len(self.current_line());
-        if self.editor.cursor_col < line_len {
-            self.editor.cursor_col += 1;
-            self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
-            return;
-        }
         let current_virtual = self.current_virtual_line();
-        if current_virtual + 1 < self.visible_line_count() {
-            if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
-                self.editor.cursor_line = next_real;
-                self.editor.cursor_col = 0;
-                self.editor.markdown_formatting_right_boundary_exit = None;
-                return;
-            }
-        }
-
-        self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
+        let neighbour = self.real_line_for_virtual(current_virtual + 1);
+        let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
+            &self.editor.lines,
+            self.editor.cursor(),
+            true,
+            neighbour,
+        );
+        self.editor.markdown_formatting_right_boundary_exit =
+            if cursor.line == self.editor.cursor_line {
+                boundary_exit_anchor
+            } else {
+                None
+            };
+        self.editor.set_cursor(cursor);
     }
 
     /// Cell positions of the cursor line's chars (see
@@ -4421,20 +3663,6 @@ impl TerminalApp {
 
     // --- Wiki-link autocomplete ---
 
-    fn parse_wiki_link_query(query: &str) -> Option<(&str, Option<&str>)> {
-        if query.contains(']') || query.contains('|') {
-            return None;
-        }
-        if let Some(hash_idx) = query.find('#') {
-            let note_id = &query[..hash_idx];
-            if !crate::editor_core::markdown_tokens::is_note_link_id(note_id) {
-                return None;
-            }
-            return Some((note_id, Some(&query[hash_idx + 1..])));
-        }
-        Some((query, None))
-    }
-
     fn load_wiki_link_heading_suggestions(
         db: &crate::storage::Db,
         note_id: &str,
@@ -4593,7 +3821,7 @@ impl TerminalApp {
             .skip(from_col + 2)
             .take(self.editor.cursor_col.saturating_sub(from_col + 2))
             .collect();
-        if Self::parse_wiki_link_query(&query).is_none() {
+        if crate::editor_core::completion::parse_wiki_link_query(&query).is_none() {
             return false;
         }
 
@@ -4643,7 +3871,9 @@ impl TerminalApp {
             .skip(from_col + 2)
             .take(self.editor.cursor_col - from_col - 2)
             .collect();
-        let Some((_, _heading_query)) = Self::parse_wiki_link_query(&query) else {
+        let Some((_, _heading_query)) =
+            crate::editor_core::completion::parse_wiki_link_query(&query)
+        else {
             self.cancel_wiki_link_autocomplete();
             return;
         };
@@ -4652,9 +3882,9 @@ impl TerminalApp {
             self.wiki_link_autocomplete_popup.anchor_row = anchor_row;
             self.wiki_link_autocomplete_popup.anchor_col = anchor_col;
         }
-        if let Some((target, heading_query)) =
-            Self::parse_wiki_link_query(self.wiki_link_autocomplete_popup.query.as_str())
-        {
+        if let Some((target, heading_query)) = crate::editor_core::completion::parse_wiki_link_query(
+            self.wiki_link_autocomplete_popup.query.as_str(),
+        ) {
             self.wiki_link_autocomplete_popup.suggestions = match heading_query {
                 Some(value) => {
                     if !self
@@ -4673,12 +3903,11 @@ impl TerminalApp {
                         if value.is_empty() {
                             cached.clone()
                         } else {
-                            let query = value.to_lowercase();
-                            cached
-                                .iter()
-                                .filter(|suggestion| suggestion.title_lower.contains(&query))
-                                .cloned()
-                                .collect()
+                            crate::editor_core::completion::filter_wiki_suggestions(
+                                cached,
+                                value,
+                                |suggestion| &suggestion.title_lower,
+                            )
                         }
                     } else {
                         Vec::new()
@@ -4688,13 +3917,11 @@ impl TerminalApp {
                     if target.is_empty() {
                         self.wiki_link_autocomplete_popup.note_suggestions.clone()
                     } else {
-                        let query = target.to_lowercase();
-                        self.wiki_link_autocomplete_popup
-                            .note_suggestions
-                            .iter()
-                            .filter(|suggestion| suggestion.title_lower.contains(&query))
-                            .cloned()
-                            .collect()
+                        crate::editor_core::completion::filter_wiki_suggestions(
+                            &self.wiki_link_autocomplete_popup.note_suggestions,
+                            target,
+                            |suggestion| &suggestion.title_lower,
+                        )
                     }
                 }
             };
