@@ -1,6 +1,6 @@
 # Architecture Refactor: Core-Owned Editing
 
-Status: planned (2026-10-10). Execution reference for moving editing semantics
+Status: implemented (2026-10-10). Execution reference for moving editing semantics
 out of `crates/tui` into the core crates. Ownership rules come from
 `AGENTS.md` and `roadmap/plan.md` ("Ownership Rules"); the existing contract
 is `roadmap/editor-engine-contract.md`.
@@ -225,7 +225,7 @@ eligibility reads borrowed metadata and affected lines. Fold upkeep moved with
 its existing incremental cache updates and deferred-rescan rules. Scheduling,
 worker results, persistence and viewport application stay in the terminal.
 
-### Phase 6: completion and search
+### Phase 6: completion and search (complete)
 
 Move completion prefix and candidate functions, wiki-link query parsing and
 filtering, and in-note search matching to core. Popups, selection state and
@@ -315,3 +315,10 @@ speedup across machines or runs.
 | Enter | 100k | 3.27 / 6.99 | 2.85 / 6.98 |
 | Open line | 100k | 3.83 / 4.06 | 3.40 / 3.91 |
 | Paste | 100k | 10.25 / 10.40 | 9.84 / 10.10 |
+
+Phase 6 moves variable/cross-note prefix parsing, candidate selection, table
+helper precedence, wiki query validation/filtering and character-range search
+matching into core. Popup visibility, current search match and DB/background
+export loading remain host state/effects. Existing popup integration and replay
+tests continue to exercise the terminal calls; core tests cover Unicode ranges,
+qualified names, suffix candidates, disabled modules and suggestion order.

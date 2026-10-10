@@ -118,6 +118,14 @@ This document defines the canonical shared-core contract for editor semantics.
   and text-cache entries and returns view effects, mapped ranges or a rescan
   decision. It defers expensive analysis when no collapsed ranges are visible;
   the host applies the decision and owns viewport maps and the idle tick.
+- Completion (`completion`) owns prefix spans in character columns, candidate
+  precedence and filtering. Hosts supply variable/export/title data and retain
+  popup selection, database access and dependency preloading. Qualified note
+  references take priority over local variables and table helpers.
+- Search (`search`) matches each line case-insensitively and returns original
+  character ranges, including Unicode lowercase expansion. Queries passed to
+  the matching API must already be lowercased. Hosts own match selection and
+  navigation; `find_matches` clears and reuses the supplied vector.
 - Command contract:
   - input: `CommandMode`, `raw_input`
   - output: canonical command definition (or none), suggestions, normalized input

@@ -1,4 +1,3 @@
-use super::VariableCompletionPrefix;
 use crate::storage::Db;
 #[cfg(test)]
 use crate::terminal::text_utils::line_display_cols;
@@ -269,86 +268,10 @@ pub(super) fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
     Some((segment.from_byte, segment.to_byte))
 }
 
-pub(super) fn variable_query_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_' || ch == ' '
-}
-
-pub(super) fn extract_variable_completion_prefix(
-    line_text: &str,
-    cursor_col: usize,
-) -> Option<VariableCompletionPrefix> {
-    let chars = line_text.chars().collect::<Vec<_>>();
-    let col = cursor_col.min(chars.len());
-    let mut from = col;
-
-    while from > 0 && variable_query_char(chars[from - 1]) {
-        from -= 1;
-    }
-
-    while from < col && chars[from] == ' ' {
-        from += 1;
-    }
-
-    if from >= col {
-        return None;
-    }
-
-    let query = chars[from..col].iter().collect::<String>();
-    if query.is_empty() || query.ends_with(' ') {
-        return None;
-    }
-
-    Some(VariableCompletionPrefix {
-        from_col: from,
-        to_col: col,
-        query,
-    })
-}
-
-/// Candidate queries for a completion prefix, longest first: the whole run
-/// (variable names may contain spaces, e.g. `tax ra` -> `tax rate`) and then
-/// each shorter run starting after a space (`then pri` -> `pri`).
-pub(super) fn variable_completion_candidates(
-    prefix: &VariableCompletionPrefix,
-) -> Vec<VariableCompletionPrefix> {
-    let chars: Vec<char> = prefix.query.chars().collect();
-    let mut candidates = vec![VariableCompletionPrefix {
-        from_col: prefix.from_col,
-        to_col: prefix.to_col,
-        query: prefix.query.clone(),
-    }];
-    for (idx, ch) in chars.iter().enumerate() {
-        if *ch == ' ' && idx + 1 < chars.len() && chars[idx + 1] != ' ' {
-            candidates.push(VariableCompletionPrefix {
-                from_col: prefix.from_col + idx + 1,
-                to_col: prefix.to_col,
-                query: chars[idx + 1..].iter().collect(),
-            });
-        }
-    }
-    candidates
-}
-
-pub(super) fn build_variable_suggestions(
-    variable_names: &[String],
-    query: &str,
-    min_chars: usize,
-    max_suggestions: usize,
-) -> Vec<String> {
-    let normalized_query = query.trim().to_lowercase();
-    if normalized_query.chars().count() < min_chars {
-        return Vec::new();
-    }
-
-    let mut matches = variable_names
-        .iter()
-        .filter(|name| name.starts_with(&normalized_query) && **name != normalized_query)
-        .cloned()
-        .collect::<Vec<_>>();
-    matches.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
-    matches.truncate(max_suggestions.max(1));
-    matches
-}
+#[cfg(test)]
+pub(super) use crate::editor_core::completion::{
+    build_variable_suggestions, extract_variable_completion_prefix, variable_completion_candidates,
+};
 
 pub(super) fn contains_assignment_operator(text: &str) -> bool {
     crate::editor_core::calc_plan::contains_assignment_operator(text)
@@ -436,32 +359,4 @@ pub(super) fn startup_cross_note_extern_vars(
 /// `bracket_col` is the char column of the opening `[[` — used to anchor the
 /// autocomplete popup visually under the full `[[id]].` expression.
 /// `from_col` is the start of the partial var name — used for text replacement.
-pub(super) fn extract_cross_note_completion_prefix(
-    line_text: &str,
-    cursor_col: usize,
-) -> Option<(String, usize, usize, String)> {
-    use regex::Regex;
-    use std::sync::OnceLock;
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        // Note ids as `markdown_tokens::is_note_link_id` accepts them.
-        Regex::new(r"\[\[([A-Za-z0-9][A-Za-z0-9_-]{0,63})\]\]\.([A-Za-z0-9_][A-Za-z0-9_ ]*)?$")
-            .unwrap()
-    });
-
-    let chars: Vec<char> = line_text.chars().collect();
-    let col = cursor_col.min(chars.len());
-    let text_before: String = chars[..col].iter().collect();
-    let m = re.captures(&text_before)?;
-    let full_match_start_byte = m.get(0)?.start();
-    let bracket_col = text_before[..full_match_start_byte].chars().count();
-
-    let note_id = m.get(1)?.as_str().to_string();
-    let partial_raw = m.get(2).map(|g| g.as_str()).unwrap_or("");
-    let partial = partial_raw.trim().to_lowercase();
-
-    let partial_chars = partial_raw.chars().count();
-    let from_col = col.saturating_sub(partial_chars);
-
-    Some((note_id, bracket_col, from_col, partial))
-}
+pub(super) use crate::editor_core::completion::extract_cross_note_completion_prefix;

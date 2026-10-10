@@ -305,23 +305,7 @@ struct CollectionEditDialogState {
     default_tags: String,
 }
 
-#[derive(Debug, Clone)]
-struct VariableCompletionPrefix {
-    from_col: usize,
-    to_col: usize,
-    query: String,
-}
-
-#[derive(Debug, Clone)]
-struct VariableAutocompleteState {
-    /// Column used to anchor the popup box visually (start of `[[` for cross-note,
-    /// same as `from_col` for regular variables).
-    popup_anchor_col: usize,
-    from_col: usize,
-    to_col: usize,
-    query: String,
-    suggestions: Vec<String>,
-}
+use crate::editor_core::completion::VariableAutocompleteState;
 
 #[derive(Debug, Clone, Default)]
 struct VariableAutocompletePopupState {

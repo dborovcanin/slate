@@ -12,6 +12,7 @@ use crate::terminal::{notifications, switcher, text_input};
 use app_core::storage::{NoteAccessMode, NoteModules};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 pub(super) use crate::terminal::text_utils::case_insensitive_matches;
 
 fn note_sources(db: &Db) -> app_core::note_sources::NoteSourceService {
@@ -3218,11 +3219,11 @@ impl TerminalApp {
             return;
         }
 
-        for (line_idx, line) in self.editor.lines.iter().enumerate() {
-            for (char_start, char_end) in case_insensitive_matches(line, &query) {
-                self.search.matches.push((line_idx, char_start, char_end));
-            }
-        }
+        crate::editor_core::search::find_matches(
+            &self.editor.lines,
+            &query,
+            &mut self.search.matches,
+        );
 
         if !self.search.matches.is_empty() {
             self.jump_to_nearest_match();

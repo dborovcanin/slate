@@ -1,12 +1,11 @@
 use super::{
-    build_variable_suggestions, compute_calc_data, compute_calc_data_cached,
-    compute_calc_data_for_lines, compute_calc_data_for_note, compute_calc_trailer_refresh,
-    contains_assignment_operator, cross_note_exports_for_autocomplete, display_cols_for_prefix,
-    extract_cross_note_completion_prefix, extract_variable_completion_prefix,
-    find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
-    is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
-    table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
-    table_cell_navigation_anchor, variable_completion_candidates, Db, FoldKind, LineReminderGhost,
+    compute_calc_data, compute_calc_data_cached, compute_calc_data_for_lines,
+    compute_calc_data_for_note, compute_calc_trailer_refresh, contains_assignment_operator,
+    cross_note_exports_for_autocomplete, display_cols_for_prefix,
+    extract_cross_note_completion_prefix, find_calc_segment_range, find_table_formula_segments,
+    gutter_width_for_visible_lines, is_markdown_table_line, line_char_len, line_display_cols,
+    preload_cross_note_dep_value, table_cell_edit_start, table_cell_info_at_char,
+    table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind, LineReminderGhost,
     ReminderUndoEntry, TerminalApp, UiMode, UndoAction, VariableAutocompletePopupState,
     VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
     CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
@@ -2106,11 +2105,12 @@ impl TerminalApp {
                     bg_condvar.notify_all();
                 });
             }
-            let suggestions: Vec<String> = exports
-                .iter()
-                .filter(|e| e.normalized.starts_with(&partial) && e.normalized != partial)
-                .map(|e| e.name.clone())
-                .collect();
+            let suggestions = crate::editor_core::completion::cross_note_suggestions(
+                exports
+                    .iter()
+                    .map(|e| (e.normalized.as_str(), e.name.as_str())),
+                &partial,
+            );
             if !suggestions.is_empty() {
                 return Some(VariableAutocompleteState {
                     popup_anchor_col: bracket_col,
@@ -2123,65 +2123,15 @@ impl TerminalApp {
             return None;
         }
 
-        if self.note_table_module_enabled() {
-            if let Some(completion) =
-                crate::editor_core::calc_plan::table_formula_function_completion(
-                    line,
-                    self.editor.cursor_col,
-                    self.variable_autocomplete_min_chars,
-                )
-            {
-                // Helpers first, then variables sharing the typed prefix.
-                let mut suggestions: Vec<String> = completion
-                    .suggestions
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                if self.note_variables_module_enabled() {
-                    suggestions.extend(build_variable_suggestions(
-                        &self.calc.variable_names,
-                        &completion.query,
-                        self.variable_autocomplete_min_chars,
-                        VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-                    ));
-                    suggestions.truncate(VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS);
-                }
-                return Some(VariableAutocompleteState {
-                    popup_anchor_col: completion.from_col,
-                    from_col: completion.from_col,
-                    to_col: completion.to_col,
-                    query: completion.query,
-                    suggestions,
-                });
-            }
-        }
-        if !self.note_variables_module_enabled() {
-            return None;
-        }
-
-        if self.calc.variable_names.is_empty() {
-            return None;
-        }
-        let run = extract_variable_completion_prefix(line, self.editor.cursor_col)?;
-        let (prefix, suggestions) = variable_completion_candidates(&run)
-            .into_iter()
-            .map(|candidate| {
-                let suggestions = build_variable_suggestions(
-                    &self.calc.variable_names,
-                    &candidate.query,
-                    self.variable_autocomplete_min_chars,
-                    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-                );
-                (candidate, suggestions)
-            })
-            .find(|(_, suggestions)| !suggestions.is_empty())?;
-        Some(VariableAutocompleteState {
-            popup_anchor_col: prefix.from_col,
-            from_col: prefix.from_col,
-            to_col: prefix.to_col,
-            query: prefix.query,
-            suggestions,
-        })
+        crate::editor_core::completion::local_variable_completion(
+            line,
+            self.editor.cursor_col,
+            self.note_table_module_enabled(),
+            self.note_variables_module_enabled(),
+            &self.calc.variable_names,
+            self.variable_autocomplete_min_chars,
+            VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+        )
     }
 
     pub(super) fn variable_popup_anchor(&self, anchor_col: usize) -> Option<(usize, usize)> {
@@ -3754,20 +3704,6 @@ impl TerminalApp {
 
     // --- Wiki-link autocomplete ---
 
-    fn parse_wiki_link_query(query: &str) -> Option<(&str, Option<&str>)> {
-        if query.contains(']') || query.contains('|') {
-            return None;
-        }
-        if let Some(hash_idx) = query.find('#') {
-            let note_id = &query[..hash_idx];
-            if !crate::editor_core::markdown_tokens::is_note_link_id(note_id) {
-                return None;
-            }
-            return Some((note_id, Some(&query[hash_idx + 1..])));
-        }
-        Some((query, None))
-    }
-
     fn load_wiki_link_heading_suggestions(
         db: &crate::storage::Db,
         note_id: &str,
@@ -3926,7 +3862,7 @@ impl TerminalApp {
             .skip(from_col + 2)
             .take(self.editor.cursor_col.saturating_sub(from_col + 2))
             .collect();
-        if Self::parse_wiki_link_query(&query).is_none() {
+        if crate::editor_core::completion::parse_wiki_link_query(&query).is_none() {
             return false;
         }
 
@@ -3976,7 +3912,9 @@ impl TerminalApp {
             .skip(from_col + 2)
             .take(self.editor.cursor_col - from_col - 2)
             .collect();
-        let Some((_, _heading_query)) = Self::parse_wiki_link_query(&query) else {
+        let Some((_, _heading_query)) =
+            crate::editor_core::completion::parse_wiki_link_query(&query)
+        else {
             self.cancel_wiki_link_autocomplete();
             return;
         };
@@ -3985,9 +3923,9 @@ impl TerminalApp {
             self.wiki_link_autocomplete_popup.anchor_row = anchor_row;
             self.wiki_link_autocomplete_popup.anchor_col = anchor_col;
         }
-        if let Some((target, heading_query)) =
-            Self::parse_wiki_link_query(self.wiki_link_autocomplete_popup.query.as_str())
-        {
+        if let Some((target, heading_query)) = crate::editor_core::completion::parse_wiki_link_query(
+            self.wiki_link_autocomplete_popup.query.as_str(),
+        ) {
             self.wiki_link_autocomplete_popup.suggestions = match heading_query {
                 Some(value) => {
                     if !self
@@ -4006,12 +3944,11 @@ impl TerminalApp {
                         if value.is_empty() {
                             cached.clone()
                         } else {
-                            let query = value.to_lowercase();
-                            cached
-                                .iter()
-                                .filter(|suggestion| suggestion.title_lower.contains(&query))
-                                .cloned()
-                                .collect()
+                            crate::editor_core::completion::filter_wiki_suggestions(
+                                cached,
+                                value,
+                                |suggestion| &suggestion.title_lower,
+                            )
                         }
                     } else {
                         Vec::new()
@@ -4021,13 +3958,11 @@ impl TerminalApp {
                     if target.is_empty() {
                         self.wiki_link_autocomplete_popup.note_suggestions.clone()
                     } else {
-                        let query = target.to_lowercase();
-                        self.wiki_link_autocomplete_popup
-                            .note_suggestions
-                            .iter()
-                            .filter(|suggestion| suggestion.title_lower.contains(&query))
-                            .cloned()
-                            .collect()
+                        crate::editor_core::completion::filter_wiki_suggestions(
+                            &self.wiki_link_autocomplete_popup.note_suggestions,
+                            target,
+                            |suggestion| &suggestion.title_lower,
+                        )
                     }
                 }
             };

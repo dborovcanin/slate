@@ -47,3 +47,5 @@ mod tests {
         assert_eq!(operation.changes[0].insert, "3");
     }
 }
+pub use editor_core::completion;
+pub use editor_core::search;
