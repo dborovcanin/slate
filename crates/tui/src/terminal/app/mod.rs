@@ -755,14 +755,14 @@ use table_helpers::*;
 
 impl TerminalApp {
     fn large_note_reduced_features(&self) -> bool {
-        self.editor.lines.len() > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
+        self.editor.lines().len() > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
     }
 
     fn maybe_compact_buffers_after_note_switch(&mut self) {
         // Best-effort memory trimming when switching from very large notes.
         // This doesn't guarantee RSS drops immediately (allocator-dependent),
         // but it releases large vector capacities held by app structures.
-        self.editor.lines.shrink_to_fit();
+        self.editor.compact();
         self.calc.results.shrink_to_fit();
         self.calc.cell_results.shrink_to_fit();
         self.calc.variable_names.shrink_to_fit();
@@ -1097,10 +1097,7 @@ impl TerminalApp {
             active_note_key_collection: None,
             scripts: scripts::ScriptState::new(app_core::config::load_script_config()),
             currency: Default::default(),
-            editor: note_session::Document {
-                lines,
-                ..Default::default()
-            },
+            editor: note_session::Document::from_lines(lines),
             view: ViewState::default(),
             mode: initial_mode,
             vim_enabled: vim_mode,
@@ -1862,7 +1859,7 @@ pub fn run_terminal_session(
     }
     app.daily_config = crate::config::load_daily_notes_config();
     if opts.open_at_end {
-        app.editor.cursor_line = app.editor.lines.len().saturating_sub(1);
+        app.editor.cursor_line = app.editor.lines().len().saturating_sub(1);
         app.editor.cursor_col = crate::terminal::text_utils::line_char_len(app.current_line());
         app.adjust_cursor();
         app.adjust_scroll();

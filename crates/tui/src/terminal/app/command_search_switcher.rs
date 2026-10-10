@@ -7,7 +7,7 @@ use super::{
     CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::browser::step_selection;
-use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
+use crate::terminal::text_utils::{byte_index, join_lines};
 use crate::terminal::{notifications, switcher, text_input};
 use app_core::storage::{NoteAccessMode, NoteModules};
 use std::time::{Duration, Instant};
@@ -932,7 +932,7 @@ impl TerminalApp {
         };
         self.set_active_note(db, note)?;
         if let Some(line_number) = line_number {
-            let max_line = self.editor.lines.len().saturating_sub(1);
+            let max_line = self.editor.lines().len().saturating_sub(1);
             self.editor.cursor_line = line_number.saturating_sub(1).min(max_line);
             self.editor.cursor_col = 0;
             self.adjust_cursor();
@@ -1694,7 +1694,7 @@ impl TerminalApp {
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::Export { format, path } => {
-                    let content = join_lines(&self.editor.lines);
+                    let content = join_lines(self.editor.lines());
                     self.status = match (format, path) {
                         (crate::editor_core::command_catalog::ExportFormat::Pdf, None) => {
                             "usage: export pdf <path>".to_string()
@@ -1964,7 +1964,7 @@ impl TerminalApp {
 
     pub(super) fn byte_offset_for_line_col(&self, line_idx: usize, col: usize) -> usize {
         let mut offset = 0;
-        for (i, line) in self.editor.lines.iter().enumerate() {
+        for (i, line) in self.editor.lines().iter().enumerate() {
             if i == line_idx {
                 offset += byte_index(line, col);
                 break;
@@ -1989,13 +1989,13 @@ impl TerminalApp {
                 })
             }
             UiMode::VisualLine => {
-                let anchor_line = anchor.0.min(self.editor.lines.len().saturating_sub(1));
+                let anchor_line = anchor.0.min(self.editor.lines().len().saturating_sub(1));
                 let head_line = self
                     .editor
                     .cursor_line
-                    .min(self.editor.lines.len().saturating_sub(1));
-                let anchor_line_len = line_char_len(&self.editor.lines[anchor_line]);
-                let head_line_len = line_char_len(&self.editor.lines[head_line]);
+                    .min(self.editor.lines().len().saturating_sub(1));
+                let anchor_line_len = line_char_len(&self.editor.lines()[anchor_line]);
+                let head_line_len = line_char_len(&self.editor.lines()[head_line]);
 
                 let (anchor_offset, head_offset) = if head_line >= anchor_line {
                     (
@@ -2025,7 +2025,7 @@ impl TerminalApp {
 
     pub(super) fn joined_text_cached_ref(&mut self) -> &str {
         if self.editor.joined_text_cache.is_none() {
-            self.editor.joined_text_cache = Some(join_lines(&self.editor.lines));
+            self.editor.joined_text_cache = Some(join_lines(self.editor.lines()));
         }
         self.editor.joined_text_cache.as_deref().unwrap()
     }
@@ -2071,7 +2071,7 @@ impl TerminalApp {
         end_line: usize,
         changed_range_abs: Option<crate::editor_core::types::TextRange>,
     ) -> (crate::editor_core::types::EditorContextSnapshot, usize) {
-        if self.editor.lines.is_empty() {
+        if self.editor.lines().is_empty() {
             let snapshot = crate::editor_core::types::EditorContextSnapshot {
                 text: String::new(),
                 selection: crate::editor_core::types::SelectionSnapshot { anchor: 0, head: 0 },
@@ -2080,12 +2080,12 @@ impl TerminalApp {
             return (snapshot, 0);
         }
 
-        let clamped_start = start_line.min(self.editor.lines.len().saturating_sub(1));
+        let clamped_start = start_line.min(self.editor.lines().len().saturating_sub(1));
         let clamped_end = end_line
-            .min(self.editor.lines.len().saturating_sub(1))
+            .min(self.editor.lines().len().saturating_sub(1))
             .max(clamped_start);
         let scope_start_offset = self.byte_offset_for_line_col(clamped_start, 0);
-        let scope_text = join_lines(&self.editor.lines[clamped_start..=clamped_end]);
+        let scope_text = join_lines(&self.editor.lines()[clamped_start..=clamped_end]);
         let scope_len = scope_text.len();
 
         let fallback_cursor =
@@ -2403,7 +2403,7 @@ impl TerminalApp {
             .editor
             .joined_text_cache
             .take()
-            .unwrap_or_else(|| join_lines(&self.editor.lines));
+            .unwrap_or_else(|| join_lines(self.editor.lines()));
         let stores_reminders = reminders.is_some();
         let saved = note_sources(db).save_note_revision_by_id(
             &self.active_note.id,
@@ -2418,13 +2418,13 @@ impl TerminalApp {
             self.session.persisted_reminders_generation = reminders_generation;
         }
         // Only the revision moves on; the document itself stays in
-        // `self.editor.lines` and is never round-tripped through the store.
+        // `self.editor.lines()` and is never round-tripped through the store.
         self.active_note.id = saved.id;
         self.active_note.updated_at = saved.updated_at;
         self.editor.joined_text_cache = Some(body);
         self.session.dirty = false;
         self.session.history.checkpoint(
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor_line,
             self.editor.cursor_col,
         );
@@ -2467,7 +2467,7 @@ impl TerminalApp {
             self.editor
                 .joined_text_cache
                 .clone()
-                .unwrap_or_else(|| join_lines(&self.editor.lines))
+                .unwrap_or_else(|| join_lines(self.editor.lines()))
         });
         let reminders_generation = reminders
             .as_ref()
@@ -2564,7 +2564,7 @@ impl TerminalApp {
         if self.session.edit_seq() == job.edit_mark {
             self.session.dirty = false;
             self.session.history.checkpoint(
-                &self.editor.lines,
+                self.editor.lines(),
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
@@ -2613,7 +2613,7 @@ impl TerminalApp {
             .ok_or_else(|| "the note no longer exists".to_string())?;
         let (line, col) = (self.editor.cursor_line, self.editor.cursor_col);
         self.set_active_note(db, note)?;
-        self.editor.cursor_line = line.min(self.editor.lines.len().saturating_sub(1));
+        self.editor.cursor_line = line.min(self.editor.lines().len().saturating_sub(1));
         self.editor.cursor_col = col;
         self.adjust_cursor();
         self.adjust_scroll();
@@ -2692,7 +2692,7 @@ impl TerminalApp {
                 return;
             }
             if !locked {
-                self.editor.cursor_line = line.min(self.editor.lines.len().saturating_sub(1));
+                self.editor.cursor_line = line.min(self.editor.lines().len().saturating_sub(1));
                 self.editor.cursor_col = col;
                 self.adjust_cursor();
                 self.adjust_scroll();
@@ -2710,7 +2710,7 @@ impl TerminalApp {
             .editor
             .joined_text_cache
             .clone()
-            .unwrap_or_else(|| join_lines(&self.editor.lines));
+            .unwrap_or_else(|| join_lines(self.editor.lines()));
         if let Some(op) = crate::editor_core::operations::replace_text(&text, &note.body) {
             self.session.history.break_coalescing();
             self.apply_edit_operation(&op);
@@ -2718,7 +2718,7 @@ impl TerminalApp {
             // The buffer now holds the stored text.
             self.session.dirty = false;
             self.session.history.checkpoint(
-                &self.editor.lines,
+                self.editor.lines(),
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
@@ -2777,7 +2777,7 @@ impl TerminalApp {
             };
             let body = self
                 .editor
-                .lines
+                .lines()
                 .get(line_idx)
                 .map(|line| line.trim())
                 .filter(|line| !line.is_empty())
@@ -3045,7 +3045,7 @@ impl TerminalApp {
         let label = crate::terminal::daily_date_label(stamp, &self.note_creation_theme.date_format);
         let note = app_core::daily::ensure_daily_note(db, &self.daily_config, stamp, &label)?;
         self.set_active_note(db, note)?;
-        self.editor.cursor_line = self.editor.lines.len().saturating_sub(1);
+        self.editor.cursor_line = self.editor.lines().len().saturating_sub(1);
         self.editor.cursor_col = line_char_len(self.current_line());
         self.adjust_cursor();
         self.adjust_scroll();
@@ -3066,8 +3066,7 @@ impl TerminalApp {
             super::file_render_syntax_for_note_id(&self.active_note.id);
         self.render_state.plain_text_file = render_plain_text_file;
         self.render_state.file_language = render_file_language;
-        self.editor.lines = split_lines(&self.active_note.body);
-        self.invalidate_joined_text_cache();
+        self.editor.set_text(&self.active_note.body);
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
         self.load_reminders(db)?;
@@ -3086,7 +3085,7 @@ impl TerminalApp {
         self.render_caches.wiki_link_render_cache.clear();
         self.render_caches.wiki_link_line_render_cache.clear();
         self.session.history = super::build_history_for_note(
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor_line,
             self.editor.cursor_col,
             self.reminder_marks(),
@@ -3094,16 +3093,16 @@ impl TerminalApp {
         self.session.undo_policy.clear();
         self.render_state.fence_checkpoints.truncate(1);
         self.render_state.fence_checkpoints_valid_through = 0;
-        if self.calc_cross_note_enabled() && self.editor.lines.iter().any(|l| l.contains("[[")) {
+        if self.calc_cross_note_enabled() && self.editor.lines().iter().any(|l| l.contains("[[")) {
             // Values read from other notes may have changed since.
             app_core::cross_note::refresh_referenced_notes(
                 &self.cross_note_db,
                 &self.cross_note_var_index,
-                &self.editor.lines,
+                self.editor.lines(),
             );
         }
         self.rescan_calc_flags();
-        self.calc_runtime.viewport_only = self.editor.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
+        self.calc_runtime.viewport_only = self.editor.lines().len() >= CALC_VIEWPORT_ONLY_MIN_LINES
             && self.active_has_variable_assignments()
             && !self.calc.cached_has_builtin_formula;
         self.calc_runtime.last_view_eval_range = None;
@@ -3112,8 +3111,8 @@ impl TerminalApp {
                 && !self.active_has_variable_assignments()
                 && !self.calc.cached_has_expression)
         {
-            self.calc.results = vec![None; self.editor.lines.len()];
-            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
+            self.calc.results = vec![None; self.editor.lines().len()];
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
             self.calc.variable_names.clear();
             self.calc.calc_dependency_index = None;
             self.calc.line_metadata.clear();
@@ -3126,8 +3125,8 @@ impl TerminalApp {
             self.calc_runtime.pending_viewport_pass = false;
             self.calc_runtime.pending_full_pass = false;
         } else if self.should_defer_calc_recompute() {
-            self.calc.results = vec![None; self.editor.lines.len()];
-            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
+            self.calc.results = vec![None; self.editor.lines().len()];
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
             self.calc.variable_names.clear();
             self.calc.calc_dependency_index = None;
             self.calc.line_metadata.clear();
@@ -3150,7 +3149,7 @@ impl TerminalApp {
             self.ensure_calc_for_viewport(editor_height, true);
         }
         self.session.history.checkpoint(
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor_line,
             self.editor.cursor_col,
         );
@@ -3228,7 +3227,7 @@ impl TerminalApp {
         }
 
         crate::editor_core::search::find_matches(
-            &self.editor.lines,
+            self.editor.lines(),
             &query,
             &mut self.search.matches,
         );

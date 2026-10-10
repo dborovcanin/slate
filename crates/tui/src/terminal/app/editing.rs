@@ -212,7 +212,7 @@ impl TerminalApp {
     fn record_history_after_edit(&mut self, grouping: UndoGrouping, delta: Option<EditDelta>) {
         self.session.undo_policy.record_text(
             &mut self.session.history,
-            &self.editor.lines,
+            self.editor.lines(),
             HistoryCursor {
                 line: self.editor.cursor_line,
                 col: self.editor.cursor_col,
@@ -227,9 +227,9 @@ impl TerminalApp {
         // Keep startup cheap for very large notes: build a plain 1:1 visible
         // map and defer expensive fold structure analysis until needed.
         self.folds.ranges.clear();
-        self.folds.range_by_start = vec![None; self.editor.lines.len()];
+        self.folds.range_by_start = vec![None; self.editor.lines().len()];
         self.folds.collapsed_starts.clear();
-        self.folds.line_has_structure = vec![false; self.editor.lines.len()];
+        self.folds.line_has_structure = vec![false; self.editor.lines().len()];
         // Keep memory lean at startup; full snapshots are only needed once
         // fold analysis actually runs.
         self.folds.line_text_snapshot.clear();
@@ -241,9 +241,9 @@ impl TerminalApp {
     fn ensure_fold_analysis_ready_for_command(&mut self) {
         if !self.folds.analysis_ready
             || self.folds.rescan_pending
-            || self.folds.range_by_start.len() != self.editor.lines.len()
-            || self.folds.line_has_structure.len() != self.editor.lines.len()
-            || self.folds.line_text_snapshot.len() != self.editor.lines.len()
+            || self.folds.range_by_start.len() != self.editor.lines().len()
+            || self.folds.line_has_structure.len() != self.editor.lines().len()
+            || self.folds.line_text_snapshot.len() != self.editor.lines().len()
         {
             self.recompute_folding();
         }
@@ -251,7 +251,7 @@ impl TerminalApp {
 
     pub(super) fn current_line(&self) -> &str {
         self.editor
-            .lines
+            .lines()
             .get(self.editor.cursor_line)
             .map(|s| s.as_str())
             .unwrap_or("")
@@ -259,7 +259,7 @@ impl TerminalApp {
 
     pub(super) fn rescan_calc_flags(&mut self) {
         let flags = crate::editor_core::calc_plan::detect_calc_signal_flags_with_mask(
-            &self.editor.lines,
+            self.editor.lines(),
             self.calc_feature_mask(),
         );
         self.calc.cached_has_builtin_formula = flags.has_builtin_formula;
@@ -277,7 +277,7 @@ impl TerminalApp {
         };
         crate::editor_core::calc_plan::merge_incremental_signal_flags(
             &mut flags,
-            &self.editor.lines,
+            self.editor.lines(),
             self.calc.results.len(),
             self.editor.cursor_line,
             self.calc_feature_mask(),
@@ -289,7 +289,7 @@ impl TerminalApp {
 
     fn rebuild_calc_line_metadata(&mut self) {
         self.calc.line_metadata = crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(
-            &self.editor.lines,
+            self.editor.lines(),
             self.calc_feature_mask(),
         );
     }
@@ -298,13 +298,13 @@ impl TerminalApp {
         let mask = self.calc_feature_mask();
         crate::editor_core::calc_plan::sync_line_metadata(
             &mut self.calc.line_metadata,
-            &self.editor.lines,
+            self.editor.lines(),
             mask,
         );
     }
 
     fn refresh_calc_line_metadata_at(&mut self, line_idx: usize) {
-        if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
+        if self.calc.line_metadata.is_empty() && self.editor.lines().is_empty() {
             return;
         }
         if self.calc.line_metadata.is_empty() && self.calc_runtime.viewport_only {
@@ -314,11 +314,11 @@ impl TerminalApp {
             return;
         }
         self.ensure_calc_line_metadata();
-        if line_idx >= self.editor.lines.len() || line_idx >= self.calc.line_metadata.len() {
+        if line_idx >= self.editor.lines().len() || line_idx >= self.calc.line_metadata.len() {
             return;
         }
         self.calc.line_metadata[line_idx] = crate::editor_core::calc_plan::line_metadata_with_mask(
-            &self.editor.lines[line_idx],
+            &self.editor.lines()[line_idx],
             self.calc_feature_mask(),
         );
     }
@@ -329,7 +329,7 @@ impl TerminalApp {
         old_line_span: usize,
         new_line_span: usize,
     ) {
-        if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
+        if self.calc.line_metadata.is_empty() && self.editor.lines().is_empty() {
             return;
         }
         if self.calc.line_metadata.is_empty() && self.calc_runtime.viewport_only {
@@ -359,7 +359,7 @@ impl TerminalApp {
         let mask = self.calc_feature_mask();
         let spliced = crate::editor_core::calc_plan::splice_line_metadata(
             &mut self.calc.line_metadata,
-            &self.editor.lines,
+            self.editor.lines(),
             start_line,
             old_line_span,
             new_line_span,
@@ -433,7 +433,7 @@ impl TerminalApp {
     }
     pub(super) fn should_defer_calc_recompute(&self) -> bool {
         crate::editor_core::calc_plan::should_defer_after_edit(
-            self.editor.lines.len(),
+            self.editor.lines().len(),
             self.calc_signal_flags(),
             LARGE_DOC_CALC_DEFER_LINES,
         )
@@ -453,9 +453,9 @@ impl TerminalApp {
     /// re-evaluates only the viewport, and only when the changed lines take
     /// part in calc. The whole note is never evaluated on the keystroke.
     fn refresh_viewport_calc_after_edit(&mut self) {
-        let next_len = self.editor.lines.len();
+        let next_len = self.editor.lines().len();
         let splices = std::mem::take(&mut self.calc.pending_result_splices);
-        let new_hashes = crate::editor_core::calc_plan::hash_lines(&self.editor.lines);
+        let new_hashes = crate::editor_core::calc_plan::hash_lines(self.editor.lines());
         let mut needs_eval = true;
         if !splices.is_empty() && self.calc.cell_results.len() == self.calc.results.len() {
             // The edit already spliced the metadata; replay it on the results.
@@ -474,7 +474,7 @@ impl TerminalApp {
                     .splice(old_range, vec![Vec::new(); splice.new_span]);
                 let new_lines = self
                     .editor
-                    .lines
+                    .lines()
                     .get(splice.start..splice.start + splice.new_span)
                     .unwrap_or(&[]);
                 needs_eval |= splice.removed_affects_calc || self.lines_affect_calc(new_lines);
@@ -491,7 +491,7 @@ impl TerminalApp {
                         .iter()
                         .any(|meta| meta.has_assignment || meta.has_builtin_formula);
                     needs_eval = removed_mattered
-                        || self.lines_affect_calc(&self.editor.lines[from..new_to]);
+                        || self.lines_affect_calc(&self.editor.lines()[from..new_to]);
                     let span = new_to - from;
                     self.calc.results.splice(from..old_to, vec![None; span]);
                     self.calc
@@ -515,7 +515,7 @@ impl TerminalApp {
                 if self.calc.line_metadata[idx].hash != *hash {
                     self.calc.line_metadata[idx] =
                         crate::editor_core::calc_plan::line_metadata_with_mask(
-                            &self.editor.lines[idx],
+                            &self.editor.lines()[idx],
                             mask,
                         );
                 }
@@ -523,7 +523,7 @@ impl TerminalApp {
         } else {
             crate::editor_core::calc_plan::sync_line_metadata(
                 &mut self.calc.line_metadata,
-                &self.editor.lines,
+                self.editor.lines(),
                 mask,
             );
         }
@@ -552,7 +552,7 @@ impl TerminalApp {
         self.ensure_calc_line_metadata();
 
         let prev_len = self.calc.results.len();
-        let next_len = self.editor.lines.len();
+        let next_len = self.editor.lines().len();
         if prev_len == 0
             || self.calc.cell_results.len() != prev_len
             || self.calc.prev_line_metadata.len() != prev_len
@@ -564,7 +564,7 @@ impl TerminalApp {
         let Some(plan) = crate::editor_core::calc_plan::plan_result_remap(
             &self.calc.prev_line_metadata,
             &self.calc.line_metadata,
-            &self.editor.lines,
+            self.editor.lines(),
             self.calc_feature_mask(),
         ) else {
             return false;
@@ -606,7 +606,7 @@ impl TerminalApp {
     /// such as the calc modules or the exchange rates.
     pub(super) fn recompute_calc_whole_note(&mut self) {
         self.calc_runtime.viewport_only = self.note_math_module_enabled()
-            && self.editor.lines.len() >= super::CALC_VIEWPORT_ONLY_MIN_LINES
+            && self.editor.lines().len() >= super::CALC_VIEWPORT_ONLY_MIN_LINES
             && self.active_has_variable_assignments()
             && !self.calc.cached_has_builtin_formula;
         if self.note_math_module_enabled() {
@@ -624,8 +624,8 @@ impl TerminalApp {
     }
 
     pub(super) fn clear_calc_cache(&mut self) {
-        self.calc.results = vec![None; self.editor.lines.len()];
-        self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
+        self.calc.results = vec![None; self.editor.lines().len()];
+        self.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
         self.calc.variable_names.clear();
         self.calc.calc_dependency_index = None;
         self.calc.line_metadata.clear();
@@ -645,13 +645,13 @@ impl TerminalApp {
         // state on every keystroke.
         // Clear the full cache so same-line-count multi-line edits cannot
         // leave stale calc ghosts on non-cursor lines.
-        if self.calc.results.len() != self.editor.lines.len() {
-            self.calc.results = vec![None; self.editor.lines.len()];
+        if self.calc.results.len() != self.editor.lines().len() {
+            self.calc.results = vec![None; self.editor.lines().len()];
         } else {
             self.calc.results.fill(None);
         }
-        if self.calc.cell_results.len() != self.editor.lines.len() {
-            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
+        if self.calc.cell_results.len() != self.editor.lines().len() {
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
         } else {
             for row in &mut self.calc.cell_results {
                 row.clear();
@@ -670,7 +670,7 @@ impl TerminalApp {
             view_line_count: self.folds.real_to_visible.len(),
         };
         let plan = crate::editor_core::folding::upkeep::plan_fold_upkeep_with_delta(
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor_line,
             delta,
             &mut self.folds.line_has_structure,
@@ -683,21 +683,21 @@ impl TerminalApp {
                 if !self.folds.ranges.is_empty() {
                     self.folds.ranges.clear();
                 }
-                if self.folds.range_by_start.len() != self.editor.lines.len() {
-                    self.folds.range_by_start = vec![None; self.editor.lines.len()];
+                if self.folds.range_by_start.len() != self.editor.lines().len() {
+                    self.folds.range_by_start = vec![None; self.editor.lines().len()];
                 }
                 if !self.folds.collapsed_starts.is_empty() {
                     self.folds.collapsed_starts.clear();
                 }
-                if self.folds.visible_to_real.len() != self.editor.lines.len()
-                    || self.folds.real_to_visible.len() != self.editor.lines.len()
-                    || self.folds.hidden_owner.len() != self.editor.lines.len()
-                    || self.folds.placeholder_hidden_lines.len() != self.editor.lines.len()
+                if self.folds.visible_to_real.len() != self.editor.lines().len()
+                    || self.folds.real_to_visible.len() != self.editor.lines().len()
+                    || self.folds.hidden_owner.len() != self.editor.lines().len()
+                    || self.folds.placeholder_hidden_lines.len() != self.editor.lines().len()
                 {
                     self.rebuild_fold_view_map();
                 }
-                if self.folds.line_has_structure.len() != self.editor.lines.len() {
-                    self.folds.line_has_structure = vec![false; self.editor.lines.len()];
+                if self.folds.line_has_structure.len() != self.editor.lines().len() {
+                    self.folds.line_has_structure = vec![false; self.editor.lines().len()];
                 }
                 self.folds.line_text_snapshot.clear();
                 self.folds.rescan_pending = false;
@@ -706,7 +706,7 @@ impl TerminalApp {
             FoldUpkeep::PendingVisible { reset_map } | FoldUpkeep::Defer { reset_map } => {
                 if reset_map {
                     self.folds.ranges.clear();
-                    self.folds.range_by_start = vec![None; self.editor.lines.len()];
+                    self.folds.range_by_start = vec![None; self.editor.lines().len()];
                     self.rebuild_fold_view_map();
                 }
                 self.folds.rescan_pending = true;
@@ -732,24 +732,24 @@ impl TerminalApp {
     pub(super) fn recompute_folding(&mut self) {
         self.folds.line_has_structure = self
             .editor
-            .lines
+            .lines()
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
             .collect();
-        self.folds.line_text_snapshot = self.editor.lines.clone();
+        self.folds.line_text_snapshot = self.editor.lines().to_vec();
         self.recompute_folding_from_cached_structure();
     }
 
     pub(super) fn recompute_folding_from_cached_structure(&mut self) {
         self.folds.rescan_pending = false;
-        let ranges = folding::build_fold_ranges(&self.editor.lines);
+        let ranges = folding::build_fold_ranges(self.editor.lines());
         self.apply_fold_ranges(ranges);
         self.folds.analysis_ready = true;
     }
 
     fn apply_fold_ranges(&mut self, ranges: Vec<crate::editor_core::folding::FoldRange>) {
         self.folds.ranges = ranges;
-        self.folds.range_by_start = vec![None; self.editor.lines.len()];
+        self.folds.range_by_start = vec![None; self.editor.lines().len()];
         for range in &self.folds.ranges {
             if range.start_line < self.folds.range_by_start.len() {
                 self.folds.range_by_start[range.start_line] = Some(*range);
@@ -765,7 +765,7 @@ impl TerminalApp {
     }
 
     pub(super) fn rebuild_fold_view_map(&mut self) {
-        let line_count = self.editor.lines.len();
+        let line_count = self.editor.lines().len();
         self.folds.visible_to_real.clear();
         self.folds.visible_to_real.reserve(line_count);
         self.folds.real_to_visible = vec![0; line_count];
@@ -850,7 +850,7 @@ impl TerminalApp {
         if target_line == 0 {
             return FenceState::default();
         }
-        let target = target_line.min(self.editor.lines.len());
+        let target = target_line.min(self.editor.lines().len());
         let target_ck = target / FENCE_CHECKPOINT_INTERVAL;
         let start_ck = target_ck.min(self.render_state.fence_checkpoints_valid_through);
         let start_line = start_ck * FENCE_CHECKPOINT_INTERVAL;
@@ -880,7 +880,7 @@ impl TerminalApp {
                     self.render_state.fence_checkpoints_valid_through = ck;
                 }
             }
-            if let Some(line_text) = self.editor.lines.get(line_idx) {
+            if let Some(line_text) = self.editor.lines().get(line_idx) {
                 advance_fence_state(&mut state, line_text);
             }
             line_idx += 1;
@@ -956,7 +956,7 @@ impl TerminalApp {
         let line = self
             .editor
             .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
+            .min(self.editor.lines().len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
             self.status = "fold: no foldable block at cursor".to_string();
             return false;
@@ -977,7 +977,7 @@ impl TerminalApp {
         let line = self
             .editor
             .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
+            .min(self.editor.lines().len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
             self.status = "fold: no foldable block at cursor".to_string();
             return false;
@@ -1052,17 +1052,17 @@ impl TerminalApp {
         if changed_from_line == 0 {
             self.switcher.needs_title_refresh = true;
         }
-        let clamped_changed_line = if self.editor.lines.is_empty() {
+        let clamped_changed_line = if self.editor.lines().is_empty() {
             0
         } else {
-            changed_from_line.min(self.editor.lines.len().saturating_sub(1))
+            changed_from_line.min(self.editor.lines().len().saturating_sub(1))
         };
         self.invalidate_fence_checkpoints_from_line(clamped_changed_line);
         self.update_calc_flags_incremental();
         self.recompute_folding_if_needed(delta);
         use crate::editor_core::calc_plan::{AfterEditFlags, CalcAfterEdit};
         let plan = crate::editor_core::calc_plan::plan_after_edit(AfterEditFlags {
-            line_count: self.editor.lines.len(),
+            line_count: self.editor.lines().len(),
             previous_line_count: self.calc.results.len(),
             signals: self.calc_signal_flags(),
             stale: self.calc.stale,
@@ -1175,7 +1175,7 @@ impl TerminalApp {
         let changed_line = self
             .editor
             .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
+            .min(self.editor.lines().len().saturating_sub(1));
         self.mark_edited_with_delta(EditDelta {
             start_line: changed_line,
             old_span: 1,
@@ -1227,7 +1227,7 @@ impl TerminalApp {
             }
             self.adjust_scroll();
             self.session.history.checkpoint(
-                &self.editor.lines,
+                self.editor.lines(),
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
@@ -1265,7 +1265,7 @@ impl TerminalApp {
             }
             self.adjust_scroll();
             self.session.history.checkpoint(
-                &self.editor.lines,
+                self.editor.lines(),
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             );
@@ -1323,11 +1323,11 @@ impl TerminalApp {
             return;
         }
         self.ensure_calc_line_metadata();
-        if !self.editor.lines.is_empty() {
+        if !self.editor.lines().is_empty() {
             let cursor_line = self
                 .editor
                 .cursor_line
-                .min(self.editor.lines.len().saturating_sub(1));
+                .min(self.editor.lines().len().saturating_sub(1));
             self.refresh_calc_line_metadata_at(cursor_line);
         }
         let calc_variables_enabled = self.calc_variables_enabled();
@@ -1345,7 +1345,7 @@ impl TerminalApp {
             let note_id = self.active_note.id.clone();
             let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
-                &self.editor.lines,
+                self.editor.lines(),
                 calc_variables_enabled,
                 calc_cross_note_enabled,
                 calc_table_enabled,
@@ -1355,7 +1355,7 @@ impl TerminalApp {
             let calc_mask = self.calc_feature_mask();
             self.calc.calc_dependency_index =
                 crate::editor_core::calc_plan::build_calc_dependency_index(
-                    &self.editor.lines,
+                    self.editor.lines(),
                     calc_mask,
                 );
             self.calc.prev_line_metadata = self.calc.line_metadata.clone();
@@ -1385,7 +1385,7 @@ impl TerminalApp {
         // Update deps from a live scan so refs added since the last full eval are picked up.
         let incremental_extern_vars: Vec<ExternVar> = if calc_cross_note_enabled {
             let note_id = self.active_note.id.clone();
-            let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
+            let refs = app_core::calc::scan_cross_note_refs(self.editor.lines());
             if let Ok(mut index) = self.cross_note_var_index.lock() {
                 index.update_deps(&note_id, &refs);
                 index.extern_vars_for(&note_id)
@@ -1399,7 +1399,7 @@ impl TerminalApp {
         let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_line_metadata(
             &self.calc.prev_line_metadata,
             &self.calc.results,
-            &self.editor.lines,
+            self.editor.lines(),
             &self.calc.line_metadata,
         );
         let has_prev = !self.calc.prev_line_metadata.is_empty();
@@ -1408,7 +1408,7 @@ impl TerminalApp {
         // formulas (not all lines). Partial eval is safe as long as the edit
         // doesn't touch a formula/assignment — whole-doc presence of formulas
         // elsewhere doesn't force recomputation of unchanged lines.
-        let suffix_len = self.editor.lines.len().saturating_sub(plan.eval_to);
+        let suffix_len = self.editor.lines().len().saturating_sub(plan.eval_to);
         let prev_changed_from = plan.eval_from.min(self.calc.prev_line_metadata.len());
         let prev_changed_to = self
             .calc
@@ -1438,14 +1438,14 @@ impl TerminalApp {
         );
         crate::editor_core::calc_plan::sync_calc_dependency_index(
             &mut self.calc.calc_dependency_index,
-            &self.editor.lines,
+            self.editor.lines(),
             plan.eval_from,
             plan.eval_to,
             calc_mask,
         );
         let eval_window = crate::editor_core::calc_plan::decide_eval_window(
             &crate::editor_core::calc_plan::DecideEvalWindowParams {
-                lines: &self.editor.lines,
+                lines: self.editor.lines(),
                 changed_from: plan.eval_from,
                 changed_to: plan.eval_to,
                 has_prev,
@@ -1462,7 +1462,7 @@ impl TerminalApp {
         let mut eval_from = eval_window.eval_from;
         let mut eval_to = eval_window.eval_to;
 
-        let line_count = self.editor.lines.len();
+        let line_count = self.editor.lines().len();
         let eval_span = eval_to.saturating_sub(eval_from);
         let is_pathological_window = can_use_partial
             && line_count >= CALC_PATHOLOGICAL_WINDOW_MIN_LINES
@@ -1494,8 +1494,8 @@ impl TerminalApp {
         let prev_results = std::mem::take(&mut self.calc.results);
         let prev_results_snapshot = prev_results.clone();
         let mut prev_cell_results = std::mem::take(&mut self.calc.cell_results);
-        let same_shape_cache = prev_results.len() == self.editor.lines.len()
-            && prev_cell_results.len() == self.editor.lines.len();
+        let same_shape_cache = prev_results.len() == self.editor.lines().len()
+            && prev_cell_results.len() == self.editor.lines().len();
 
         // An in-place edit of table rows evaluates just the formula lines it
         // reaches; the table's other formula cells keep their last values.
@@ -1534,7 +1534,7 @@ impl TerminalApp {
                 .collect();
             let calc_data = compute_calc_data_for_lines(
                 &self.calc.engine,
-                &self.editor.lines,
+                self.editor.lines(),
                 app_core::calc::NoteEvaluationOptions {
                     variables_enabled: calc_variables_enabled,
                     cross_note_enabled: calc_cross_note_enabled,
@@ -1560,7 +1560,7 @@ impl TerminalApp {
             if eval_from < eval_to {
                 let calc_data = compute_calc_data(
                     &self.calc.engine,
-                    &self.editor.lines,
+                    self.editor.lines(),
                     calc_variables_enabled,
                     calc_cross_note_enabled,
                     calc_table_enabled,
@@ -1578,7 +1578,7 @@ impl TerminalApp {
             }
             (merged_results, merged_cells)
         } else if can_use_partial {
-            let mut merged_results = vec![None; self.editor.lines.len()];
+            let mut merged_results = vec![None; self.editor.lines().len()];
             for entry in &plan.base_results {
                 if let Some(slot) = merged_results.get_mut(entry.line_idx) {
                     *slot = Some(entry.result.clone());
@@ -1586,7 +1586,7 @@ impl TerminalApp {
             }
             // Lines before the change keep their index; lines after it moved
             // by the change in line count.
-            let line_count = self.editor.lines.len();
+            let line_count = self.editor.lines().len();
             let mut merged_cells: Vec<Vec<app_core::calc::TableCellEvaluation>> =
                 vec![Vec::new(); line_count];
             let suffix_len = line_count.saturating_sub(plan.eval_to);
@@ -1610,7 +1610,7 @@ impl TerminalApp {
             if eval_from < eval_to {
                 let calc_data = compute_calc_data(
                     &self.calc.engine,
-                    &self.editor.lines,
+                    self.editor.lines(),
                     calc_variables_enabled,
                     calc_cross_note_enabled,
                     calc_table_enabled,
@@ -1631,7 +1631,7 @@ impl TerminalApp {
             let note_id = self.active_note.id.clone();
             let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
-                &self.editor.lines,
+                self.editor.lines(),
                 calc_variables_enabled,
                 calc_cross_note_enabled,
                 calc_table_enabled,
@@ -1661,8 +1661,8 @@ impl TerminalApp {
         // delete) invalidate per-index alignment; we skip the pass and
         // reseed the snapshot below, so eligibility returns on the next
         // recompute once the user resumes normal in-line editing.
-        let aligned = self.calc.prev_line_metadata.len() == self.editor.lines.len()
-            && prev_results_snapshot.len() == self.editor.lines.len();
+        let aligned = self.calc.prev_line_metadata.len() == self.editor.lines().len()
+            && prev_results_snapshot.len() == self.editor.lines().len();
         let mut trailer_rewritten_lines: Vec<usize> = Vec::new();
 
         if aligned {
@@ -1681,7 +1681,7 @@ impl TerminalApp {
                 None
             };
 
-            for i in 0..self.editor.lines.len() {
+            for i in 0..self.editor.lines().len() {
                 let Some(new_result) = new_results[i].as_deref() else {
                     continue;
                 };
@@ -1699,7 +1699,7 @@ impl TerminalApp {
                     continue;
                 }
                 let refresh = compute_calc_trailer_refresh(
-                    &self.editor.lines[i],
+                    &self.editor.lines()[i],
                     new_result,
                     cursor_line == i,
                     cursor_col,
@@ -1707,8 +1707,8 @@ impl TerminalApp {
                 if let Some((eq_idx, new_tail)) = refresh {
                     // Keep this rewrite inside the originating calc/edit transaction.
                     // Calling mark_edited here would recursively start calc.
-                    let from_col = char_col_at_byte(&self.editor.lines[i], eq_idx);
-                    let to_col = line_char_len(&self.editor.lines[i]);
+                    let from_col = char_col_at_byte(&self.editor.lines()[i], eq_idx);
+                    let to_col = line_char_len(&self.editor.lines()[i]);
                     let ctx = self.session_edit_context();
                     self.session.apply(
                         &mut self.editor,
@@ -1730,7 +1730,7 @@ impl TerminalApp {
                     // snapshot stays in sync for the next recompute.
                     self.calc.line_metadata[i] =
                         crate::editor_core::calc_plan::line_metadata_with_mask(
-                            &self.editor.lines[i],
+                            &self.editor.lines()[i],
                             self.calc_feature_mask(),
                         );
                     trailer_rewritten_lines.push(i);
@@ -1802,7 +1802,7 @@ impl TerminalApp {
             self.calc_runtime.pending_full_pass = false;
             return;
         }
-        if self.editor.lines.len() >= CALC_ASYNC_MIN_LINES {
+        if self.editor.lines().len() >= CALC_ASYNC_MIN_LINES {
             let budget = Duration::from_millis(CALC_IDLE_EVAL_BUDGET_MS);
             let tick_started = Instant::now();
             if self.calc_runtime.pending_viewport_pass {
@@ -1829,12 +1829,12 @@ impl TerminalApp {
         let after = if forward {
             let neighbors = (current_virtual + 1..self.visible_line_count())
                 .map_while(|line| self.real_line_for_virtual(line));
-            words::move_cursor_right_word(&self.editor.lines, cursor, tables, neighbors)
+            words::move_cursor_right_word(self.editor.lines(), cursor, tables, neighbors)
         } else {
             let neighbors = (0..current_virtual)
                 .rev()
                 .map_while(|line| self.real_line_for_virtual(line));
-            words::move_cursor_left_word(&self.editor.lines, cursor, tables, neighbors)
+            words::move_cursor_left_word(self.editor.lines(), cursor, tables, neighbors)
         };
         self.editor.set_cursor(after);
     }
@@ -2330,7 +2330,7 @@ impl TerminalApp {
                 char_col_at_byte(&text, from_byte)..char_col_at_byte(&text, to_byte),
                 &result,
             );
-            self.editor.cursor_col = self.editor.lines[self.editor.cursor_line]
+            self.editor.cursor_col = self.editor.lines()[self.editor.cursor_line]
                 [..from_byte.saturating_add(result.len())]
                 .chars()
                 .count();
@@ -2356,7 +2356,7 @@ impl TerminalApp {
                     char_col_at_byte(&text, seg.from_byte)..char_col_at_byte(&text, seg.to_byte),
                     &result,
                 );
-                self.editor.cursor_col = self.editor.lines[self.editor.cursor_line]
+                self.editor.cursor_col = self.editor.lines()[self.editor.cursor_line]
                     [..seg.from_byte.saturating_add(result.len())]
                     .chars()
                     .count();
@@ -2385,13 +2385,13 @@ impl TerminalApp {
     }
 
     pub(super) fn scoped_rule_line_span(&self, center_line: usize) -> (usize, usize) {
-        if self.editor.lines.is_empty() {
+        if self.editor.lines().is_empty() {
             return (0, 0);
         }
-        let center = center_line.min(self.editor.lines.len().saturating_sub(1));
+        let center = center_line.min(self.editor.lines().len().saturating_sub(1));
         if self.note_table_module_enabled() {
             if let Some(bounds) =
-                crate::editor_core::table::table_block_bounds(&self.editor.lines, center)
+                crate::editor_core::table::table_block_bounds(self.editor.lines(), center)
             {
                 return bounds;
             }
@@ -2401,7 +2401,7 @@ impl TerminalApp {
             center.saturating_sub(window),
             center
                 .saturating_add(window)
-                .min(self.editor.lines.len().saturating_sub(1)),
+                .min(self.editor.lines().len().saturating_sub(1)),
         )
     }
 
@@ -2658,10 +2658,10 @@ impl TerminalApp {
     }
 
     fn prune_empty_table_continuation_row_at_cursor(&mut self) -> bool {
-        if !self.note_table_module_enabled() || self.editor.lines.is_empty() {
+        if !self.note_table_module_enabled() || self.editor.lines().is_empty() {
             return false;
         }
-        if self.editor.cursor_line >= self.editor.lines.len() {
+        if self.editor.cursor_line >= self.editor.lines().len() {
             return false;
         }
         if !crate::editor_core::table::is_empty_table_continuation_row(self.current_line()) {
@@ -2683,11 +2683,11 @@ impl TerminalApp {
         } else {
             self.editor.cursor_line = remove_line
                 .saturating_sub(1)
-                .min(self.editor.lines.len() - 1);
+                .min(self.editor.lines().len() - 1);
             self.editor.cursor_col = previous_col.min(line_char_len(self.current_line()));
             if self.note_table_module_enabled() {
                 if let Some(cell) = table_cell_info_at_char(
-                    &self.editor.lines,
+                    self.editor.lines(),
                     self.editor.cursor_line,
                     self.editor.cursor_col,
                 ) {
@@ -2769,12 +2769,12 @@ impl TerminalApp {
             return false;
         }
         let Some((block_start, block_end)) = crate::editor_core::table::table_block_bounds(
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor_line,
         ) else {
             return false;
         };
-        let block_lines = &self.editor.lines[block_start..=block_end];
+        let block_lines = &self.editor.lines()[block_start..=block_end];
         let Some(target) = crate::editor_core::table::plan_table_cursor_motion(
             block_lines,
             self.editor.cursor_line.saturating_sub(block_start),
@@ -2876,7 +2876,7 @@ impl TerminalApp {
             .checked_sub(1)
             .and_then(|idx| self.real_line_for_virtual(idx));
         let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor(),
             false,
             neighbour,
@@ -2910,7 +2910,7 @@ impl TerminalApp {
         let current_virtual = self.current_virtual_line();
         let neighbour = self.real_line_for_virtual(current_virtual + 1);
         let cursor = crate::editor_core::vim_actions::buffer::horizontal_motion(
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor(),
             true,
             neighbour,
@@ -2934,7 +2934,7 @@ impl TerminalApp {
         let line_idx = self.editor.cursor_line;
         let display =
             self.prepare_display_line(line_idx, crate::terminal::notifications::now_epoch_ms());
-        if display.text != self.editor.lines[line_idx] {
+        if display.text != self.editor.lines()[line_idx] {
             return None;
         }
         let (_, cols) = input::terminal_size();
@@ -3031,19 +3031,19 @@ impl TerminalApp {
         );
         self.editor.cursor_line = self
             .real_line_for_virtual(target_virtual)
-            .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1));
+            .unwrap_or_else(|| self.editor.lines().len().saturating_sub(1));
         self.clamp_cursor_to_line_bounds();
     }
 
     fn adjust_cursor_line_and_col_bounds(&mut self) {
-        if self.editor.lines.is_empty() {
+        if self.editor.lines().is_empty() {
             self.apply_session_edit(note_session::SessionEdit::EnsureBuffer);
         }
-        if self.editor.cursor_line >= self.editor.lines.len() {
-            self.editor.cursor_line = self.editor.lines.len() - 1;
+        if self.editor.cursor_line >= self.editor.lines().len() {
+            self.editor.cursor_line = self.editor.lines().len() - 1;
         }
         if let Some(owner) = self.fold_hidden_owner_for_line(self.editor.cursor_line) {
-            self.editor.cursor_line = owner.min(self.editor.lines.len().saturating_sub(1));
+            self.editor.cursor_line = owner.min(self.editor.lines().len().saturating_sub(1));
         }
         let len = line_char_len(self.current_line());
         if self.editor.cursor_col > len {
@@ -3062,7 +3062,7 @@ impl TerminalApp {
         let table_anchor = if self.note_table_module_enabled() {
             let line_text = self.current_line();
             if let Some(cell) = table_cell_info_at_char(
-                &self.editor.lines,
+                self.editor.lines(),
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             ) {
@@ -3177,7 +3177,7 @@ impl TerminalApp {
         &self,
         editor_height: usize,
     ) -> Option<(usize, usize)> {
-        if self.editor.lines.is_empty() || editor_height == 0 {
+        if self.editor.lines().is_empty() || editor_height == 0 {
             return None;
         }
         let visible_count = self.visible_line_count();
@@ -3195,10 +3195,10 @@ impl TerminalApp {
         let start_line = self.real_line_for_virtual(start_virtual).unwrap_or(0);
         let end_line_inclusive = self
             .real_line_for_virtual(end_virtual)
-            .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1));
+            .unwrap_or_else(|| self.editor.lines().len().saturating_sub(1));
         let end_line_exclusive = end_line_inclusive
             .saturating_add(1)
-            .min(self.editor.lines.len());
+            .min(self.editor.lines().len());
         if start_line >= end_line_exclusive {
             None
         } else {
@@ -3210,7 +3210,7 @@ impl TerminalApp {
     /// are in the index. Guarded by `was_full_eval_attempted` so it's O(1)
     /// after the first call per dep per session.
     fn preload_cross_note_deps(&self) {
-        let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
+        let refs = app_core::calc::scan_cross_note_refs(self.editor.lines());
         self.preload_cross_note_deps_for_refs(&refs);
     }
 
@@ -3278,7 +3278,7 @@ impl TerminalApp {
             self.clear_calc_cache();
             return;
         }
-        if eval_from >= eval_to || eval_to > self.editor.lines.len() {
+        if eval_from >= eval_to || eval_to > self.editor.lines().len() {
             return;
         }
         // The dependency index only supplies variable names here; syncing it
@@ -3295,19 +3295,20 @@ impl TerminalApp {
                 // Unchanged text: the last scan still holds.
                 Some(scan) if self.calc.cross_note_refs_generation == Some(generation) => scan,
                 Some((scanned, refs)) => {
-                    let line_hashes = crate::editor_core::calc_plan::hash_lines(&self.editor.lines);
+                    let line_hashes =
+                        crate::editor_core::calc_plan::hash_lines(self.editor.lines());
                     let refs = match crate::editor_core::calc_plan::changed_line_span(
                         &scanned,
                         &line_hashes,
                     ) {
                         None => refs,
-                        Some(span) => splice_cross_note_refs(refs, &self.editor.lines, span),
+                        Some(span) => splice_cross_note_refs(refs, self.editor.lines(), span),
                     };
                     (line_hashes, refs)
                 }
                 None => (
-                    crate::editor_core::calc_plan::hash_lines(&self.editor.lines),
-                    app_core::calc::scan_cross_note_refs(&self.editor.lines),
+                    crate::editor_core::calc_plan::hash_lines(self.editor.lines()),
+                    app_core::calc::scan_cross_note_refs(self.editor.lines()),
                 ),
             };
             self.preload_cross_note_deps_for_refs(&refs);
@@ -3325,7 +3326,7 @@ impl TerminalApp {
         };
         let calc_data = compute_calc_data_cached(
             &self.calc.engine,
-            &self.editor.lines,
+            self.editor.lines(),
             vars_enabled,
             cross_note_enabled,
             self.note_table_module_enabled(),
@@ -3337,11 +3338,11 @@ impl TerminalApp {
             // that, the first evaluation's names do until the idle tick.
             self.calc.calc_dependency_index.is_some() || !self.calc.variable_names.is_empty(),
         );
-        if self.calc.results.len() != self.editor.lines.len() {
-            self.calc.results = vec![None; self.editor.lines.len()];
+        if self.calc.results.len() != self.editor.lines().len() {
+            self.calc.results = vec![None; self.editor.lines().len()];
         }
-        if self.calc.cell_results.len() != self.editor.lines.len() {
-            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
+        if self.calc.cell_results.len() != self.editor.lines().len() {
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines().len()];
         }
         for line_idx in eval_from..eval_to {
             if let Some(slot) = self.calc.results.get_mut(line_idx) {
@@ -3364,11 +3365,11 @@ impl TerminalApp {
     pub(super) fn start_viewport_calc_preparation(&mut self) -> bool {
         if !self.calc_runtime.viewport_only
             || !self.note_math_module_enabled()
-            || self.editor.lines.len() < super::CALC_BACKGROUND_PREPARE_MIN_LINES
+            || self.editor.lines().len() < super::CALC_BACKGROUND_PREPARE_MIN_LINES
         {
             return false;
         }
-        let lines = self.editor.lines.clone();
+        let lines = self.editor.lines().to_vec();
         let note_id = self.active_note.id.clone();
         let variables_enabled = self.calc_variables_enabled();
         let cross_note_enabled = self.calc_cross_note_enabled();
@@ -3479,7 +3480,7 @@ impl TerminalApp {
         {
             // The first build reads every line; do it off the input thread
             // and catch up with any edits made meanwhile when it lands.
-            let lines = self.editor.lines.clone();
+            let lines = self.editor.lines().to_vec();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let index =
@@ -3492,19 +3493,19 @@ impl TerminalApp {
             return;
         }
         self.calc_runtime.index_sync_pending = false;
-        if self.calc_runtime.viewport_only && self.calc.results.len() == self.editor.lines.len() {
+        if self.calc_runtime.viewport_only && self.calc.results.len() == self.editor.lines().len() {
             // Lets later structural edits shift results instead of clearing them.
             crate::editor_core::calc_plan::sync_line_metadata(
                 &mut self.calc.line_metadata,
-                &self.editor.lines,
+                self.editor.lines(),
                 mask,
             );
         }
         crate::editor_core::calc_plan::sync_calc_dependency_index(
             &mut self.calc.calc_dependency_index,
-            &self.editor.lines,
+            self.editor.lines(),
             0,
-            self.editor.lines.len(),
+            self.editor.lines().len(),
             mask,
         );
         let Some(revision) = self
@@ -3554,10 +3555,10 @@ impl TerminalApp {
             let mask = self.calc_feature_mask();
             crate::editor_core::calc_plan::sync_line_metadata(
                 &mut self.calc.line_metadata,
-                &self.editor.lines,
+                self.editor.lines(),
                 mask,
             );
-            for (idx, line) in self.editor.lines.iter().enumerate() {
+            for (idx, line) in self.editor.lines().iter().enumerate() {
                 let hash = crate::editor_core::calc_plan::hash_line(line);
                 if self.calc.line_metadata[idx].hash != hash {
                     self.calc.line_metadata[idx] =
@@ -3640,11 +3641,11 @@ impl TerminalApp {
             return;
         };
         let line_idx = self.wiki_link_autocomplete_popup.cursor_line;
-        if line_idx >= self.editor.lines.len() {
+        if line_idx >= self.editor.lines().len() {
             return;
         }
         let from_col = self.wiki_link_autocomplete_popup.from_col;
-        let line = self.editor.lines[line_idx].clone();
+        let line = self.editor.lines()[line_idx].clone();
         let chars: Vec<char> = line.chars().collect();
         let hash_col = from_col + 2 + note_id.chars().count();
         if hash_col >= chars.len() || chars[hash_col] != '#' {
@@ -4015,7 +4016,7 @@ impl TerminalApp {
     pub(super) fn go_to_variable_definition_at_cursor(&mut self) {
         let target = if self.note_math_module_enabled() {
             crate::editor_core::calc_plan::variable_definition_at(
-                &self.editor.lines,
+                self.editor.lines(),
                 self.calc.calc_dependency_index.as_ref(),
                 self.editor.cursor_line,
                 self.editor.cursor_col,
@@ -4052,7 +4053,7 @@ impl TerminalApp {
             // Reloading would replace unsaved edits and undo history with
             // the stored body; the definition is in the open text.
             let target = crate::editor_core::calc_plan::variable_definition_named(
-                &self.editor.lines,
+                self.editor.lines(),
                 &reference.name,
                 self.calc_feature_mask(),
             );
@@ -4093,7 +4094,7 @@ impl TerminalApp {
             return true;
         }
         let target = crate::editor_core::calc_plan::variable_definition_named(
-            &self.editor.lines,
+            self.editor.lines(),
             &reference.name,
             self.calc_feature_mask(),
         );
@@ -4155,7 +4156,7 @@ impl TerminalApp {
         if needle.is_empty() {
             return;
         }
-        for (idx, line) in self.editor.lines.iter().enumerate() {
+        for (idx, line) in self.editor.lines().iter().enumerate() {
             let trimmed = line.trim_start();
             if !trimmed.starts_with('#') {
                 continue;

@@ -163,7 +163,7 @@ fn rename_pins_titles_without_touching_the_text() {
     app.handle_key(&db, Key::Ctrl('u')).expect("clear");
     type_text(&mut app, &db, "Budget 2027");
     app.handle_key(&db, Key::Enter).expect("submit");
-    assert_eq!(app.editor.lines[0], "# Budget");
+    assert_eq!(app.editor.lines()[0], "# Budget");
     assert!(!app.session.dirty);
     assert_eq!(app.active_note.pinned_title.as_deref(), Some("Budget 2027"));
     assert!(app
@@ -251,12 +251,15 @@ fn filter_delete_and_minus_key() {
     assert_eq!(app.mode, UiMode::Normal);
 
     // `-` opens the browser, but `dt-` still deletes up to a dash.
-    app.editor.lines = vec!["a-b".to_string()];
+    {
+        let replacement: Vec<String> = vec!["a-b".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.editor.cursor_line = 0;
     app.editor.cursor_col = 0;
     type_text(&mut app, &db, "dt-");
     assert_eq!(app.mode, UiMode::Normal);
-    assert_eq!(app.editor.lines[0], "-b");
+    assert_eq!(app.editor.lines()[0], "-b");
     app.handle_key(&db, Key::Char('-')).expect("-");
     assert_eq!(app.mode, UiMode::Browser);
 
@@ -482,7 +485,10 @@ fn history_lists_versions_previews_changes_and_restores_another_note() {
 fn restoring_the_open_note_edits_its_buffer_and_history_opens_from_everywhere() {
     let (db, mut app, path) = browser_app();
     app.handle_key(&db, Key::Esc).expect("close browser");
-    app.editor.lines = vec!["# Budget".into(), "rent := 1500".into()];
+    {
+        let replacement: Vec<String> = vec!["# Budget".into(), "rent := 1500".into()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.session.dirty = true;
     app.save(&db).expect("save");
 
@@ -496,7 +502,7 @@ fn restoring_the_open_note_edits_its_buffer_and_history_opens_from_everywhere() 
     app.handle_key(&db, Key::Char('G')).expect("oldest");
     app.handle_key(&db, Key::Enter).expect("restore");
     app.handle_key(&db, Key::Char('y')).expect("confirm");
-    assert_eq!(app.editor.lines, vec!["# Budget", "rent := 1200", ""]);
+    assert_eq!(app.editor.lines(), vec!["# Budget", "rent := 1200", ""]);
     assert!(db.get_note("n1").unwrap().unwrap().body.contains("1200"));
     app.handle_key(&db, Key::Char('q')).expect("close");
 

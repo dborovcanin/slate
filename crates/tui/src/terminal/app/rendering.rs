@@ -311,7 +311,7 @@ impl TerminalApp {
     fn table_formula_display_rows(&mut self, start: usize, end: usize) -> Vec<(usize, String)> {
         let mut rows = Vec::new();
         for idx in start..=end {
-            let line = &self.editor.lines[idx];
+            let line = &self.editor.lines()[idx];
             // Every formula has `:=` or a builtin call; skip the rest cheaply.
             if !line.contains(":=") && !line.contains('(') {
                 continue;
@@ -365,13 +365,13 @@ impl TerminalApp {
                 return Some(layout.clone());
             }
         }
-        let (start, end) = table_block_bounds(&self.editor.lines, line_idx)?;
+        let (start, end) = table_block_bounds(self.editor.lines(), line_idx)?;
         let formula_rows = self.table_formula_display_rows(start, end);
         let mut formula_rows = formula_rows.iter().peekable();
         let block: Vec<&str> = (start..=end)
             .map(|idx| match formula_rows.next_if(|(row, _)| *row == idx) {
                 Some((_, text)) => text.as_str(),
-                None => self.editor.lines[idx].as_str(),
+                None => self.editor.lines()[idx].as_str(),
             })
             .collect();
         let caches = &mut self.render_caches.table_layout_cache;
@@ -388,7 +388,7 @@ impl TerminalApp {
         let cursor_line = self.editor.cursor_line;
         if layout.contains(cursor_line) && !layout.is_delimiter(cursor_line) {
             if let Some((cell, width)) =
-                cursor_cell_typing_width(&self.editor.lines[cursor_line], self.editor.cursor_col)
+                cursor_cell_typing_width(&self.editor.lines()[cursor_line], self.editor.cursor_col)
             {
                 if let Some(col_width) = layout.col_widths.get_mut(cell) {
                     *col_width = (*col_width).max(width);
@@ -472,7 +472,7 @@ impl TerminalApp {
         draw_row_at_styled(buf, TITLE_ROW, 1, cols, "", base);
         let title = match &self.active_note.pinned_title {
             Some(title) => title.clone(),
-            None => derive_title_from_lines(&self.editor.lines),
+            None => derive_title_from_lines(self.editor.lines()),
         };
         let dirty = if self.session.dirty { " •" } else { "" };
         let mut badges = Vec::new();
@@ -904,7 +904,7 @@ impl TerminalApp {
                 return stats;
             }
         }
-        let last_line = self.editor.lines.len().saturating_sub(1);
+        let last_line = self.editor.lines().len().saturating_sub(1);
         let (start, end) = if anchor <= key.cursor {
             (anchor, key.cursor)
         } else {
@@ -912,7 +912,7 @@ impl TerminalApp {
         };
         let mut stats = sum::NumberStats::default();
         for line_idx in start.0.min(last_line)..=end.0.min(last_line) {
-            let line = self.editor.lines[line_idx].as_str();
+            let line = self.editor.lines()[line_idx].as_str();
             if key.linewise {
                 stats.add_text(line);
                 continue;
@@ -994,7 +994,7 @@ impl TerminalApp {
         if start_line == end_line {
             ranges.push((start_col, end_col + 1));
         } else if line_idx == start_line {
-            let line_len = self.editor.lines[line_idx].chars().count();
+            let line_len = self.editor.lines()[line_idx].chars().count();
             ranges.push((start_col, line_len.max(start_col + 1)));
         } else if line_idx == end_line {
             ranges.push((0, end_col + 1));
@@ -1469,7 +1469,7 @@ impl TerminalApp {
 
         let first_real_line = self
             .real_line_for_virtual(self.view.scroll_line)
-            .unwrap_or(self.editor.lines.len());
+            .unwrap_or(self.editor.lines().len());
         let mut ctx = self.render_context_at(first_real_line);
         let mut last_rendered_real = first_real_line.checked_sub(1);
         let mut cursor_line_override: Option<(String, usize)> = None;
@@ -1495,7 +1495,7 @@ impl TerminalApp {
             if let Some(line_idx) = self.real_line_for_virtual(virtual_line) {
                 if let Some(prev_real) = last_rendered_real {
                     if line_idx > prev_real + 1 {
-                        ctx.advance_lines(&self.editor.lines[(prev_real + 1)..line_idx]);
+                        ctx.advance_lines(&self.editor.lines()[(prev_real + 1)..line_idx]);
                     }
                 }
                 last_rendered_real = Some(line_idx);
@@ -1870,7 +1870,7 @@ impl TerminalApp {
             };
             if let Some(prev) = last_real {
                 if line_idx > prev + 1 {
-                    ctx.advance_lines(&self.editor.lines[(prev + 1)..line_idx]);
+                    ctx.advance_lines(&self.editor.lines()[(prev + 1)..line_idx]);
                 }
             }
             last_real = Some(line_idx);
@@ -1950,7 +1950,7 @@ impl TerminalApp {
         // output char positions of (left_pipe, right_pipe) for the
         // cursor cell in the reformatted string.
         let mut table_reflow_cell_pipes: Option<(usize, usize)> = None;
-        let line_text = self.editor.lines[line_idx].clone();
+        let line_text = self.editor.lines()[line_idx].clone();
         let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
         let collapsed_hidden_count = self
             .folds
@@ -2227,7 +2227,7 @@ impl TerminalApp {
                 focused_pipe_ranges.push((lp, lp + 1));
                 focused_pipe_ranges.push((rp, rp + 1));
             } else if let Some(info) =
-                table_cell_info_at_char(&self.editor.lines, line_idx, self.editor.cursor_col)
+                table_cell_info_at_char(self.editor.lines(), line_idx, self.editor.cursor_col)
             {
                 let left_pipe_char = line_text[..info.left_pipe].chars().count();
                 let right_pipe_char = line_text[..info.right_pipe].chars().count();

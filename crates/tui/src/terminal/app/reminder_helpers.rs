@@ -41,7 +41,7 @@ impl TerminalApp {
     /// unsaved reminder changes.
     pub(super) fn load_reminders(&mut self, db: &Db) -> Result<(), String> {
         self.session.reminder_ghosts =
-            load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines)?;
+            load_note_reminder_ghosts(db, &self.active_note, self.editor.lines())?;
         self.session.pending_line_edits.clear();
         self.session.reminders_generation = self.session.reminders_generation.wrapping_add(1);
         self.session.persisted_reminders_generation = self.session.reminders_generation;
@@ -74,7 +74,7 @@ impl TerminalApp {
                 display_at: ghost.display_at.clone(),
                 line_text: self
                     .editor
-                    .lines
+                    .lines()
                     .get(*line_idx)
                     .cloned()
                     .unwrap_or_else(|| ghost.line_text.clone()),

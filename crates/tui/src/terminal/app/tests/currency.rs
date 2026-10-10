@@ -27,7 +27,10 @@ fn refreshed_rates_update_calc_results_and_failures_keep_them() {
     let dep = ulid::Ulid::new().to_string();
     db.save_note(&dep, "price := 20 EUR to USD").unwrap();
     app_core::cross_note::load_note_exports(&db, &app.calc.engine, &app.cross_note_var_index, &dep);
-    app.editor.lines = vec![format!("[[{dep}]].price * 2")];
+    {
+        let replacement: Vec<String> = vec![format!("[[{dep}]].price * 2")];
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.recompute_calc_whole_note();
     assert_eq!(app.calc.results[0].as_deref(), Some("50"));
     app.currency = CurrencyState::with_result(Ok(Fetched {

@@ -403,7 +403,7 @@ impl TerminalApp {
             Key::Char(ch) => {
                 let plan = if self.note_table_module_enabled() {
                     crate::editor_core::table::plan_table_typed_char(
-                        &self.editor.lines,
+                        self.editor.lines(),
                         self.editor.cursor_line,
                         self.editor.cursor_col,
                         ch,

@@ -107,7 +107,10 @@ fn formula_cell_stays_masked_and_updates_after_dependent_cell_edit() {
     );
 
     app.editor.cursor_line = 2;
-    let old_value_col = app.editor.lines[2].find('2').expect("numeric source value") + 1;
+    let old_value_col = app.editor.lines()[2]
+        .find('2')
+        .expect("numeric source value")
+        + 1;
     app.editor.cursor_col = old_value_col + 1;
     app.handle_editor_key(&db, Key::Backspace)
         .expect("backspace source value");
@@ -152,7 +155,7 @@ fn formula_column_width_follows_value_and_widens_when_formula_is_revealed() {
 
     // Focused: the formula shows and its column widens to fit it.
     app.editor.cursor_line = 2;
-    app.editor.cursor_col = app.editor.lines[2].find(":=").expect("formula");
+    app.editor.cursor_col = app.editor.lines()[2].find(":=").expect("formula");
     let focused = app.prepare_display_line(2, 0);
     assert_eq!(focused.text, "| 2     | :=(1,1) * 10 |");
     assert_eq!(
@@ -377,7 +380,7 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
         span_budget
     );
 
-    let last_idx = app.editor.lines.len().saturating_sub(1);
+    let last_idx = app.editor.lines().len().saturating_sub(1);
     assert_eq!(
         app.calc
             .results
@@ -420,7 +423,11 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
 
     // Same-line change in a huge note should stay on viewport-only refresh.
     let changed_idx = 60_000;
-    app.editor.lines[changed_idx] = "base + 20".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[changed_idx] = "base + 20".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.editor.cursor_line = changed_idx;
     app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
@@ -477,7 +484,11 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
 
     let changed_idx = table_start + 2;
     let formula_idx = table_start + 4;
-    app.editor.lines[changed_idx] = "| 20 |".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[changed_idx] = "| 20 |".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.editor.cursor_line = changed_idx;
     app.editor.cursor_col = line_char_len(app.current_line());
     app.mark_edited_from_line(changed_idx);
@@ -486,10 +497,10 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
     let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_line_metadata(
         &app.calc.prev_line_metadata,
         &app.calc.results,
-        &app.editor.lines,
+        app.editor.lines(),
         &app.calc.line_metadata,
     );
-    let suffix_len = app.editor.lines.len().saturating_sub(plan.eval_to);
+    let suffix_len = app.editor.lines().len().saturating_sub(plan.eval_to);
     let prev_changed_from = plan.eval_from.min(app.calc.prev_line_metadata.len());
     let prev_changed_to = app
         .calc
@@ -512,7 +523,7 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
         .any(|meta| meta.has_builtin_formula);
     let eval_window = crate::editor_core::calc_plan::decide_eval_window(
         &crate::editor_core::calc_plan::DecideEvalWindowParams {
-            lines: &app.editor.lines,
+            lines: app.editor.lines(),
             changed_from: plan.eval_from,
             changed_to: plan.eval_to,
             has_prev: !app.calc.prev_line_metadata.is_empty(),
@@ -594,7 +605,7 @@ fn initial_open_without_calc_syntax_keeps_calc_cache_lightweight() {
     assert!(!app.calc.cached_has_builtin_formula);
     assert!(!app.calc.cached_has_variable_assignment);
     assert!(!app.calc.stale);
-    assert_eq!(app.calc.results.len(), app.editor.lines.len());
+    assert_eq!(app.calc.results.len(), app.editor.lines().len());
     assert!(app.calc.results.iter().all(|entry| entry.is_none()));
     assert!(app.calc.cell_results.iter().all(|row| row.is_empty()));
     assert!(app.calc.prev_line_metadata.is_empty());
@@ -636,7 +647,7 @@ fn viewport_calc_evaluates_new_window_after_scroll() {
     let body = lines.join("\n");
     let (db, mut app, path) = app_with_note(&body);
 
-    let last_idx = app.editor.lines.len().saturating_sub(1);
+    let last_idx = app.editor.lines().len().saturating_sub(1);
     assert_eq!(
         app.calc
             .results
@@ -676,7 +687,9 @@ fn non_cursor_image_line_stays_collapsed_when_cursor_line_has_override_mapping()
 
     // Keep cursor on the formula line so cursor-line mapping is populated.
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = app.editor.lines[0].find("sum_col").expect("formula label");
+    app.editor.cursor_col = app.editor.lines()[0]
+        .find("sum_col")
+        .expect("formula label");
     app.adjust_cursor();
     app.adjust_scroll();
 
@@ -701,7 +714,7 @@ fn large_note_structural_edit_recomputes_calc_without_idle_delay() {
     let body = lines.join("\n");
     let (db, mut app, path) = app_with_note(&body);
 
-    assert!(app.editor.lines.len() >= 2_000);
+    assert!(app.editor.lines().len() >= 2_000);
     assert!(app.calc_runtime.viewport_only);
     assert_eq!(
         app.calc.results.get(2).and_then(|entry| entry.as_deref()),
@@ -709,11 +722,11 @@ fn large_note_structural_edit_recomputes_calc_without_idle_delay() {
     );
 
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = line_char_len(&app.editor.lines[0]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[0]);
     app.insert_newline();
 
     assert!(!app.calc_runtime.recompute_pending);
-    assert_eq!(app.calc.results.len(), app.editor.lines.len());
+    assert_eq!(app.calc.results.len(), app.editor.lines().len());
     assert_eq!(
         app.calc.results.get(3).and_then(|entry| entry.as_deref()),
         Some("3")
@@ -734,7 +747,7 @@ fn large_note_structural_edit_with_calc_change_recomputes_immediately() {
     let body = lines.join("\n");
     let (db, mut app, path) = app_with_note(&body);
 
-    assert!(app.editor.lines.len() >= 2_000);
+    assert!(app.editor.lines().len() >= 2_000);
     assert!(app.calc_runtime.viewport_only);
     assert_eq!(
         app.calc.results.get(2).and_then(|entry| entry.as_deref()),
@@ -773,7 +786,7 @@ fn set_active_note_without_calc_syntax_skips_full_calc_recompute() {
     assert!(!app.calc.cached_has_builtin_formula);
     assert!(!app.calc.cached_has_variable_assignment);
     assert!(!app.calc.stale);
-    assert_eq!(app.calc.results.len(), app.editor.lines.len());
+    assert_eq!(app.calc.results.len(), app.editor.lines().len());
     assert!(app.calc.results.iter().all(|entry| entry.is_none()));
     assert!(app.calc.cell_results.iter().all(|row| row.is_empty()));
     assert!(app.calc.prev_line_metadata.is_empty());
@@ -791,9 +804,9 @@ fn tab_applies_table_calc_with_variables_and_positions_cursor_at_insert_end() {
 
     app.handle_editor_key(&db, Key::Tab).expect("tab applies");
 
-    assert_eq!(app.editor.lines[1], "| value | 6 |");
-    let expected_byte = app.editor.lines[1].find("6").expect("result exists") + "6".len();
-    let expected_col = app.editor.lines[1][..expected_byte].chars().count();
+    assert_eq!(app.editor.lines()[1], "| value | 6 |");
+    let expected_byte = app.editor.lines()[1].find("6").expect("result exists") + "6".len();
+    let expected_col = app.editor.lines()[1][..expected_byte].chars().count();
     assert_eq!(app.editor.cursor_col, expected_col);
 
     drop(app);
@@ -890,16 +903,16 @@ fn ctrl_arrow_does_not_fallback_to_word_motion_inside_table() {
 #[test]
 fn backspace_and_delete_are_isolated_within_table_cell() {
     let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
-    let original = app.editor.lines[0].clone();
+    let original = app.editor.lines()[0].clone();
     app.editor.cursor_col = 8; // empty middle cell anchor
     app.handle_editor_key(&db, Key::Backspace)
         .expect("backspace in empty cell");
-    assert_eq!(app.editor.lines[0], original);
+    assert_eq!(app.editor.lines()[0], original);
     assert_eq!(app.editor.cursor_col, 8);
 
     app.handle_editor_key(&db, Key::Delete)
         .expect("delete in empty cell");
-    assert_eq!(app.editor.lines[0], original);
+    assert_eq!(app.editor.lines()[0], original);
     assert_eq!(app.editor.cursor_col, 8);
 
     drop(app);
@@ -912,18 +925,21 @@ fn ctrl_w_removes_table_column_when_header_cell_empty() {
     let text = "| a |  | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
     let (db, mut app, path) = app_with_note(text);
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = app.editor.lines[0].find("|  |").expect("empty header cell") + 2;
+    app.editor.cursor_col = app.editor.lines()[0]
+        .find("|  |")
+        .expect("empty header cell")
+        + 2;
 
     app.handle_editor_key(&db, Key::Ctrl('w'))
         .expect("ctrl-w removes empty header column");
 
-    assert_eq!(app.editor.lines.len(), 3);
-    for line in &app.editor.lines {
+    assert_eq!(app.editor.lines().len(), 3);
+    for line in app.editor.lines() {
         assert_eq!(line.matches('|').count(), 3, "line: {:?}", line);
     }
-    assert!(app.editor.lines[2].contains("1"));
-    assert!(app.editor.lines[2].contains("3"));
-    assert!(!app.editor.lines[2].contains("2"));
+    assert!(app.editor.lines()[2].contains("1"));
+    assert!(app.editor.lines()[2].contains("3"));
+    assert!(!app.editor.lines()[2].contains("2"));
     assert_eq!(app.editor.cursor_line, 0);
     assert_eq!(app.editor.cursor_col, 3);
 
@@ -935,12 +951,12 @@ fn ctrl_w_removes_table_column_when_header_cell_empty() {
 #[test]
 fn ctrl_w_deletes_word_outside_table() {
     let (db, mut app, path) = app_with_note("alpha beta");
-    app.editor.cursor_col = app.editor.lines[0].len();
+    app.editor.cursor_col = app.editor.lines()[0].len();
 
     app.handle_editor_key(&db, Key::Ctrl('w'))
         .expect("ctrl-w deletes previous word");
 
-    assert_eq!(app.editor.lines[0], "alpha ");
+    assert_eq!(app.editor.lines()[0], "alpha ");
     assert_eq!(app.editor.cursor_col, "alpha ".len());
 
     drop(app);
@@ -954,12 +970,12 @@ fn ctrl_w_deletes_word_inside_table_cell_when_no_structural_merge_applies() {
     let (db, mut app, path) = app_with_note(text);
     app.editor.cursor_line = 2;
     app.editor.cursor_col =
-        app.editor.lines[2].find("beta").expect("beta") + "beta".chars().count();
+        app.editor.lines()[2].find("beta").expect("beta") + "beta".chars().count();
 
     app.handle_editor_key(&db, Key::Ctrl('w'))
         .expect("ctrl-w deletes previous word inside cell");
 
-    let cells = crate::editor_core::table::split_table_cells(&app.editor.lines[2]);
+    let cells = crate::editor_core::table::split_table_cells(&app.editor.lines()[2]);
     assert_eq!(cells[0], "alpha");
 
     drop(app);
@@ -974,13 +990,17 @@ fn ctrl_backspace_and_ctrl_delete_merge_adjacent_table_cells() {
     app.editor.cursor_col = 8; // start of second cell content
     app.handle_editor_key(&db, Key::CtrlBackspace)
         .expect("ctrl-backspace merges with previous cell");
-    assert_eq!(app.editor.lines[0], "| aaa bb |");
+    assert_eq!(app.editor.lines()[0], "| aaa bb |");
 
-    app.editor.lines[0] = "| aaa | bb |".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[0] = "| aaa | bb |".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.editor.cursor_col = 5; // end of first cell content
     app.handle_editor_key(&db, Key::CtrlDelete)
         .expect("ctrl-delete merges with next cell");
-    assert_eq!(app.editor.lines[0], "| aaa bb |");
+    assert_eq!(app.editor.lines()[0], "| aaa bb |");
 
     drop(app);
     drop(db);
@@ -1002,10 +1022,13 @@ fn ctrl_backspace_and_ctrl_delete_remove_table_column_when_header_cell_empty() {
 
     let (db, mut app, path) = app_with_note(text);
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = app.editor.lines[0].find("|  |").expect("empty header cell") + 2;
+    app.editor.cursor_col = app.editor.lines()[0]
+        .find("|  |")
+        .expect("empty header cell")
+        + 2;
     app.handle_editor_key(&db, Key::CtrlBackspace)
         .expect("ctrl-backspace removes empty header column");
-    assert_middle_column_removed(&app.editor.lines);
+    assert_middle_column_removed(app.editor.lines());
     assert_eq!(app.editor.cursor_line, 0);
     assert_eq!(app.editor.cursor_col, 3);
     drop(app);
@@ -1014,10 +1037,13 @@ fn ctrl_backspace_and_ctrl_delete_remove_table_column_when_header_cell_empty() {
 
     let (db, mut app, path) = app_with_note(text);
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = app.editor.lines[0].find("|  |").expect("empty header cell") + 2;
+    app.editor.cursor_col = app.editor.lines()[0]
+        .find("|  |")
+        .expect("empty header cell")
+        + 2;
     app.handle_editor_key(&db, Key::CtrlDelete)
         .expect("ctrl-delete removes empty header column");
-    assert_middle_column_removed(&app.editor.lines);
+    assert_middle_column_removed(app.editor.lines());
     assert_eq!(app.editor.cursor_line, 0);
     assert_eq!(app.editor.cursor_col, 3);
     drop(app);
@@ -1134,7 +1160,7 @@ fn typing_space_in_table_cell_allows_followup_word_input() {
         .expect("insert second space");
     app.handle_editor_key(&db, Key::Char('b'))
         .expect("insert next word char");
-    assert_eq!(app.editor.lines[0], "| aaa  b |");
+    assert_eq!(app.editor.lines()[0], "| aaa  b |");
 
     drop(app);
     drop(db);
@@ -1146,7 +1172,7 @@ fn typing_space_in_longest_cell_middle_preserves_text_and_keeps_table_aligned() 
     let (db, mut app, path) =
         app_with_note("| h | v |\n| --- | --- |\n| abcd efgh | ok |\n| aa | bb |");
     app.editor.cursor_line = 2;
-    app.editor.cursor_col = app.editor.lines[2].find("efgh").expect("efgh");
+    app.editor.cursor_col = app.editor.lines()[2].find("efgh").expect("efgh");
 
     app.handle_editor_key(&db, Key::Char(' '))
         .expect("space should insert in longest cell");
@@ -1154,12 +1180,12 @@ fn typing_space_in_longest_cell_middle_preserves_text_and_keeps_table_aligned() 
     app.handle_editor_key(&db, Key::Char('z'))
         .expect("follow-up typing should keep inserted space");
 
-    let cells = crate::editor_core::table::split_table_cells(&app.editor.lines[2]);
+    let cells = crate::editor_core::table::split_table_cells(&app.editor.lines()[2]);
     assert_eq!(cells[0], "abcd  zefgh");
-    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines[0]);
+    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines()[0]);
     for line in app
         .editor
-        .lines
+        .lines()
         .iter()
         .filter(|line| crate::editor_core::table::is_table_line(line))
     {
@@ -1179,7 +1205,7 @@ fn typing_spaces_at_right_edge_of_widest_cell_preserves_text_and_padding() {
     let (db, mut app, path) =
         app_with_note("| h | v |\n| --- | --- |\n| alpha beta gamma | ok |\n| aa | bb |");
     app.editor.cursor_line = 2;
-    app.editor.cursor_col = app.editor.lines[2]
+    app.editor.cursor_col = app.editor.lines()[2]
         .find("alpha beta gamma")
         .expect("widest cell")
         + "alpha beta gamma".chars().count();
@@ -1193,13 +1219,13 @@ fn typing_spaces_at_right_edge_of_widest_cell_preserves_text_and_padding() {
     app.handle_editor_key(&db, Key::Char('x'))
         .expect("follow-up char");
 
-    let row_cells = crate::editor_core::table::split_table_cells(&app.editor.lines[2]);
+    let row_cells = crate::editor_core::table::split_table_cells(&app.editor.lines()[2]);
     assert_eq!(row_cells[0], "alpha beta gamma   x");
 
-    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines[0]);
+    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines()[0]);
     for line in app
         .editor
-        .lines
+        .lines()
         .iter()
         .filter(|line| crate::editor_core::table::is_table_line(line))
     {
@@ -1209,17 +1235,17 @@ fn typing_spaces_at_right_edge_of_widest_cell_preserves_text_and_padding() {
         );
     }
 
-    let pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines[2]);
+    let pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines()[2]);
     assert!(pipes.len() >= 2);
     let right_pipe = pipes[1];
     assert_eq!(
-        app.editor.lines[2]
+        app.editor.lines()[2]
             .chars()
             .nth(right_pipe.saturating_sub(1)),
         Some(' ')
     );
     assert_eq!(
-        app.editor.lines[2]
+        app.editor.lines()[2]
             .chars()
             .nth(right_pipe.saturating_sub(2)),
         Some('x')
@@ -1247,9 +1273,9 @@ fn typing_in_table_cell_reflows_column_when_cell_becomes_widest() {
         ],
     );
 
-    assert_eq!(app.editor.lines[0], "| a     | b   |");
-    assert_eq!(app.editor.lines[1], "| ----- | --- |");
-    assert_eq!(app.editor.lines[2], "| 12345 | 2   |");
+    assert_eq!(app.editor.lines()[0], "| a     | b   |");
+    assert_eq!(app.editor.lines()[1], "| ----- | --- |");
+    assert_eq!(app.editor.lines()[2], "| 12345 | 2   |");
 
     drop(app);
     drop(db);
@@ -1260,15 +1286,15 @@ fn typing_in_table_cell_reflows_column_when_cell_becomes_widest() {
 fn shift_enter_in_table_cell_splits_into_next_row() {
     let (db, mut app, path) = app_with_note("| left | value |\n| --- | --- |\n| ok | data |");
     app.editor.cursor_line = 2;
-    app.editor.cursor_col = app.editor.lines[2].find("data").expect("data") + 2;
+    app.editor.cursor_col = app.editor.lines()[2].find("data").expect("data") + 2;
     app.handle_editor_key(&db, Key::ShiftEnter)
         .expect("shift-enter splits row");
-    assert_eq!(app.editor.lines.len(), 4);
-    assert!(app.editor.lines.iter().all(|line| !line.contains("<br>")));
-    assert!(app.editor.lines[2].contains("| ok"));
-    assert!(app.editor.lines[2].contains("| da"));
-    assert!(app.editor.lines[3].starts_with("|>"));
-    assert!(app.editor.lines[3].contains("| ta"));
+    assert_eq!(app.editor.lines().len(), 4);
+    assert!(app.editor.lines().iter().all(|line| !line.contains("<br>")));
+    assert!(app.editor.lines()[2].contains("| ok"));
+    assert!(app.editor.lines()[2].contains("| da"));
+    assert!(app.editor.lines()[3].starts_with("|>"));
+    assert!(app.editor.lines()[3].contains("| ta"));
 
     drop(app);
     drop(db);
@@ -1279,33 +1305,33 @@ fn shift_enter_in_table_cell_splits_into_next_row() {
 fn multiline_paste_inside_table_cell_creates_continuation_rows_in_same_cell() {
     let (db, mut app, path) = app_with_note("| h1 | h2 |\n| --- | --- |\n| left | right |");
     app.editor.cursor_line = 2;
-    app.editor.cursor_col = app.editor.lines[2].find("right").expect("right") + 2; // ri|ght
+    app.editor.cursor_col = app.editor.lines()[2].find("right").expect("right") + 2; // ri|ght
 
     app.insert_paste("A\nB\nC");
 
-    assert_eq!(app.editor.lines.len(), 5);
+    assert_eq!(app.editor.lines().len(), 5);
     assert_eq!(
-        crate::editor_core::table::split_table_cells(&app.editor.lines[2])[1],
+        crate::editor_core::table::split_table_cells(&app.editor.lines()[2])[1],
         "riA"
     );
     assert!(crate::editor_core::table::is_table_continuation_line(
-        &app.editor.lines[3]
+        &app.editor.lines()[3]
     ));
     assert_eq!(
-        crate::editor_core::table::split_table_cells(&app.editor.lines[3])[1],
+        crate::editor_core::table::split_table_cells(&app.editor.lines()[3])[1],
         "B"
     );
     assert!(crate::editor_core::table::is_table_continuation_line(
-        &app.editor.lines[4]
+        &app.editor.lines()[4]
     ));
     assert_eq!(
-        crate::editor_core::table::split_table_cells(&app.editor.lines[4])[1],
+        crate::editor_core::table::split_table_cells(&app.editor.lines()[4])[1],
         "Cght"
     );
 
     app.insert_char('X');
     assert_eq!(
-        crate::editor_core::table::split_table_cells(&app.editor.lines[4])[1],
+        crate::editor_core::table::split_table_cells(&app.editor.lines()[4])[1],
         "CXght"
     );
 
@@ -1319,7 +1345,7 @@ fn deleting_last_content_in_continuation_row_removes_that_row() {
     let (db, mut app, path) = app_with_note("| h |\n| --- |\n| base |\n|> tail |");
     app.editor.cursor_line = 3;
     app.editor.cursor_col =
-        app.editor.lines[3].find("tail").expect("tail") + "tail".chars().count();
+        app.editor.lines()[3].find("tail").expect("tail") + "tail".chars().count();
 
     run_keys(
         &mut app,
@@ -1332,8 +1358,12 @@ fn deleting_last_content_in_continuation_row_removes_that_row() {
         ],
     );
 
-    assert_eq!(app.editor.lines, vec!["| h    |", "| ---- |", "| base |"]);
-    assert!(app.editor.lines.iter().all(|line| !line.starts_with("|>")));
+    assert_eq!(app.editor.lines(), vec!["| h    |", "| ---- |", "| base |"]);
+    assert!(app
+        .editor
+        .lines()
+        .iter()
+        .all(|line| !line.starts_with("|>")));
     assert_eq!(app.editor.cursor_line, 2);
 
     drop(app);
@@ -1387,15 +1417,19 @@ fn recompute_calc_refreshes_stale_trailer_after_variable_change() {
     app.editor.cursor_col = 0;
     // Seed: a recompute now should leave the trailer alone (already in sync).
     app.run_calc_recompute();
-    assert_eq!(app.editor.lines[1], "2 * rate = 20");
+    assert_eq!(app.editor.lines()[1], "2 * rate = 20");
 
     // Change the variable definition.
-    app.editor.lines[0] = "rate := 15".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[0] = "rate := 15".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.run_calc_recompute();
 
     // Trailer should have been refreshed from `= 20` to `= 30`.
-    assert_eq!(app.editor.lines[1], "2 * rate = 30");
-    assert_eq!(app.editor.lines[2], "other line");
+    assert_eq!(app.editor.lines()[1], "2 * rate = 30");
+    assert_eq!(app.editor.lines()[2], "other line");
 
     drop(app);
     drop(db);
@@ -1411,11 +1445,15 @@ fn recompute_calc_does_not_refresh_hand_typed_trailer() {
     app.editor.cursor_line = 0;
     app.editor.cursor_col = 0;
     app.run_calc_recompute();
-    assert_eq!(app.editor.lines[1], "2 * rate = FOO");
+    assert_eq!(app.editor.lines()[1], "2 * rate = FOO");
 
-    app.editor.lines[0] = "rate := 15".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[0] = "rate := 15".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.run_calc_recompute();
-    assert_eq!(app.editor.lines[1], "2 * rate = FOO");
+    assert_eq!(app.editor.lines()[1], "2 * rate = FOO");
 
     drop(app);
     drop(db);
@@ -1431,12 +1469,16 @@ fn recompute_calc_skips_refresh_when_cursor_in_trailer() {
 
     // Park the cursor inside the trailer on line 1.
     app.editor.cursor_line = 1;
-    app.editor.cursor_col = app.editor.lines[1].chars().count(); // end of line, inside trailer
-    app.editor.lines[0] = "rate := 15".to_string();
+    app.editor.cursor_col = app.editor.lines()[1].chars().count(); // end of line, inside trailer
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[0] = "rate := 15".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.run_calc_recompute();
 
     // Untouched because cursor is in the trailer region.
-    assert_eq!(app.editor.lines[1], "2 * rate = 20");
+    assert_eq!(app.editor.lines()[1], "2 * rate = 20");
 
     drop(app);
     drop(db);
@@ -1473,8 +1515,8 @@ fn tab_applies_checklist_calc_with_variables_and_positions_cursor_at_insert_end(
 
     app.handle_editor_key(&db, Key::Tab).expect("tab applies");
 
-    assert_eq!(app.editor.lines[1], "- [ ] 15");
-    assert_eq!(app.editor.cursor_col, app.editor.lines[1].chars().count());
+    assert_eq!(app.editor.lines()[1], "- [ ] 15");
+    assert_eq!(app.editor.cursor_col, app.editor.lines()[1].chars().count());
 
     drop(app);
     drop(db);
@@ -1486,17 +1528,17 @@ fn tab_applies_table_error_result_and_reflows_table_alignment() {
     let (db, mut app, path) =
         app_with_note("| c1 | c2 |\n| --- | --- |\n| a | !ERROR#out_of_bounds |\n| b | 1 |");
     app.editor.cursor_line = 3;
-    app.editor.cursor_col = app.editor.lines[3].find('1').expect("value");
+    app.editor.cursor_col = app.editor.lines()[3].find('1').expect("value");
 
     app.handle_editor_key(&db, Key::Char('2'))
         .expect("typing triggers table reflow");
 
-    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines[0]);
-    for line in app.editor.lines.iter().take(4) {
+    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.editor.lines()[0]);
+    for line in app.editor.lines().iter().take(4) {
         let pipes = crate::editor_core::table::table_pipe_positions(line);
         assert_eq!(pipes, expected_pipes, "misaligned line: {line}");
     }
-    assert!(app.editor.lines[2].contains("!ERROR#out_of_bounds"));
+    assert!(app.editor.lines()[2].contains("!ERROR#out_of_bounds"));
 
     drop(app);
     drop(db);
@@ -1529,18 +1571,22 @@ fn variable_autocomplete_popup_appears_after_min_chars_and_supports_selection_ke
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter accepts selected suggestion");
-    assert_eq!(app.editor.lines[2], "total cost");
+    assert_eq!(app.editor.lines()[2], "total cost");
     assert_eq!(app.editor.cursor_col, "total cost".chars().count());
     assert!(!app.variable_autocomplete_popup.visible);
 
-    app.editor.lines[2] = "tot".to_string();
+    {
+        let mut replacement = app.editor.lines().to_vec();
+        replacement[2] = "tot".to_string();
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.editor.cursor_col = 3;
     app.refresh_variable_autocomplete_popup();
     app.handle_editor_key(&db, Key::ArrowDown)
         .expect("down selects second suggestion");
     app.handle_editor_key(&db, Key::Tab)
         .expect("tab accepts selected suggestion");
-    assert_eq!(app.editor.lines[2], "total revenue");
+    assert_eq!(app.editor.lines()[2], "total revenue");
 
     drop(app);
     drop(db);
@@ -1569,7 +1615,7 @@ fn table_formula_autocomplete_offers_helpers_and_variables() {
         .expect("down picks next");
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter accepts selected suggestion");
-    assert!(app.editor.lines[3].contains(":=sum_col()"));
+    assert!(app.editor.lines()[3].contains(":=sum_col()"));
     assert!(!app.variable_autocomplete_popup.visible);
 
     drop(app);
@@ -1592,7 +1638,7 @@ fn autocomplete_popup_esc_dismisses_and_tab_fallback_still_accepts_variable() {
 
     app.handle_editor_key(&db, Key::Tab)
         .expect("tab fallback still applies variable autocomplete");
-    assert_eq!(app.editor.lines[2], "total cost");
+    assert_eq!(app.editor.lines()[2], "total cost");
     assert_eq!(app.status, "autocomplete: total cost");
 
     drop(app);
@@ -1636,7 +1682,7 @@ fn variable_autocomplete_is_disabled_when_active_note_module_is_off() {
 
     app.handle_editor_key(&db, Key::Tab)
         .expect("tab falls back when variable module is off");
-    assert_eq!(app.editor.lines[1], "tot  ");
+    assert_eq!(app.editor.lines()[1], "tot  ");
 
     drop(app);
     drop(db);
@@ -1689,7 +1735,7 @@ fn tab_accepts_variable_autocomplete_for_active_prefix() {
     app.handle_editor_key(&db, Key::Tab)
         .expect("tab accepts autocomplete");
 
-    assert_eq!(app.editor.lines[1], "total cost");
+    assert_eq!(app.editor.lines()[1], "total cost");
     assert_eq!(app.editor.cursor_col, "total cost".chars().count());
     assert_eq!(app.status, "autocomplete: total cost");
 
@@ -1709,7 +1755,7 @@ fn typing_a_table_row_by_hand_keeps_its_cells() {
     let (db, mut app, path) = app_with_note("");
     app.mode = UiMode::Editor;
     type_text(&mut app, &db, "| a | b |");
-    assert_eq!(app.editor.lines, vec!["| a | b |"]);
+    assert_eq!(app.editor.lines(), vec!["| a | b |"]);
     assert_eq!(
         app.editor.cursor_col, 9,
         "cursor stays after the closing pipe"
@@ -1732,7 +1778,7 @@ fn typing_a_whole_markdown_table_by_hand_builds_a_clean_table() {
     type_text(&mut app, &db, "| 1 | 2 |");
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["| a   | b   |", "| --- | --- |", "| 1   | 2   |"]
     );
 
@@ -1788,9 +1834,9 @@ fn label_line_shows_leading_result_and_tab_appends_it() {
     app.run_calc_recompute();
     assert_eq!(app.calc.results[0].as_deref(), Some("80"));
 
-    app.editor.cursor_col = line_char_len(&app.editor.lines[0]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[0]);
     app.handle_editor_key(&db, Key::Tab).expect("tab");
-    assert_eq!(app.editor.lines[0], "100 - 20 groceries = 80");
+    assert_eq!(app.editor.lines()[0], "100 - 20 groceries = 80");
     app.run_calc_recompute();
     assert_eq!(app.calc.results[0], None, "applied result is not repeated");
 
@@ -1856,7 +1902,7 @@ fn closing_a_hand_typed_cell_moves_cursor_into_the_next_cell() {
     let (db, mut app, path) = app_with_note("");
     app.mode = UiMode::Editor;
     type_text(&mut app, &db, "|a|b|");
-    assert_eq!(app.editor.lines, vec!["| a | b |"]);
+    assert_eq!(app.editor.lines(), vec!["| a | b |"]);
 
     drop(app);
     drop(db);
@@ -1890,7 +1936,7 @@ fn typed_trailing_spaces_widen_the_column_for_every_row() {
         "| sas   | sasa    | x   |\n| ----- | ------- | --- |\n| dusan | as dasd | y   |",
     );
     app.editor.cursor_line = 2;
-    app.editor.cursor_col = app.editor.lines[2].find("dasd").unwrap() + 4;
+    app.editor.cursor_col = app.editor.lines()[2].find("dasd").unwrap() + 4;
     for _ in 0..2 {
         app.handle_editor_key(&db, Key::Char(' ')).expect("space");
         let rows = screen_rows(&mut app);
@@ -1918,7 +1964,7 @@ fn enter_in_a_middle_table_cell_opens_a_row_below_without_splitting() {
     app.editor.cursor_col = 5;
     app.handle_editor_key(&db, Key::Enter).expect("enter");
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec![
             "| sasa | sasa | sasas |",
             "| ---- | ---- | ----- |",
@@ -1944,7 +1990,7 @@ fn typing_a_compact_markdown_table_by_hand_builds_a_clean_table() {
     type_text(&mut app, &db, "|1|2|");
 
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["| a   | b   |", "| --- | --- |", "| 1   | 2   |"]
     );
 
@@ -2006,7 +2052,7 @@ fn large_note_deleting_an_assignment_updates_visible_results_immediately() {
         app.handle_key(&db, Key::Char(key)).expect("dd");
     }
     assert!(!app.calc_runtime.recompute_pending);
-    assert_eq!(app.calc.results.len(), app.editor.lines.len());
+    assert_eq!(app.calc.results.len(), app.editor.lines().len());
     assert_ne!(
         app.calc.results[2].as_deref(),
         Some("3"),
@@ -2014,7 +2060,7 @@ fn large_note_deleting_an_assignment_updates_visible_results_immediately() {
     );
 
     app.handle_key(&db, Key::Char('u')).expect("undo");
-    assert_eq!(app.editor.lines[1], "base := 1");
+    assert_eq!(app.editor.lines()[1], "base := 1");
     assert_eq!(app.calc.results[3].as_deref(), Some("3"));
 
     drop(app);
@@ -2052,7 +2098,7 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
         (seed % bound.max(1) as u64) as usize
     };
     for step in 0..120 {
-        let visible = app.editor_height().min(app.editor.lines.len());
+        let visible = app.editor_height().min(app.editor.lines().len());
         app.editor.cursor_line = app.view.scroll_line + next(visible.saturating_sub(1));
         app.editor.cursor_col = 0;
         let keys: Vec<Key> = match next(6) {
@@ -2077,12 +2123,12 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
         settle_idle_calc(&mut app);
         assert!(!app.calc_runtime.recompute_pending);
         if step > 0 {
-            assert_eq!(app.calc.line_metadata.len(), app.editor.lines.len());
+            assert_eq!(app.calc.line_metadata.len(), app.editor.lines().len());
         }
 
         let fresh = crate::terminal::app::compute_calc_data(
             &app.calc.engine,
-            &app.editor.lines,
+            app.editor.lines(),
             true,
             false,
             true,
@@ -2090,12 +2136,13 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
             Vec::new(),
         );
         let first = app.view.scroll_line;
-        let last = (first + app.editor_height()).min(app.editor.lines.len());
+        let last = (first + app.editor_height()).min(app.editor.lines().len());
         for line in first..last {
             assert_eq!(
-                app.calc.results[line], fresh.line_results[line],
+                app.calc.results[line],
+                fresh.line_results[line],
                 "step {step}, line {line}: {:?}",
-                app.editor.lines[line]
+                app.editor.lines()[line]
             );
         }
     }
@@ -2224,7 +2271,7 @@ fn background_index_build_catches_up_with_edits_made_while_it_runs() {
     let mask = app.calc_feature_mask();
     assert_eq!(
         app.calc.line_metadata,
-        crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(&app.editor.lines, mask)
+        crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(app.editor.lines(), mask)
     );
     assert!(app.calc.variable_names.iter().any(|name| name == "late"));
     assert!(!app.calc.variable_names.iter().any(|name| name == "v2"));
@@ -2265,13 +2312,13 @@ fn large_viewport_note_prepares_calc_off_the_input_thread() {
             Key::Esc,
         ],
     );
-    assert_eq!(app.editor.lines[1], "rate := base * 5");
+    assert_eq!(app.editor.lines()[1], "rate := base * 5");
 
     wait_for_viewport_calc(&mut app);
     render_screen(&mut app);
 
     // After the edits line 2 holds `v1 := rate + 1`, and `rate` is 5.
-    let last = app.editor_height().min(app.editor.lines.len());
+    let last = app.editor_height().min(app.editor.lines().len());
     for line in 2..last {
         let offset = line - 1;
         let expected = (5 + offset).to_string();
@@ -2321,7 +2368,7 @@ fn qualified_table_completion_and_cursor_follow_typed_variable() {
         vec!["sum_rate"]
     );
     run_keys(&mut app, &db, &[Key::Enter]);
-    assert!(app.editor.lines[2].contains(&format!("[[{DEP}]].sum_rate")));
+    assert!(app.editor.lines()[2].contains(&format!("[[{DEP}]].sum_rate")));
     drop(app);
     drop(db);
     cleanup_db_files(&path);
@@ -2377,7 +2424,7 @@ fn paste_into(body: &str, line: usize, col: usize, text: &str) -> Vec<String> {
     app.editor.cursor_col = col;
     app.handle_editor_key(&db, Key::Paste(text.to_string()))
         .expect("paste applies");
-    let lines = app.editor.lines.clone();
+    let lines = app.editor.lines().to_vec();
     drop(app);
     drop(db);
     cleanup_db_files(&path);
@@ -2434,7 +2481,7 @@ fn pasting_csv_stays_text_when_tables_are_off() {
     app.mode = UiMode::Editor;
     app.handle_editor_key(&db, Key::Paste("a,b\n1,2".to_string()))
         .expect("paste applies");
-    assert_eq!(app.editor.lines, vec!["a,b", "1,2"]);
+    assert_eq!(app.editor.lines(), vec!["a,b", "1,2"]);
     drop(app);
     drop(db);
     cleanup_db_files(&path);
@@ -2444,7 +2491,10 @@ fn pasting_csv_stays_text_when_tables_are_off() {
 fn csv_on_a_table_line_is_left_to_fill_cells() {
     let (db, mut app, path) = app_with_note("x");
     assert!(app.pasted_table("a\tb\n1\t2").is_some());
-    app.editor.lines = vec!["| a | b |".to_string(), "| - | - |".to_string()];
+    {
+        let replacement: Vec<String> = vec!["| a | b |".to_string(), "| - | - |".to_string()];
+        app.editor.set_text(&replacement.join("\n"));
+    };
     app.editor.cursor_line = 0;
     assert_eq!(
         app.pasted_table("a\tb\n1\t2"),
@@ -2461,11 +2511,11 @@ fn pruning_empty_continuation_preserves_the_previous_table_column() {
     let (db, mut app, path) =
         app_with_note("| a    | b     |\n| ---- | ----- |\n| base | value |\n|>     | x     |");
     app.editor.cursor_line = 3;
-    app.editor.cursor_col = app.editor.lines[3].find('x').unwrap() + 1;
+    app.editor.cursor_col = app.editor.lines()[3].find('x').unwrap() + 1;
     run_keys(&mut app, &db, &[Key::Backspace]);
     assert_eq!(app.editor.cursor_line, 2);
     let cell = table_cell_info_at_char(
-        &app.editor.lines,
+        app.editor.lines(),
         app.editor.cursor_line,
         app.editor.cursor_col,
     )

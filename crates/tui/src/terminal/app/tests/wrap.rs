@@ -53,7 +53,7 @@ fn cursor_on_continuation_row_is_placed_on_that_row() {
     let body = long_line("word", 20);
     let (db, mut app, path) = wrapped_app(&body);
     app.mode = UiMode::Editor;
-    app.editor.cursor_col = line_char_len(&app.editor.lines[0]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[0]);
     app.adjust_scroll();
 
     let (rows, cursor) = render_screen(&mut app);
@@ -138,7 +138,7 @@ fn nowrap_mode_keeps_horizontal_scrolling() {
     let body = long_line("word", 20);
     let (db, mut app, path) = app_with_note(&body);
     app.mode = UiMode::Editor;
-    app.editor.cursor_col = line_char_len(&app.editor.lines[0]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[0]);
     app.adjust_scroll();
     assert!(app.view.scroll_col > 0);
     let rows = screen_rows(&mut app);
@@ -228,7 +228,7 @@ fn line_taller_than_the_screen_scrolls_by_rows_to_the_cursor() {
     let (db, mut app, path) = wrapped_app(&body);
     app.mode = UiMode::Editor;
     app.editor.cursor_line = 1;
-    app.editor.cursor_col = line_char_len(&app.editor.lines[1]);
+    app.editor.cursor_col = line_char_len(&app.editor.lines()[1]);
     app.adjust_scroll();
 
     let (rows, cursor) = render_screen(&mut app);

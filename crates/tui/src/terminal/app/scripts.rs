@@ -276,9 +276,9 @@ impl TerminalApp {
             let selection = selection.ok_or("script requires a selection")?;
             let linewise = self.command_selection_linewise || self.mode == UiMode::VisualLine;
             let (first_line, _) =
-                line_and_byte_for_offset(&self.editor.lines, selection.anchor.min(selection.head));
+                line_and_byte_for_offset(self.editor.lines(), selection.anchor.min(selection.head));
             let (last_line, _) =
-                line_and_byte_for_offset(&self.editor.lines, selection.anchor.max(selection.head));
+                line_and_byte_for_offset(self.editor.lines(), selection.anchor.max(selection.head));
             let (snapshot, start) =
                 self.build_scoped_snapshot_for_line_span(first_line, last_line, None);
             let selection = crate::editor_core::types::SelectionSnapshot {
@@ -307,7 +307,7 @@ impl TerminalApp {
         let text = match script.input {
             ScriptInput::None => String::new(),
             ScriptInput::Note => {
-                if document_text_len(&self.editor.lines) > app_core::scripts::MAX_INPUT_BYTES {
+                if document_text_len(self.editor.lines()) > app_core::scripts::MAX_INPUT_BYTES {
                     return Err("script input exceeds 16 MiB".into());
                 }
                 self.joined_text_cached_ref().to_owned()

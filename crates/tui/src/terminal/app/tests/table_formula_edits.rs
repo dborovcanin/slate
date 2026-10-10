@@ -64,17 +64,17 @@ fn keys(text: &str) -> Vec<Key> {
 /// Compares what `app` shows (calc values and every rendered line) with a
 /// freshly opened note holding the same text and cursor. Returns mismatches.
 fn diff_against_fresh(app: &mut TerminalApp) -> Vec<String> {
-    let (_db, mut fresh, path) = app_with_note(&app.editor.lines.join("\n"));
+    let (_db, mut fresh, path) = app_with_note(&app.editor.lines().join("\n"));
     fresh.mode = app.mode;
     fresh.run_calc_recompute();
     let mut problems = Vec::new();
-    if fresh.editor.lines != app.editor.lines {
+    if fresh.editor.lines() != app.editor.lines() {
         problems.push("fresh note text differs (normalized on open)".to_string());
     }
     fresh.editor.cursor_line = app.editor.cursor_line;
     fresh.editor.cursor_col = app.editor.cursor_col;
     let mut mismatched = 0usize;
-    for idx in 0..app.editor.lines.len() {
+    for idx in 0..app.editor.lines().len() {
         let ours = app.calc.cell_results.get(idx).cloned().unwrap_or_default();
         let theirs = fresh
             .calc
@@ -193,11 +193,11 @@ fn run_stress(name: &str, note: &str) -> usize {
     ];
 
     let mut times: Vec<(String, f64, f64, f64, f64)> = Vec::new();
-    let mut history = vec![app.editor.lines.clone()];
+    let mut history = vec![app.editor.lines().to_vec()];
     for (label, seq) in edits {
-        let before = app.editor.lines.clone();
+        let before = app.editor.lines().to_vec();
         let edit_ms = press(&mut app, &db, seq);
-        let after = app.editor.lines.clone();
+        let after = app.editor.lines().to_vec();
         if after == before {
             problems.push(format!("[{label}] edit changed nothing"));
         }
@@ -208,7 +208,7 @@ fn run_stress(name: &str, note: &str) -> usize {
         check_text(
             &mut problems,
             format!("[undo {label}]"),
-            &app.editor.lines,
+            app.editor.lines(),
             &before,
         );
         idle(&mut app, &db);
@@ -221,13 +221,13 @@ fn run_stress(name: &str, note: &str) -> usize {
         check_text(
             &mut problems,
             format!("[redo {label}]"),
-            &app.editor.lines,
+            app.editor.lines(),
             &after,
         );
         idle(&mut app, &db);
         check_fresh(&mut problems, &format!("[redo {label}]"), &mut app);
 
-        history.push(app.editor.lines.clone());
+        history.push(app.editor.lines().to_vec());
         times.push((label.to_string(), edit_ms, idle_ms, undo_ms, redo_ms));
     }
 
@@ -237,7 +237,7 @@ fn run_stress(name: &str, note: &str) -> usize {
         check_text(
             &mut problems,
             format!("[chain undo {}]", edits[step].0),
-            &app.editor.lines,
+            app.editor.lines(),
             &history[step],
         );
     }
@@ -248,7 +248,7 @@ fn run_stress(name: &str, note: &str) -> usize {
         check_text(
             &mut problems,
             format!("[chain redo {}]", edits[step - 1].0),
-            &app.editor.lines,
+            app.editor.lines(),
             &history[step],
         );
     }

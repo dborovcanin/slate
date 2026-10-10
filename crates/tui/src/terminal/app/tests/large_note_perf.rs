@@ -575,7 +575,7 @@ fn large_note_fixture_evaluates_in_the_app() {
     measure_idle(&mut app, &db, &mut Samples::default());
     let line = |prefix: &str| {
         app.editor
-            .lines
+            .lines()
             .iter()
             .position(|line| line.starts_with(prefix))
             .unwrap_or_else(|| panic!("no line starting with {prefix:?}"))

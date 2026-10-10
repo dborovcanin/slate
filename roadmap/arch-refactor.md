@@ -542,7 +542,7 @@ moves. Existing golden cases and performance limits remain unchanged.
 - [x] Step 5: document crate and terminal view separation.
 - [x] Step 6: undo, dirty and reminder session state.
 - [x] Step 7: session edit pipeline and undo/redo.
-- [ ] Step 8: private document text.
+- [x] Step 8: private document text.
 - [ ] Step 9: shared calc state.
 - [ ] Step 10: session calc upkeep.
 - [ ] Step 11: calc preparation/index jobs.
@@ -1039,3 +1039,10 @@ Notes for when a GUI starts, recorded so phases 7 and 8 keep them possible:
   and byte-offset edits, converted per line, and a decision on how
   composition interacts with undo grouping.
 - Decide the editor font early: phase 8 assumes monospace.
+
+Step 8: document lines are private outside the session crate. Borrowed reads
+replace terminal field access; lifecycle replacement uses `set_text` and
+capacity trimming uses `compact`. Unicode/trailing-line/cache-generation
+coverage was added. Workspace formatting, clippy (no new warnings), all
+1,318 tests and existing golden cases pass. Read-only diff review found no
+behavior or allocation regression.

@@ -89,7 +89,7 @@ fn a_deleted_task_stays_deleted_after_save_and_reload() {
     app.save(&db).expect("save");
     assert_eq!(stored(&db), vec![]);
     app.reload_active_note(&db).expect("reload");
-    assert_eq!(app.editor.lines, vec!["- [ ] buy eggs".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["- [ ] buy eggs".to_string()]);
     assert_eq!(shown(&app), vec![]);
 
     drop(app);
@@ -103,21 +103,21 @@ fn backward_word_delete_preserves_unicode_reminders_and_physical_line_joins() {
     app.mode = UiMode::Editor;
     app.editor.cursor_col = 7;
     assert!(app.delete_word_backward());
-    assert_eq!(app.editor.lines[0], "αβ_");
+    assert_eq!(app.editor.lines()[0], "αβ_");
     assert_eq!(app.editor.cursor_col, 3);
     assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
     app.undo(&db);
-    assert_eq!(app.editor.lines[0], "αβ_γ !!");
+    assert_eq!(app.editor.lines()[0], "αβ_γ !!");
     app.session.history.break_coalescing();
     app.editor.cursor_line = 2;
     app.editor.cursor_col = 0;
     app.folds.visible_to_real = vec![0, 2];
     app.folds.real_to_visible = vec![0, 0, 1];
     assert!(app.delete_word_backward());
-    assert_eq!(app.editor.lines, vec!["αβ_γ !!", "hidden界"]);
+    assert_eq!(app.editor.lines(), vec!["αβ_γ !!", "hidden界"]);
     assert_eq!(shown(&app), vec![reminder(0), reminder(1)]);
     app.undo(&db);
-    assert_eq!(app.editor.lines, vec!["αβ_γ !!", "hidden", "界"]);
+    assert_eq!(app.editor.lines(), vec!["αβ_γ !!", "hidden", "界"]);
     assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
     drop(app);
     drop(db);
@@ -199,7 +199,7 @@ fn splitting_a_line_keeps_the_reminder_with_its_start() {
     app.editor.cursor_col = 3;
     run_keys(&mut app, &db, &[Key::Char('i'), Key::Enter, Key::Esc]);
     assert_eq!(
-        app.editor.lines,
+        app.editor.lines(),
         vec!["abc".to_string(), " def".to_string()]
     );
     assert_eq!(shown(&app), vec![reminder(0)]);
@@ -221,7 +221,7 @@ fn a_join_keeps_the_first_reminder_and_undo_brings_back_the_second() {
     app.editor.cursor_line = 1;
     app.editor.cursor_col = 0;
     run_keys(&mut app, &db, &[Key::Char('i'), Key::Backspace, Key::Esc]);
-    assert_eq!(app.editor.lines[0], "call Anaabout lunch");
+    assert_eq!(app.editor.lines()[0], "call Anaabout lunch");
     assert_eq!(shown(&app), vec![reminder(0)]);
     run_keys(&mut app, &db, &[Key::Char('u')]);
     assert_eq!(shown(&app), vec![reminder(0), reminder(1)]);
@@ -237,7 +237,7 @@ fn backspace_join_moves_a_lone_reminder_onto_the_joined_line() {
     app.editor.cursor_line = 1;
     app.editor.cursor_col = 0;
     run_keys(&mut app, &db, &[Key::Char('i'), Key::Backspace, Key::Esc]);
-    assert_eq!(app.editor.lines, vec!["call Anaabout lunch".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["call Anaabout lunch".to_string()]);
     assert_eq!(shown(&app), vec![moved(1, 0)]);
 
     drop(app);
@@ -253,7 +253,7 @@ fn discarding_edits_keeps_the_stored_reminders() {
     assert_eq!(stored(&db).len(), 1, "nothing stored before the text");
     assert!(!app.can_leave_note(&db), "unsaved changes are refused once");
     command(&mut app, &db, "e!");
-    assert_eq!(app.editor.lines.len(), 2);
+    assert_eq!(app.editor.lines().len(), 2);
     assert_eq!(shown(&app), vec![reminder(0)]);
     assert_eq!(
         stored(&db),
@@ -294,10 +294,10 @@ fn one_insert_session_is_one_undo_step_for_text_and_reminders() {
         &db,
         &[Key::Char('i'), Key::Enter, Key::Char('x'), Key::Esc],
     );
-    assert_eq!(app.editor.lines, vec!["", "xmilk", "end"]);
+    assert_eq!(app.editor.lines(), vec!["", "xmilk", "end"]);
     assert_eq!(shown(&app), vec![moved(0, 1)]);
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["milk", "end"]);
+    assert_eq!(app.editor.lines(), vec!["milk", "end"]);
     assert_eq!(shown(&app), vec![reminder(0)]);
 
     drop(app);
@@ -323,10 +323,10 @@ fn a_merged_edit_that_cancels_itself_keeps_history_aligned() {
         "the step cancelled itself"
     );
     run_keys(&mut app, &db, &[Key::Esc]);
-    assert_eq!(app.editor.lines, vec!["milk", "c"]);
+    assert_eq!(app.editor.lines(), vec!["milk", "c"]);
     assert_eq!(shown(&app), vec![moved(1, 0)]);
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["a", "milk", "c"]);
+    assert_eq!(app.editor.lines(), vec!["a", "milk", "c"]);
     assert_eq!(shown(&app), vec![reminder(1)]);
 
     drop(app);
@@ -343,7 +343,7 @@ fn a_new_edit_after_undo_drops_the_redo_branch_for_reminders_too() {
     app.editor.cursor_line = 1;
     run_keys(&mut app, &db, &[Key::Char('o'), Key::Char('y'), Key::Esc]);
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
-    assert_eq!(app.editor.lines, vec!["milk", "end", "y"]);
+    assert_eq!(app.editor.lines(), vec!["milk", "end", "y"]);
     assert_eq!(shown(&app), vec![reminder(0)]);
 
     drop(app);
@@ -363,21 +363,21 @@ fn reminder_changes_interleaved_with_text_undo_in_order() {
     assert_eq!(shown(&app), vec![]);
     // T2: delete line a.
     run_keys(&mut app, &db, &DD);
-    assert_eq!(app.editor.lines, vec!["b"]);
+    assert_eq!(app.editor.lines(), vec!["b"]);
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["a", "b"]);
+    assert_eq!(app.editor.lines(), vec!["a", "b"]);
     assert_eq!(shown(&app), vec![], "T2's undo keeps R");
     run_keys(&mut app, &db, &[Key::Char('u')]);
     assert_eq!(shown(&app), vec![reminder(0)], "R's undo restores it");
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines, vec!["a", "b", "c"]);
+    assert_eq!(app.editor.lines(), vec!["a", "b", "c"]);
     assert_eq!(shown(&app), vec![reminder(0)]);
 
     for _ in 0..3 {
         run_keys(&mut app, &db, &[Key::Ctrl('r')]);
     }
-    assert_eq!(app.editor.lines, vec!["b"]);
+    assert_eq!(app.editor.lines(), vec!["b"]);
     assert_eq!(shown(&app), vec![]);
 
     drop(app);
@@ -430,7 +430,7 @@ fn an_edit_beside_an_identical_task_keeps_the_reminder_after_reload() {
 fn deleting_the_only_line_deletes_its_reminder() {
     let (db, mut app, path) = app_with_reminders("buy milk", &[0]);
     run_keys(&mut app, &db, &DD);
-    assert_eq!(app.editor.lines, vec!["".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["".to_string()]);
     assert_eq!(shown(&app), vec![]);
     run_keys(&mut app, &db, &[Key::Char('u')]);
     assert_eq!(shown(&app), vec![reminder(0)]);
@@ -455,7 +455,7 @@ fn changing_a_line_keeps_its_reminder() {
             Key::Esc,
         ],
     );
-    assert_eq!(app.editor.lines, vec!["tea", "buy eggs"]);
+    assert_eq!(app.editor.lines(), vec!["tea", "buy eggs"]);
     assert_eq!(shown(&app), vec![reminder(0)]);
 
     drop(app);
@@ -511,7 +511,7 @@ fn deleting_one_of_two_identical_lines_keeps_the_others_reminder() {
     let (db, mut app, path) = app_with_reminders("- [ ] buy milk\n- [ ] buy milk", &[1]);
     // Linewise visual delete of the first line.
     run_keys(&mut app, &db, &[Key::Char('V'), Key::Char('d')]);
-    assert_eq!(app.editor.lines, vec!["- [ ] buy milk".to_string()]);
+    assert_eq!(app.editor.lines(), vec!["- [ ] buy milk".to_string()]);
     assert_eq!(shown(&app), vec![moved(1, 0)]);
     // dd says the same.
     run_keys(&mut app, &db, &[Key::Char('u')]);
@@ -542,7 +542,7 @@ fn reminders_follow_text_reloaded_after_an_outside_change() {
 
     app.outside_change_checked_at = Instant::now() - std::time::Duration::from_secs(2);
     app.maybe_take_outside_change(&db);
-    assert_eq!(app.editor.lines, ["new", "a", "b", "c"]);
+    assert_eq!(app.editor.lines(), ["new", "a", "b", "c"]);
     assert_eq!(shown(&app), vec![moved(1, 2)]);
 
     drop(app);
@@ -571,13 +571,13 @@ fn compound_text_edits_preserve_exact_reminder_mapping_and_one_undo_step() {
         ],
         selection: None,
     });
-    assert_eq!(app.editor.lines.join("\n"), "é\n task\n\nβ task\nend");
+    assert_eq!(app.editor.lines().join("\n"), "é\n task\n\nβ task\nend");
     assert_eq!(shown(&app), vec![reminder(0), moved(1, 3), moved(2, 4)]);
     run_keys(&mut app, &db, &[Key::Char('u')]);
-    assert_eq!(app.editor.lines.join("\n"), original);
+    assert_eq!(app.editor.lines().join("\n"), original);
     assert_eq!(shown(&app), vec![reminder(0), reminder(1), reminder(2)]);
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
-    assert_eq!(app.editor.lines.join("\n"), "é\n task\n\nβ task\nend");
+    assert_eq!(app.editor.lines().join("\n"), "é\n task\n\nβ task\nend");
     assert_eq!(shown(&app), vec![reminder(0), moved(1, 3), moved(2, 4)]);
     drop(app);
     drop(db);
@@ -593,25 +593,25 @@ fn primitive_unicode_edits_preserve_reminders_and_undo_boundaries() {
     app.insert_text("猫");
     app.backspace();
     app.delete_forward();
-    assert_eq!(app.editor.lines.join("\n"), "éλβ\nlast");
+    assert_eq!(app.editor.lines().join("\n"), "éλβ\nlast");
     assert_eq!(app.editor.cursor_col, 2);
     assert_eq!(shown(&app), vec![reminder(0), reminder(1)]);
     app.insert_newline();
-    assert_eq!(app.editor.lines.join("\n"), "éλ\nβ\nlast");
+    assert_eq!(app.editor.lines().join("\n"), "éλ\nβ\nlast");
     assert_eq!(shown(&app), vec![reminder(0), moved(1, 2)]);
     run_keys(&mut app, &db, &[Key::Esc, Key::Char('u')]);
-    assert_eq!(app.editor.lines.join("\n"), "é β\nlast");
+    assert_eq!(app.editor.lines().join("\n"), "é β\nlast");
     assert_eq!(shown(&app), vec![reminder(0), reminder(1)]);
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
-    assert_eq!(app.editor.lines.join("\n"), "éλ\nβ\nlast");
+    assert_eq!(app.editor.lines().join("\n"), "éλ\nβ\nlast");
     assert_eq!(shown(&app), vec![reminder(0), moved(1, 2)]);
     // Both join directions retain the first line's reminder and move later marks.
     app.backspace();
-    assert_eq!(app.editor.lines.join("\n"), "éλβ\nlast");
+    assert_eq!(app.editor.lines().join("\n"), "éλβ\nlast");
     assert_eq!(app.editor.cursor_col, 2);
     app.editor.cursor_col = 3;
     app.delete_forward();
-    assert_eq!(app.editor.lines.join("\n"), "éλβlast");
+    assert_eq!(app.editor.lines().join("\n"), "éλβlast");
     assert_eq!(shown(&app), vec![reminder(0)]);
     drop(app);
     drop(db);
@@ -631,15 +631,15 @@ fn pasted_line_endings_and_unicode_preserve_reminder_identity_and_one_undo_step(
         } else {
             "é猫\nβ\n task\nlast"
         };
-        assert_eq!(app.editor.lines.join("\n"), expected);
+        assert_eq!(app.editor.lines().join("\n"), expected);
         assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (2, 0));
         let marks = vec![moved(0, if column == 0 { 2 } else { 0 }), moved(1, 3)];
         assert_eq!(shown(&app), marks);
         run_keys(&mut app, &db, &[Key::Esc, Key::Char('u')]);
-        assert_eq!(app.editor.lines.join("\n"), original);
+        assert_eq!(app.editor.lines().join("\n"), original);
         assert_eq!(shown(&app), vec![reminder(0), reminder(1)]);
         run_keys(&mut app, &db, &[Key::Ctrl('r')]);
-        assert_eq!(app.editor.lines.join("\n"), expected);
+        assert_eq!(app.editor.lines().join("\n"), expected);
         assert_eq!(shown(&app), marks);
         drop(app);
         drop(db);
@@ -660,23 +660,23 @@ fn table_cell_paste_preserves_block_reminder_mapping_and_undo() {
     let (db, mut app, path) = app_with_reminders(&original, &[0, 3, 4]);
     app.mode = UiMode::Editor;
     app.editor.cursor_line = 2;
-    app.editor.cursor_col = app.editor.lines[2].find('y').unwrap();
+    app.editor.cursor_col = app.editor.lines()[2].find('y').unwrap();
     app.insert_paste("1\r\n2");
     assert_eq!(
-        crate::editor_core::table::split_table_cells(&app.editor.lines[2])[0],
+        crate::editor_core::table::split_table_cells(&app.editor.lines()[2])[0],
         "x1"
     );
     assert_eq!(
-        crate::editor_core::table::split_table_cells(&app.editor.lines[3])[0],
+        crate::editor_core::table::split_table_cells(&app.editor.lines()[3])[0],
         "2y"
     );
     assert_eq!(shown(&app), vec![reminder(0), moved(3, 4), moved(4, 5)]);
-    let pasted = app.editor.lines.clone();
+    let pasted = app.editor.lines().to_vec();
     run_keys(&mut app, &db, &[Key::Esc, Key::Char('u')]);
-    assert_eq!(app.editor.lines.join("\n"), original);
+    assert_eq!(app.editor.lines().join("\n"), original);
     assert_eq!(shown(&app), vec![reminder(0), reminder(3), reminder(4)]);
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
-    assert_eq!(app.editor.lines, pasted);
+    assert_eq!(app.editor.lines(), pasted);
     assert_eq!(shown(&app), vec![reminder(0), moved(3, 4), moved(4, 5)]);
     drop(app);
     drop(db);

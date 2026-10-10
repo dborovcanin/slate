@@ -120,7 +120,7 @@ fn image_preview_dialog_opens_and_blocks_editor_input_until_escape() {
 
     app.handle_key(&db, Key::Char('x'))
         .expect("modal consumes key");
-    assert_eq!(app.editor.lines[0], body);
+    assert_eq!(app.editor.lines()[0], body);
     assert!(app.image_preview.is_some());
 
     app.handle_key(&db, Key::Esc).expect("close preview");
@@ -464,12 +464,16 @@ fn run_vim_replay_case(case: &VimReplayCase) -> VimReplaySnapshot {
     let (db, mut app, path) = app_with_note(&case.initial_text);
     app.mode = ui_mode_from_vim_mode(case.initial_state.mode);
     app.vim_state = case.initial_state.clone();
-    if app.editor.lines.is_empty() {
-        app.editor.lines.push(String::new());
+    if app.editor.lines().is_empty() {
+        {
+            let mut replacement = app.editor.lines().to_vec();
+            replacement.push(String::new());
+            app.editor.set_text(&replacement.join("\n"));
+        };
     }
     app.editor.cursor_line = case
         .initial_cursor_line
-        .min(app.editor.lines.len().saturating_sub(1));
+        .min(app.editor.lines().len().saturating_sub(1));
     app.editor.cursor_col = case.initial_cursor_col;
     if matches!(app.mode, UiMode::Visual | UiMode::VisualLine) {
         app.editor.selection_anchor = Some((app.editor.cursor_line, app.editor.cursor_col));
@@ -488,7 +492,7 @@ fn run_vim_replay_case(case: &VimReplayCase) -> VimReplaySnapshot {
     app.adjust_cursor();
 
     let snapshot = VimReplaySnapshot {
-        lines: app.editor.lines.clone(),
+        lines: app.editor.lines().to_vec(),
         cursor_line: app.editor.cursor_line,
         cursor_col: app.editor.cursor_col,
         mode: app.mode,
@@ -507,12 +511,16 @@ fn run_vim_replay_case(case: &VimReplayCase) -> VimReplaySnapshot {
 fn run_markdown_replay_case(case: &MarkdownReplayCase) -> MarkdownReplaySnapshot {
     let (db, mut app, path) = app_with_note(&case.initial_text);
     app.mode = UiMode::Editor;
-    if app.editor.lines.is_empty() {
-        app.editor.lines.push(String::new());
+    if app.editor.lines().is_empty() {
+        {
+            let mut replacement = app.editor.lines().to_vec();
+            replacement.push(String::new());
+            app.editor.set_text(&replacement.join("\n"));
+        };
     }
     app.editor.cursor_line = case
         .initial_cursor_line
-        .min(app.editor.lines.len().saturating_sub(1));
+        .min(app.editor.lines().len().saturating_sub(1));
     app.editor.cursor_col = case.initial_cursor_col;
     app.adjust_cursor();
 
@@ -528,7 +536,7 @@ fn run_markdown_replay_case(case: &MarkdownReplayCase) -> MarkdownReplaySnapshot
     app.adjust_cursor();
 
     let snapshot = MarkdownReplaySnapshot {
-        lines: app.editor.lines.clone(),
+        lines: app.editor.lines().to_vec(),
         cursor_line: app.editor.cursor_line,
         cursor_col: app.editor.cursor_col,
     };

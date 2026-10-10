@@ -67,7 +67,7 @@ impl TerminalApp {
     pub(super) fn build_vim_context(&self) -> crate::editor_core::vim::VimContext {
         crate::editor_core::vim::VimContext {
             has_search_matches: !self.search.matches.is_empty(),
-            line_count: self.editor.lines.len(),
+            line_count: self.editor.lines().len(),
             macro_recording: self.vim_macro_recording.is_some(),
         }
     }
@@ -161,10 +161,10 @@ impl TerminalApp {
         let scope = crate::editor_core::vim_actions::scoped_line_range(
             intent,
             count,
-            &self.editor.lines,
+            self.editor.lines(),
             self.editor.cursor_line,
         )
-        .filter(|_| self.editor.lines.len() >= 2048);
+        .filter(|_| self.editor.lines().len() >= 2048);
         if let Some((start, end)) = scope {
             let (snapshot, scope_start_offset) =
                 self.build_scoped_snapshot_for_line_span(start, end, None);
@@ -180,7 +180,7 @@ impl TerminalApp {
             return Some((result, scope_start_offset));
         }
         if self.editor.joined_text_cache.is_none() {
-            self.editor.joined_text_cache = Some(join_lines(&self.editor.lines));
+            self.editor.joined_text_cache = Some(join_lines(self.editor.lines()));
         }
         let fallback_cursor =
             self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
@@ -625,13 +625,13 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::MoveDocEnd => {
                     self.editor.cursor_line = self
                         .real_line_for_virtual(self.visible_line_count().saturating_sub(1))
-                        .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1))
+                        .unwrap_or_else(|| self.editor.lines().len().saturating_sub(1))
                 }
                 crate::editor_core::vim::VimIntent::MoveToLine => {
                     let target_virtual = count.max(1).min(self.visible_line_count()) - 1;
                     self.editor.cursor_line = self
                         .real_line_for_virtual(target_virtual)
-                        .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1));
+                        .unwrap_or_else(|| self.editor.lines().len().saturating_sub(1));
                 }
                 crate::editor_core::vim::VimIntent::EnterInsert => {
                     self.mode = UiMode::Editor;
