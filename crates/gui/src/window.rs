@@ -118,9 +118,25 @@ impl SlateWindow {
             cache: Vec::new(),
             list: ListState::new(count, ListAlignment::Top, px(600.0)),
         };
-        if this.mode == EditingMode::Standard {
+        this.host.insert_only = this.mode == EditingMode::Standard;
+        if this.host.insert_only {
             this.host.input.vim.mode = VimMode::Insert;
         }
+        let weak = cx.entity().downgrade();
+        this.list.set_scroll_handler(move |event, _, cx| {
+            let weak = weak.clone();
+            let visible = event.visible_range.clone();
+            // Painting is under way; calculate once it is done.
+            cx.defer(move |cx| {
+                weak.update(cx, |this, cx| {
+                    if this.host.ensure_calc_range(visible.start, visible.end) {
+                        this.restyle();
+                        cx.notify();
+                    }
+                })
+                .ok();
+            });
+        });
         this.reload_lines();
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -249,6 +265,7 @@ impl SlateWindow {
 
     pub(crate) fn set_mode(&mut self, mode: EditingMode, cx: &mut Context<Self>) {
         self.mode = mode;
+        self.host.insert_only = mode == EditingMode::Standard;
         self.host.input = Default::default();
         if mode == EditingMode::Standard {
             // Standard editing types directly: the session stays in insert.
@@ -506,6 +523,18 @@ impl SlateWindow {
                 }
             }
             CommandRun::Host { id, raw } => crate::commands::run_host_command(self, id, &raw, cx),
+        }
+    }
+
+    /// Save before the window closes; `false` keeps it open.
+    pub(crate) fn save_for_close(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.host.save() {
+            Ok(_) => true,
+            Err(err) => {
+                self.set_status(format!("not closing, save failed: {err}"));
+                cx.notify();
+                false
+            }
         }
     }
 

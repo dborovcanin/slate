@@ -92,6 +92,10 @@ fn main() {
                 };
                 let view = cx.new(|cx| window::SlateWindow::new(host, settings, fonts, cx));
                 window.focus(view.read(cx).focus_handle());
+                let closing = view.clone();
+                window.on_window_should_close(cx, move |_, cx| {
+                    closing.update(cx, |this, cx| this.save_for_close(cx))
+                });
                 view
             },
         )

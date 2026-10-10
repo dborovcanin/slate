@@ -144,6 +144,10 @@ pub struct NoteHost {
     /// Titles of all notes by id, for wiki-link display.
     titles: std::collections::HashMap<String, String>,
     last_edit: Option<Instant>,
+    /// Standard editing: the input stays in Insert mode.
+    pub insert_only: bool,
+    /// Lines of a large note whose calc results are current.
+    calc_covered: Option<(usize, usize)>,
 }
 
 /// The provider the terminal also passes to calc: modules from the note,
@@ -206,6 +210,8 @@ impl NoteHost {
             preview: false,
             titles: Default::default(),
             last_edit: None,
+            insert_only: false,
+            calc_covered: None,
         };
         host.reload_titles();
         host.switch_to(&id)?;
@@ -237,6 +243,10 @@ impl NoteHost {
                 .install_reminders(reminder_ghosts(&reminders, self.doc.lines()));
         }
         self.input = InputState::default();
+        if self.insert_only {
+            self.input.vim.mode = VimMode::Insert;
+        }
+        self.calc_covered = None;
         self.modules = note.modules;
         self.title = self
             .notes
@@ -272,7 +282,31 @@ impl NoteHost {
             let to = self.doc.lines().len().min(FIRST_SCREEN_LINES);
             self.session
                 .evaluate_calc_range(&self.doc, 0, to, &provider);
+            self.calc_covered = Some((0, to));
         }
+    }
+
+    /// Large notes calculate only around what is on screen or under the
+    /// cursor; call this after the view or cursor moved to `from..to`.
+    /// Returns whether new results were computed.
+    pub fn ensure_calc_range(&mut self, from: usize, to: usize) -> bool {
+        let len = self.doc.lines().len();
+        if len < CALC_VIEWPORT_ONLY_MIN_LINES || !self.modules.math || self.locked() {
+            return false;
+        }
+        let to = to.min(len);
+        if self.calc_covered.is_some_and(|(a, b)| a <= from && to <= b) {
+            return false;
+        }
+        let (a, b) = (
+            from.saturating_sub(FIRST_SCREEN_LINES / 2),
+            (to + FIRST_SCREEN_LINES / 2).min(len),
+        );
+        let note_id = self.session.note_id().to_string();
+        let provider = provider(self.modules, &note_id, &self.index, &self.db, &self.loaded);
+        self.session.evaluate_calc_range(&self.doc, a, b, &provider);
+        self.calc_covered = Some((a, b));
+        true
     }
 
     /// One key through the shared input pipeline; calc stays current.
@@ -339,6 +373,12 @@ impl NoteHost {
             };
             self.session
                 .evaluate_calc_range(&self.doc, from, to, &provider);
+            if len >= CALC_VIEWPORT_ONLY_MIN_LINES {
+                self.calc_covered = Some((from, to));
+            }
+        } else {
+            let c = self.doc.cursor_line;
+            self.ensure_calc_range(c, c + 1);
         }
         outcome
     }
@@ -1086,6 +1126,50 @@ mod tests {
             "x := 40\nx * 2"
         );
         assert_eq!(f.host.save(), Ok(false));
+    }
+
+    #[test]
+    fn reopening_keeps_standard_mode_in_insert() {
+        let mut f = fixture("hello");
+        f.host.insert_only = true;
+        let note = f.host.db.get_note("lisbon").unwrap().unwrap();
+        f.host.open_note(note);
+        assert_eq!(f.host.input.mode(), VimMode::Insert);
+        keys(&mut f, "x");
+        assert_eq!(f.host.doc.lines()[0], "xhello");
+    }
+
+    #[test]
+    fn large_notes_calculate_where_the_cursor_or_view_goes() {
+        let mut body = String::new();
+        for i in 0..2100 {
+            if i == 1500 {
+                body.push_str("price * 2\n");
+            } else if i == 0 {
+                body.push_str("price := 21\n");
+            } else {
+                body.push_str("filler\n");
+            }
+        }
+        let mut f = fixture(&body);
+        assert!(f
+            .host
+            .session
+            .calc()
+            .results
+            .get(1500)
+            .and_then(|r| r.clone())
+            .is_none());
+        assert!(f.host.ensure_calc_range(1490, 1520));
+        assert!(f
+            .host
+            .session
+            .calc()
+            .results
+            .get(1500)
+            .and_then(|r| r.clone())
+            .is_some());
+        assert!(!f.host.ensure_calc_range(1495, 1510));
     }
 
     #[test]

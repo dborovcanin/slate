@@ -229,6 +229,13 @@ impl NoteSession {
         if doc.lines.is_empty() {
             doc.lines.push(String::new());
         }
+        // Same boundary as the terminal: a command starts its own undo step
+        // instead of merging into the typing before it.
+        self.begin_input(if state.vim.mode == VimMode::Insert {
+            UndoSession::Insert
+        } else {
+            UndoSession::Command
+        });
         if state.vim.mode == VimMode::Insert {
             return self.handle_insert_key(doc, state, key, cx);
         }
@@ -722,6 +729,7 @@ mod tests {
         session: NoteSession,
         state: InputState,
         requests: Vec<HostRequest>,
+        since_last_edit: Duration,
     }
 
     impl Editor {
@@ -733,12 +741,13 @@ mod tests {
                 session,
                 state: InputState::default(),
                 requests: Vec::new(),
+                since_last_edit: Duration::from_secs(5),
             }
         }
         fn keys(&mut self, keys: &str) -> &mut Self {
             let cx = InputContext {
                 options: InputOptions::default(),
-                since_last_edit: Duration::from_secs(5),
+                since_last_edit: self.since_last_edit,
                 calc: None,
             };
             let mut chars = keys.chars().peekable();
@@ -766,6 +775,16 @@ mod tests {
         fn cursor(&self) -> (usize, usize) {
             (self.doc.cursor_line, self.doc.cursor_col)
         }
+    }
+
+    #[test]
+    fn a_command_starts_its_own_undo_step_even_when_typed_quickly() {
+        let mut e = Editor::new("abc\ndef");
+        e.since_last_edit = Duration::ZERO;
+        e.keys("iX⎋dd");
+        assert_eq!(e.text(), "def");
+        e.keys("u");
+        assert_eq!(e.text(), "Xabc\ndef");
     }
 
     #[test]
