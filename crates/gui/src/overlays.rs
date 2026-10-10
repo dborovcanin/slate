@@ -555,6 +555,7 @@ fn panel(win: &SlateWindow, left: f32, top: f32, width: f32) -> gpui::Div {
     let t = win.theme;
     div()
         .absolute()
+        .occlude()
         .left(px(left))
         .top(px(top))
         .w(px(width))
@@ -618,6 +619,30 @@ fn menu_left(name: &str) -> f32 {
         x += label.len() as f32 * 7.0 + 18.0 + 2.0;
     }
     x
+}
+
+/// A transparent layer under a popup: it swallows clicks meant for the
+/// editor and closes the popup when clicked.
+fn backdrop(cx: &mut Context<SlateWindow>) -> AnyElement {
+    div()
+        .absolute()
+        .inset_0()
+        .occlude()
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                close(this);
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
+            gpui::MouseButton::Right,
+            cx.listener(|this, _, _, cx| {
+                close(this);
+                cx.notify();
+            }),
+        )
+        .into_any_element()
 }
 
 fn palette(win: &SlateWindow, query: &str, selected: usize) -> AnyElement {
@@ -887,17 +912,23 @@ pub fn render(
     let _ = window;
     match &win.overlay {
         Overlay::None => Vec::new(),
-        Overlay::Palette { query, selected } => vec![palette(win, query, *selected)],
+        Overlay::Palette { query, selected } => {
+            vec![backdrop(cx), palette(win, query, *selected)]
+        }
         Overlay::Menu { name, sub } => {
-            menu_panels(win, &menu_items(name), *sub, menu_left(name), 34.0, cx)
+            let mut out = vec![backdrop(cx)];
+            out.extend(menu_panels(win, &menu_items(name), *sub, menu_left(name), 34.0, cx));
+            out
         }
         Overlay::Context { pos, table, sub } => {
             let items = context_items(*table);
             let x = f32::from(pos.x).min(1280.0 - 580.0).max(8.0);
             let y = f32::from(pos.y).max(8.0);
-            menu_panels(win, &items, *sub, x, y, cx)
+            let mut out = vec![backdrop(cx)];
+            out.extend(menu_panels(win, &items, *sub, x, y, cx));
+            out
         }
-        Overlay::Prompt(p) => vec![prompt(win, p)],
+        Overlay::Prompt(p) => vec![backdrop(cx), prompt(win, p)],
         Overlay::Browser(b) => vec![crate::browser::render(win, b, cx)],
         Overlay::History(h) => vec![crate::history::render(win, h, cx)],
     }

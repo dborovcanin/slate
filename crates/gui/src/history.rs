@@ -327,6 +327,7 @@ pub fn render(win: &SlateWindow, h: &History, cx: &mut Context<SlateWindow>) -> 
 
     div()
         .absolute()
+        .occlude()
         .top(px(38.0))
         .bottom(px(28.0))
         .left_0()

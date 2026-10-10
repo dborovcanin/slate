@@ -337,6 +337,7 @@ pub fn render(win: &SlateWindow, b: &Browser, cx: &mut Context<SlateWindow>) -> 
     ];
     div()
         .absolute()
+        .occlude()
         .top(px(38.0))
         .bottom(px(28.0))
         .left_0()
